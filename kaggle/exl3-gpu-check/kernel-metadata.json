@@ -9,7 +9,9 @@
   "enable_tpu": false,
   "enable_internet": true,
   "keywords": [],
-  "dataset_sources": [],
+  "dataset_sources": [
+    "yamahei21python/qwen38-27b-uncensored-exl3-4bpw"
+  ],
   "kernel_sources": [],
   "competition_sources": [],
   "model_sources": []

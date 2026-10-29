@@ -60,7 +60,8 @@ Kaggle での推論エンジン選定〜ExLlamaV3版の設計方針を記録す�
   Kaggle GPUイメージの torch/CUDA 版に一致するか未確認。
 - **T4 (sm75)**: メンテナが issue #162 で「Turing is now supported（速度は控えめ）」と回答。
   ただし GEMM は Turing 向けに作り直された経緯があり、**動作は要実測**。
-- **マルチGPU**: tensor parallel 未対応 → **レイヤー分割のみ**。T4 x2 に 17.1GB を分割。
+- **マルチGPU**: `--tensor_parallel`（native / nccl）が実装済み（master 確認）。
+  ただし T4 x2 は PCIe 接続なので **レイヤー分割を本命**とし、TP は比較候補。
 - **サーバ**: 公式推奨は **TabbyAPI**（OpenAI互換）。`examples/chat.py` は対話用。
   自前の auth_proxy 構成に載せるなら TabbyAPI か薄いラッパーのどちらかにする（未決）。
 - **Kaggle GPUイメージ**: python 3.13（既存直起動カーネルのログより）。
@@ -83,20 +84,85 @@ Kaggle での推論エンジン選定〜ExLlamaV3版の設計方針を記録す�
   → `Tokenizer.from_config` → `Generator(model, cache, tokenizer)`
   → `Job(input_ids=tokenizer.hf_chat_template(...), max_new_tokens=...)` → `enqueue`/`iterate`。
 
-## GPU 検証カーネル（作成済み・未push）
+## GPU 検証カーネル（作成済み）
 
 ローカル: `kaggle/exl3-gpu-check/`（`yamahei21python/exl3-qwen38-gpu-check`）
 
-1 回の GPU セッションで「環境 → 導入 → import → DL → ロード → 生成 1 回」を通し、
-`/kaggle/working/result.json` に各段の所要秒・tok/s・エラーを残す。サーバは立てない。
-どの段で失敗しても exit 0 で結果を回収できる。モデルは `/kaggle/temp` → `/tmp` →
-`/kaggle/working` の順に空きの大きい所へ DL（`/kaggle/working` は 20GiB 上限）。
+1 回の GPU セッションで「環境 → 導入 → import → モデル取得 → ロード → 生成 1 回 →
+MTP 投機デコード実測」を通し、`/kaggle/working/result.json` に各段の所要秒・tok/s・
+エラーを残す。サーバは立てない。どの段で失敗しても exit 0 で結果を回収できる。
+モデルは **Dataset がマウントされていればそれを使い**、無ければ HF から DL
+（`/kaggle/temp` → `/tmp` → `/kaggle/working` の順に空きの大きい所。working は 20GiB 上限）。
+
+MTP ステージ（`MEASURE_MTP=0` で無効化可）の配線は model_init.py と同一:
+`Model.from_config(config, component="mtp")` → `Cache(draft_model, max_num_tokens=4096,
+layer_type=CacheLayer_fp16, max_history=caps["default_draft_size"], max_batch_size=1)` →
+`draft_model.load()` → `Generator(..., draft_model=, draft_cache=)`。
+MTP コンポーネントが無い/エラー時は `mtp.ok=false` を記録するだけで本体は成功扱い。
+
+## モデル Dataset 化（GPU クォータ温存）
+
+ローカル: `kaggle/exl3-dataset-upload/`（`yamahei21python/exl3-dataset-upload`）
+
+CPU カーネルで HF → Kaggle Dataset へ**直接アップロード**する（ローカル PC を経由しない）。
+Kaggle ノートには `KAGGLE_USERNAME` / `KAGGLE_KEY` が環境変数で入っているため、
+`kaggle datasets create` をカーネル内から実行できる想定。
+
+- Dataset: `yamahei21python/qwen38-27b-uncensored-exl3-4bpw`（private, 15.9GiB）
+- 意図: GPU セッション中の 15.9GiB DL をなくす（時間短縮＋失敗リスク減）
+- ワークアラウンド: DL は重複を避けるため作業ディレクトリ選択 → アップロード後に
+  ローカルコピーを削除（`/kaggle/working` の出力を太らせない）
+- v1 は Kaggle Secrets 未設定で失敗 → Secrets は**カーネル単位**に紐づくため
+  UI で `KAGGLE_USERNAME` / `KAGGLE_KEY` を追加して再実行（v3）で成功。
+- **結果（2026-10-30 完了）**: status `ready`、3 シャードを含む 15 ファイルを確認。
+  DL 68.1s / アップロード 226.7s / 計 306.2s（CPU カーネル・GPU 消費ゼロ）。
+  - v3 の result.json は `ok:false`（"アップロード後に safetensors が見えない"）だが
+    これは CLI の一覧反映ラグによる**誤検知**。実体は `kaggle datasets files` で確認済み。
+- GPU 検証カーネルの `dataset_sources` にこの Dataset を登録済み。
+  `find_mounted_model()` がマウントを検出すると HF DL をスキップする。
+
+### GPU クォータ（2026-10-30 時点）
+
+- GPU: 29h49m / 30h 使用済み、**残り 10 分**。リセット 2026-10-31T00:00Z（**09:00 JST**）
+- TPU: 20h 残（ExLlamaV3 は CUDA 専用のため使えない）
+
+## 高速化のための事前準備（GPU 不要）
+
+1. **Dataset 化**（上記）— **完了**。GPU セッションからモデル DL を削除
+2. **薄い OpenAI 互換ラッパー**を先に作り、CPU でモック自己テスト — **完了**。
+   `kaggle/exl3-serve/chat_server.py`（`/v1/chat/completions` non-stream + SSE、
+   `/v1/models`、`/health`）と `_selftest_server.py`（MockEngine で全経路 green）。
+   GPU では「ロード → 配信」だけにする。既存の auth_proxy.py / ngrok / ask.py / keepalive を再利用
+3. **配信カーネルに時間予算（自動停止）** — 30/60 分で自分で exit（クォータ事故防止）※未実装
+4. **MTP の実測を検証 1 回に含める** — **完了**（検証カーネルにステージ追加）。GGUF では 1.18x
+5. **環境プローブを最初に** — **完了**。wheel が torch/CUDA に一致すれば JIT（5〜20 分）を回避
+6. **cache サイズを絞る**（4096–8192）— **完了**（検証は 4096）
+
+## llama-server の CPU 起動検証結果（2026-10-30 完了）
+
+カーネル: `yamahei21python/llama-server-cpu-check`（ローカル: `kaggle/cpu-check/`）
+
+| 項目 | 結果 |
+|---|---|
+| 起動 | **成功**（GPUなし・Xeon 4 vCPU / RAM 32 GiB） |
+| モデル | 16.8 GB の model blob を 16.8 GiB に展開してロード |
+| ロード時間 | **1375 秒（約 23 分）** |
+| 生成 | `1\n2\n3\n4\n5` を正常返却 |
+| 速度 | prompt eval 1.41 t/s / 生成 1.01 t/s（ctx 2048） |
+| 備考 | `blk.64.nextn.*`（MTP層）は未使用警告。CPU では `--spec-type` は無意味 |
+| 実用性 | **不可**（起動はするが 1 tok/s 前後）。CPU は「起動確認」まで |
 
 ## 未決事項 / 次アクション
 
-1. **GPU実行の設計**（1回のGPUセッションで「install → モデルDL → ロード → 生成」を通す）
-   - モデルは HF からランタイムDL（Kaggle Dataset 未作成）。17.1GB を `/kaggle/working`（20GB）に置く想定。
-   - サーバは TabbyAPI か最小ラッパーかを決める。
-2. **llama.cpp のCPU起動検証**（`yamahei21python/llama-server-cpu-check`）が実行中。
-   - CPUはロードに15分以上かかる見込み。完了後に result.json を回収し、CPU起動可否を確定。
-3. GPUクォータの残量確認 → 実行は1回で決める（失敗時は llama.cpp/GGUF にフォールバック）。
+1. **Dataset アップロード** → **完了**。`qwen38-27b-uncensored-exl3-4bpw` は `ready`
+   （3 シャード）。`exl3-gpu-check` の `dataset_sources` に登録済み。
+2. **GPU 検証の実行**はリセット後（2026-10-31 09:00 JST）に 1 回。
+   「導入 → ロード → 生成」に加えて **MTP 投機デコードの tok/s 倍率**も同時に回収する。
+   wheel 一致（=JIT 回避）もこの 1 回で確定させる。
+3. **サーバ方式** → **薄い OpenAI 互換ラッパーを採用**（`kaggle/exl3-serve/chat_server.py`）。
+   TabbyAPI は不採用: exllamav3 を直接叩けば足り、依存と設定面が増えるだけ。
+   既存の `auth_proxy.py`（Basic 認証・keepalive リセット・/quota・/stop）と
+   そのまま直列に繋げられる。
+   残作業は配信カーネル（トンネル + 時間予算での自動停止）で、**T4 の速度確認後**に作る。
+4. **llama.cpp のCPU起動検証** → **完了（起動可・約 1 tok/s で実用不可）**。
+   上記「llama-server の CPU 起動検証結果」参照。

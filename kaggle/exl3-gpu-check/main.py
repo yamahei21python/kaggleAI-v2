@@ -6,9 +6,10 @@
   1. 環境（GPU / torch / CUDA / nvcc / disk）
   2. exllamav3 の導入（torch/CUDA 一致のプリビルドwheel → 無ければ JIT）
   3. import 検証（JIT の場合はここでコンパイルが走る）
-  4. HF からモデル DL（Lygodactylus/Qwen3.8-27B-Uncensored-exl3-4bpw）
+  4. モデル取得（マウント済み Dataset → 無ければ HF から DL）
   5. 2x T4 にレイヤー分割でロード
   6. 1 回だけ生成して tok/s を測る
+  7. MTP ヘッドを載せて投機デコードを実測（失敗しても継続）
 
 CPU イメージでは import すら不可（CUDA_HOME 無し）と確定済みなので、
 GPU クォータを使うのはこのカーネルだけに絞る。サーバは立てない。
@@ -200,15 +201,42 @@ def pick_model_dir(need_gib=19.0):
     return os.path.join(best[0], "exl3-model")
 
 
+def find_mounted_model():
+    """入力 Dataset として既にマウントされていればそのパス。無ければ None。"""
+    pats = (
+        "/kaggle/input/datasets/*/*/config.json",
+        "/kaggle/input/*/config.json",
+    )
+    for pat in pats:
+        for cfg in sorted(glob.glob(pat)):
+            d = os.path.dirname(cfg)
+            if os.path.isfile(os.path.join(d, "quantization_config.json")):
+                return d
+    return None
+
+
 def stage_download():
     print()
-    print("--- モデル DL ---")
+    print("--- モデル取得 ---")
+    mounted = find_mounted_model()
+    if mounted:
+        total = sum(os.path.getsize(f) for f in glob.glob(
+            os.path.join(mounted, "*.safetensors")))
+        print(f" Dataset を使用: {mounted}（{total / 1024**3:.2f} GiB）")
+        data.update(model_dir=mounted, model_source="dataset",
+                    model_gib=round(total / 1024**3, 2))
+        if total < 15 * 1024**3:
+            raise RuntimeError("Dataset の safetensors が想定より小さい")
+        data["stage"] = "download"
+        save()
+        return
+
     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
     from huggingface_hub import snapshot_download
 
     dest = pick_model_dir()
-    print(f"dest   : {dest}")
-    data["model_dir"] = dest
+    print(f" Dataset なし → HF から DL: {dest}")
+    data.update(model_dir=dest, model_source="huggingface")
 
     t0 = time.time()
     snapshot_download(repo_id=MODEL_REPO, local_dir=dest)
@@ -231,11 +259,31 @@ def stage_download():
 
 
 # ── 5+6. ロードと生成 ───────────────────────────────────────
+def run_job(generator, ids, stops, max_new_tokens=96):
+    """1 ジョブ流して (text, final_result, wall_seconds) を返す。"""
+    from exllamav3 import Job
+
+    job = Job(input_ids=ids, max_new_tokens=max_new_tokens, stop_conditions=stops)
+    generator.enqueue(job)
+
+    text = ""
+    final = None
+    t1 = time.time()
+    while generator.num_remaining_jobs():
+        for res in generator.iterate():
+            if res.get("stage") == "error":
+                raise res["error"]
+            text += res.get("text", "")
+            if res.get("eos"):
+                final = res
+    return text, final, round(time.time() - t1, 1)
+
+
 def stage_load_generate():
     print()
     print("--- ロード → 生成 ---")
     import torch
-    from exllamav3 import Cache, Config, Generator, Job, Model, Tokenizer
+    from exllamav3 import Cache, Config, Generator, Model, Tokenizer
 
     t0 = time.time()
     config = Config.from_directory(data["model_dir"])
@@ -273,20 +321,7 @@ def stage_load_generate():
         pass
 
     generator = Generator(model=model, cache=cache, tokenizer=tokenizer)
-    job = Job(input_ids=ids, max_new_tokens=96, stop_conditions=stops)
-    generator.enqueue(job)
-
-    text = ""
-    final = None
-    t1 = time.time()
-    while generator.num_remaining_jobs():
-        for res in generator.iterate():
-            if res.get("stage") == "error":
-                raise res["error"]
-            text += res.get("text", "")
-            if res.get("eos"):
-                final = res
-    wall = round(time.time() - t1, 1)
+    text, final, wall = run_job(generator, ids, stops)
 
     tokens = final.get("new_tokens") if final else None
     gen_dt = final.get("time_generate") if final else wall
@@ -303,7 +338,70 @@ def stage_load_generate():
                 wall_seconds=wall,
                 tokens_per_second=round(tps, 2),
                 response=text.strip()[:800])
+    data["stage"] = "generate"
+    save()
+
+    if os.environ.get("MEASURE_MTP", "1") == "1":
+        stage_mtp(model, config, cache, tokenizer, ids, stops, tps)
+
+
+# ── 7. MTP 投機デコード（任意・失敗しても継続）───────────────
+def stage_mtp(model, config, cache, tokenizer, ids, stops, base_tps):
+    print()
+    print("--- MTP 投機デコード ---")
+    try:
+        if "mtp" not in getattr(config, "model_classes", {}):
+            print(" MTP コンポーネントが無い → skip")
+            data["mtp"] = {"ok": False, "reason": "no mtp component"}
+            data["stage"] = "done"
+            save()
+            return
+        from exllamav3 import Cache, Generator, Model
+        from exllamav3.cache import CacheLayer_fp16
+
+        t0 = time.time()
+        draft_model = Model.from_config(config, component="mtp")
+        max_history = max(draft_model.caps.get("default_draft_size", 4), 4)
+        draft_cache = Cache(draft_model, max_num_tokens=4096,
+                            layer_type=CacheLayer_fp16,
+                            max_history=max_history, max_batch_size=1)
+        draft_model.load(progressbar=False)
+        load_dt = round(time.time() - t0, 1)
+        print(f"MTP ロード: {load_dt}s（max_history={max_history}）")
+
+        generator = Generator(model=model, cache=cache, tokenizer=tokenizer,
+                              draft_model=draft_model,
+                              draft_cache=draft_cache)
+        text, final, wall = run_job(generator, ids, stops)
+
+        tokens = (final or {}).get("new_tokens")
+        gen_dt = (final or {}).get("time_generate") or wall
+        tps = (tokens / gen_dt) if (tokens and gen_dt) else 0
+        stats = {k: v for k, v in (final or {}).items()
+                 if isinstance(v, (int, float))
+                 and ("draft" in k.lower() or "accept" in k.lower())}
+
+        print(f"MTP 生成: {tokens} tok / {gen_dt:.2f}s = {tps:.2f} tok/s"
+              f"（baseline {base_tps:.2f} → {tps / base_tps:.2f}x）")
+        print("応答:", text.strip()[:400])
+        data["mtp"] = {
+            "ok": True,
+            "load_seconds": load_dt,
+            "max_history": max_history,
+            "generated_tokens": tokens,
+            "generate_seconds": round(gen_dt, 2),
+            "wall_seconds": wall,
+            "tokens_per_second": round(tps, 2),
+            "speedup": round(tps / base_tps, 2) if base_tps else None,
+            "draft_stats": stats,
+            "result_keys": sorted((final or {}).keys()),
+            "response": text.strip()[:800],
+        }
+    except Exception as e:
+        traceback.print_exc()
+        data["mtp"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     data["stage"] = "done"
+    save()
 
 
 def main():

@@ -139,6 +139,7 @@ kaggleAI/
     ├── step2-direct-ngrok/                     # llama-server 直起動 + ngrok（Ollama なし）
     ├── cpu-check/                              # CPU で llama-server が起動するか（GPU 不使用）
     ├── exllama-cpu-preflight/                  # CPU イメージで ExLlama がどこまで可能か
+    ├── exl3-dataset-upload/                    # HF → Kaggle Dataset へ直接アップロード（CPU）
     └── exl3-gpu-check/                         # ExLlamaV3 + EXL3 の GPU 起動検証
 
 notes/
@@ -202,20 +203,27 @@ Qwen3.8-27B-Uncensored を動かせるか検証しています。決定事項・
 | 起動方式 | T4 x2 に**レイヤー分割**（tensor parallel は未対応） |
 | 制約 | **テキスト専用**（vision は不可）。thinking の制御は GGUF 版ほど柔軟でない |
 | GPU 検証 | `kaggle/exl3-gpu-check/`（`yamahei21python/exl3-qwen38-gpu-check`） |
+| モデル置き場 | `kaggle/exl3-dataset-upload/`（HF → Kaggle Dataset へ直接アップロード・CPU のみ） |
+| Dataset | `yamahei21python/qwen38-27b-uncensored-exl3-4bpw`（private / ready・3 シャード） |
+| 配信ラッパー | `kaggle/exl3-serve/`（OpenAI 互換の薄いサーバ + モック自己テスト） |
 | CPU 調査 | `kaggle/exllama-cpu-preflight/`（CPU イメージは torch が `+cpu` ビルドで import 不可） |
 
 検証カーネルは 1 セッションで「環境 → exllamav3 導入（torch/CUDA 一致の
-プリビルド wheel 優先、無ければ JIT）→ import → HF から 15.9 GiB DL →
-2×T4 ロード → 日本語 1 生成」を通し、`/kaggle/working/result.json` に
+プリビルド wheel 優先、無ければ JIT）→ import → モデル取得 → 2×T4 ロード →
+日本語 1 生成 → MTP 投機デコード実測」を通し、`/kaggle/working/result.json` に
 各段の所要秒・VRAM・tok/s を残します（どこで失敗しても exit 0）。
 
 ```bash
+# 1) CPU カーネルでモデルを Dataset 化（GPU クォータ不要・初回のみ）
+cd kaggleAI/kaggle/exl3-dataset-upload && kaggle kernels push
+
+# 2) GPU 検証（GPU セッションはこれ 1 回）
 cd kaggleAI/kaggle/exl3-gpu-check && kaggle kernels push
 ```
 
-> GPU クォータは有限なので 1 回で決める前提。失敗時は GGUF / llama.cpp 版に戻します。
-> モデルは Dataset 化せず HF からランタイム DL（`/kaggle/working` は 20 GiB 上限のため
-> `/kaggle/temp` → `/tmp` の順に空きの大きい場所へ）。
+> GPU クォータは有限（30h/週）なので 1 回で決める前提。失敗時は GGUF / llama.cpp 版に戻します。
+> モデルは Dataset がマウントされていればそれを使い、無ければ HF からダウンロード
+> （`/kaggle/working` は 20 GiB 上限のため `/kaggle/temp` → `/tmp` の順に空きの大きい場所へ）。
 
 ---
 
