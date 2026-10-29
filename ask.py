@@ -99,6 +99,12 @@ def post(url, user, pw, payload, timeout=600):
         return json.loads(r.read().decode())
 
 
+def reply_text(msg):
+    """表示・履歴用の本文。thinking 系モデルは content が null で
+    reasoning_content だけを返すことがあるので、その場合はそちらを使う。"""
+    return (msg.get("content") or msg.get("reasoning_content") or "").strip()
+
+
 def ask(url, user, pw, model, messages, temperature, max_tokens,
         allow_retry=True, fixed=False):
     """1 回問い合わせて (message, 使った URL) を返す。失敗は AskError。"""
@@ -132,8 +138,7 @@ def ask(url, user, pw, model, messages, temperature, max_tokens,
     except (KeyError, IndexError, TypeError) as e:
         raise AskError("想定外の応答: %s" % str(data)[:300]) from e
     usage = data.get("usage") or {}
-    # thinking 系モデルは content が null（reasoning_content のみ）になりうる
-    print((msg.get("content") or "").strip())
+    print(reply_text(msg))
     print("\n--- %s tok (prompt %s / completion %s) ---" % (
         usage.get("total_tokens"), usage.get("prompt_tokens"),
         usage.get("completion_tokens")), file=sys.stderr)
@@ -193,8 +198,7 @@ def main():
             messages.pop()
             print("# " + str(e), file=sys.stderr)
             continue
-        messages.append({"role": "assistant",
-                         "content": msg.get("content") or ""})
+        messages.append({"role": "assistant", "content": reply_text(msg)})
 
 
 if __name__ == "__main__":

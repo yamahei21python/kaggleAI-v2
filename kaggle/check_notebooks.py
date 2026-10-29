@@ -35,8 +35,11 @@ def main():
     failed = []
     with tempfile.TemporaryDirectory(prefix="kc-nbcheck-") as tmp:
         work = pathlib.Path(tmp)
-        for name in ("llama-chat.html", "kcconfig.py", "config.env"):
-            shutil.copy2(ROOT / name, work / name)
+        # config.local.env も写す（個人設定で生成したノートを既定値で比べない）
+        for name in ("llama-chat.html", "kcconfig.py", "config.env",
+                     "config.local.env"):
+            if (ROOT / name).is_file():
+                shutil.copy2(ROOT / name, work / name)
         shutil.copytree(ROOT / "kaggle", work / "kaggle",
                         ignore=shutil.ignore_patterns("archive", "__pycache__"))
         for builder, extra, out in TARGETS:
