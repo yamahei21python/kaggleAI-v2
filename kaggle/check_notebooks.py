@@ -35,11 +35,14 @@ def main():
     failed = []
     with tempfile.TemporaryDirectory(prefix="kc-nbcheck-") as tmp:
         work = pathlib.Path(tmp)
-        # config.local.env も写す（個人設定で生成したノートを既定値で比べない）
-        for name in ("llama-chat.html", "kcconfig.py", "config.env",
-                     "config.local.env"):
-            if (ROOT / name).is_file():
-                shutil.copy2(ROOT / name, work / name)
+        # コミットするノートは config.env（既定値）で生成したものが基準。
+        # config.local.env の個人値はノートに焼き込まず、Kaggle 側は Secrets
+        # （NGROK_DOMAIN / GIST_ID）で上書きする前提なので、ここでは写さない。
+        for name in ("llama-chat.html", "kcconfig.py", "config.env"):
+            shutil.copy2(ROOT / name, work / name)
+        if (ROOT / "config.local.env").is_file():
+            print("ℹ config.local.env は無視して既定値で比較します"
+                  "（個人値で再生成したノートは不一致になります）\n")
         shutil.copytree(ROOT / "kaggle", work / "kaggle",
                         ignore=shutil.ignore_patterns("archive", "__pycache__"))
         for builder, extra, out in TARGETS:
