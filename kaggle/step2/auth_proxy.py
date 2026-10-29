@@ -18,7 +18,6 @@ import http.server
 import json
 import os
 import signal
-import socket
 import socketserver
 import sys
 import threading
@@ -39,10 +38,23 @@ CHUNK = 4096
 OPEN_PATHS = {"/healthz", "/", "/chat", "/index.html", "/favicon.ico"}
 UI_PATHS = {"/", "/chat", "/index.html"}
 
-# ローカル専用の管理エンドポイント（上流へ流さない）。
+# 管理エンドポイント（上流へ流さない）。
 # /quota : Kaggle の GPU クォータ残量（UI のヘッダに出す）
-# /stop  : この中継と上流のセッションを止める（ローカル版のみ有効）
+# /stop  : この中継と上流のセッションを止める。
+#          POST + ヘッダ X-Kc-Stop: 1 が必須（GET のスキャナや他サイトからの
+#          CSRF で落とされないように）。API_PASS 設定時は Basic 認証も要る。
 ADMIN_PATHS = {"/quota", "/stop"}
+STOP_HEADER = "X-Kc-Stop"
+
+# keepalive を延長するのは「生成」リクエストだけ。/api/ps や /v1/models の
+# ポーリング（ランチャーの起動確認・スキャナ）で GPU セッションを延命しない。
+GENERATION_PATHS = {
+    "/api/chat",
+    "/api/generate",
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/v1/responses",
+}
 
 # Kaggle のクォータ API。kaggle CLI には quota サブコマンドが無いが、
 # Web API は Basic 認証で読める（実測 2026-10-28）。
@@ -87,6 +99,10 @@ def _reset_keepalive():
             f.write("RUN=1\nMINUTES=60\n")
     except Exception:
         pass
+
+
+def _is_generation(path_only):
+    return path_only.rstrip("/") in GENERATION_PATHS
 
 
 def _num(value):
@@ -189,6 +205,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(b"\r\n")
         self.wfile.flush()
 
+    def _send_json(self, code, obj, close=False, extra_headers=()):
+        """JSON を 1 発で返す（管理エンドポイント・エラー応答の共通処理）。"""
+        body = obj if isinstance(obj, bytes) else json.dumps(obj).encode()
+        if close:
+            self.close_connection = True
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for key, value in extra_headers:
+            self.send_header(key, value)
+        if close:
+            self.send_header("Connection", "close")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+            self.wfile.flush()
+
     def _authorized(self):
         # API_PASS が空 = 認証なし（公開）。UI を開いただけで使えるようにする。
         if not EXPECTED_AUTH:
@@ -202,18 +236,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return hmac.compare_digest(got, EXPECTED_AUTH.encode("ascii"))
 
     def _deny(self):
-        body = b'{"error":"unauthorized"}'
         # 401 で接続を閉じる。Keep-Alive のまま残すと、次のリクエストの
         # ボディ読み取り位置がずれて HTTP リクエストスモガリングが起きうる。
-        self.close_connection = True
-        self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="Ollama API"')
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Connection", "close")
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
+        self._send_json(401, {"error": "unauthorized"}, close=True,
+                        extra_headers=[("WWW-Authenticate",
+                                        'Basic realm="Ollama API"')])
 
     def _serve_ui(self):
         """チャット UI を返す。認証不要（静的ファイルのみ）。
@@ -258,15 +285,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ARGS.no_quota:
             # Kaggle 以外のローカル（uzu など）ではクォータの概念が無い。
             # available=false を返し、UI 側は残り時間を非表示にする。
-            payload = {"available": False, "reason": "no_quota"}
-            body = json.dumps(payload).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(body)
+            self._send_json(200, {"available": False, "reason": "no_quota"})
             return
 
         try:
@@ -297,18 +316,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             payload = {"available": False, "error": type(e).__name__}
 
-        body = json.dumps(payload).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        # 残量は刻々変わる。キャッシュさせない。
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
+        # 残量は刻々変わる。_send_json は no-store を付ける。
+        self._send_json(200, payload)
 
     def _serve_stop(self):
-        """この中継と上流のセッションを止める（ローカル版のみ）。
+        """この中継と上流のセッションを止める。
+
+        呼び出し条件（POST + X-Kc-Stop + 認証）は _stop_allowed() で確認済み。
 
         ブラウザの停止ボタンから叩く。中継が落ちるので応答を返してから
         プロセスを終了させる（先に落とすとブラウザ側が通信エラーになる）。
@@ -328,15 +342,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:
             pass
 
-        body = json.dumps({"stopped": True, "scope": "relay"}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
-            self.wfile.flush()
+        self._send_json(200, {"stopped": True, "scope": "relay"})
 
         def _die():
             time.sleep(0.5)
@@ -363,13 +369,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         # /healthz はローカルで即答する（上流の有無に関係なく生存確認できる）
         if self.path.split("?")[0] == "/healthz":
-            body = b'{"status":"ok"}'
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(body)
+            self._send_json(200, {"status": "ok"})
             return
 
         path_only = self.path.split("?")[0]
@@ -382,6 +382,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_quota()
             return
         if path_only == "/stop":
+            # 落とせるのは UI の停止ボタン（POST + X-Kc-Stop）だけ。
+            # 以前は認証より前に処理していたため、API_PASS を設定していても
+            # 誰でも GET /stop で Kaggle セッションを止められた。
+            try:
+                self._read_body()
+            except Exception:
+                pass
+            if self.command != "POST" or self.headers.get(STOP_HEADER) != "1":
+                self._send_json(405, {"error": "POST with %s: 1 required"
+                                      % STOP_HEADER}, close=True)
+                return
+            if not self._authorized():
+                self._deny()
+                return
             self._serve_stop()
             return
         if path_only == "/favicon.ico":
@@ -415,7 +429,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        _reset_keepalive()  # 送信成功＝アクティビティあり → 60分リセット
+        if _is_generation(path_only):
+            _reset_keepalive()  # 生成リクエスト＝アクティビティあり → 60分リセット
         # サンプリング下限の強制（--enforce-sampling 時のみ。既定は素通し）
         body = enforce_sampling(body, path_only)
         url = ARGS.upstream.rstrip("/") + self.path
@@ -456,13 +471,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # 原因はサーバ側 stderr にだけ書く。
             sys.stderr.write("  [proxy] upstream error: %s\n"
                              % (sys.exc_info()[1],))
-            payload = b'{"error":"upstream unreachable"}'
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(payload)
+            self._send_json(502, {"error": "upstream unreachable"})
             return
 
         with resp:
@@ -486,18 +495,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # resp.read(N) は HTTPResponse._readinto_chunked の性質で
                 # **N バイト揃うまで読み続ける**ため、ストリームが全面に溜まる
                 # （Ollama の NDJSON が全トークン分貯まってから一斉に届く）。
-                # 1バイトずつ読んで、改行（行境界）でまとめて送る。
-                # 逐次性を保ったまま send 回数はトークン数に抑えられる。
-                buf = bytearray()
+                # readline(CHUNK) は改行か CHUNK バイトで返るので、逐次性を
+                # 保ったまま 1 バイトずつの read ループより CPU を食わない。
                 while True:
-                    byte = resp.read(1)
-                    if not byte:
+                    line = resp.readline(CHUNK)
+                    if not line:
                         break
-                    buf += byte
-                    if byte == b"\n" or len(buf) >= CHUNK:
-                        self._emit(buf)
-                        buf.clear()
-                self._emit(buf)
+                    self._emit(line)
                 self.wfile.write(b"0\r\n\r\n")
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
