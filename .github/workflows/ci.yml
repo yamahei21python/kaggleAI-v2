@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zsh shellcheck
+          pip install ruff
+      - name: ruff
+        run: ruff check .
+      - name: shellcheck (bash)
+        run: shellcheck -s bash run-llama-server.command notes/run_uzu_9b.sh
+      - name: zsh syntax
+        run: for f in run-ai.command run-kaggle-chat.command run-uzu-server.command lib/launcher-common.zsh; do zsh -n "$f"; done
+      - name: proxy selftest
+        run: python3 kaggle/step2/_selftest_proxy.py
+      - name: builder selftest
+        run: python3 kaggle/step2/_selftest_builder.py
+      - name: notebooks match builders
+        run: python3 kaggle/check_notebooks.py
