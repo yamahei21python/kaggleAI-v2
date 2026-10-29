@@ -9,3 +9,6 @@ select = ["E9", "F"]
 [lint.per-file-ignores]
 # selftest は「呼ぶこと自体」が目的の代入がある
 "kaggle/step2/_selftest_*.py" = ["F841"]
+# ノートのセルは前のセルで定義した名前（fail, PORT など）を使う。
+# 中身を変えるとノートが変わるので、未使用 import / 空 f-string もここでは直さない。
+"kaggle/step2/cells/*.py" = ["F821", "F401", "F541"]
