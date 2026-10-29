@@ -2,7 +2,6 @@
 """keepalive の ON/OFF + 外部受信確認用（GPU 不要・トンネル不要）"""
 import base64
 import json
-import os
 import pathlib
 
 HERE = pathlib.Path(__file__).resolve().parent

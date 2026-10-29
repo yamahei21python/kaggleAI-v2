@@ -601,7 +601,8 @@
     const codePlaceholders = [];
     s = s.replace(/`([^`]+)`/g, (_,p) => { const idx = codePlaceholders.length; codePlaceholders.push(p); return `\x00CODE${idx}\x00`; });
     // Images
-    s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_,alt,url)=>'<img src="'+url+'" alt="'+alt.replace(/"/g,'&quot;')+'">');
+    // 外部画像は自動読み込みしない（閲覧の追跡に使える）。https/http のみリンクとして出す。
+    s = s.replace(/!\[([^\]]*)\]\((https?:[^)\s]+)\)/g, (_,alt,url)=>'<a href="'+url+'" target="_blank" rel="noopener noreferrer">[画像: '+(alt||url)+']</a>');
     // Bold
     s = s.replace(/\*\*([^*]+)\*\*/g, (_,p)=>'<strong>'+p+'</strong>');
     // Italic (only outside code)
@@ -902,7 +903,7 @@
     }
     try {
       await fetch(`${location.origin}/stop`, {
-        method: 'POST', headers: { ...BASE_HEADERS }, cache: 'no-store',
+        method: 'POST', headers: { ...BASE_HEADERS, 'X-Kc-Stop': '1' }, cache: 'no-store',
       });
     } catch (_) { /* 中継が落ちるので通信エラーは想定内 */ }
     setStatus('停止');

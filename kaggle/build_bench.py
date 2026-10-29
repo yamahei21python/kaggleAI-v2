@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Benchmark: context length vs speed for orcarouter/Qwen3.8-27B-Uncensored on T4 x2"""
+import pathlib
 import json
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
-OUT = "bench-ctx-orcarouter-qwen38-27b.ipynb"
+# 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
+OUT = str(pathlib.Path(__file__).resolve().parent / "bench" / "bench-ctx-orcarouter-qwen38-27b.ipynb")
 
 cells = []
 

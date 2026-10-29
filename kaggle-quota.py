@@ -46,10 +46,11 @@ def fetch():
 
 
 def hms(seconds):
-    """秒を 'Xh YYm' 形式にする。"""
-    h, m = divmod(int(seconds), 3600)
-    m //= 60
-    return f"{h}h{m:02d}m"
+    """秒を 'Xh YYm' 形式にする（負の値は '-Xh YYm'）。"""
+    seconds = int(seconds)
+    sign = "-" if seconds < 0 else ""
+    h, rem = divmod(abs(seconds), 3600)
+    return f"{sign}{h}h{rem // 60:02d}m"
 
 
 def bar(used, total, width=28):
@@ -107,13 +108,14 @@ def main():
         data["quotaRefreshTime"].replace("Z", "+00:00")
     )
     now = datetime.now(timezone.utc)
-    delta = refresh - now
-    days = delta.days
-    hours = delta.seconds // 3600
-    mins = (delta.seconds % 3600) // 60
+    total = int((refresh - now).total_seconds())
 
     print(f"リセット : {data['quotaRefreshTime']}")
-    print(f"まで     : {days}日 {hours}時間 {mins}分")
+    if total <= 0:
+        print("まで     : リセット時刻を過ぎています（反映待ち）")
+    else:
+        days, rem = divmod(total, 86400)
+        print(f"まで     : {days}日 {rem // 3600}時間 {(rem % 3600) // 60}分")
 
     if data["gpuQuota"].get("isPayToScaleEnabled"):
         print("ℹ Pay to Scale が有効です（上限を超えて課金で延長できます）")

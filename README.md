@@ -91,6 +91,10 @@ kaggleAI/
 ├── opencode-llama-local.json                   # opencode 用プロバイダ設定（貼り付け用）
 ├── Qwen3.8-27B-Uncensored-Q4_K_M.gguf          # 手元の GGUF（16.8 GB、アップロード不要）
 ├── ask.py                                      # 対話クライアント（URL/認証を自動解決）
+├── config.env                                  # ngrok ドメイン / Gist / slug / ポートの共通設定
+│                                               # （config.local.env を置くと上書き。gitignore 済み）
+├── kcconfig.py                                 # config.env を Python から読む
+├── lib/launcher-common.zsh                     # run-kaggle-chat / run-ai の共通処理
 ├── kaggle-dataset-orcarouter/                  # Dataset キャッシュ（モデル本体）
 │   ├── dataset-metadata.json
 │   ├── blobs/                                  # モデルの実体（17 GB）
@@ -111,7 +115,9 @@ kaggleAI/
     ├── step2/                                  # Step2: Ollama + cloudflared 公開
     │   ├── kernel-metadata.json
     │   ├── auth_proxy.py                       # リバースプロキシ + UI配信（base64 埋め込み）
-    │   ├── _selftest_proxy.py                  # プロキシ自己テスト 17項目
+    │   ├── _selftest_proxy.py                  # プロキシ自己テスト
+    │   ├── _selftest_builder.py                # ノート内関数の自己テスト
+    │   ├── cells/                              # build_step2.py のコードセル（定数のもの）
     │   └── step2-orcarouter-qwen38-27b-cloudflared.ipynb
     ├── step2-ngrok/                            # Step2: Ollama + ngrok 固定URL（同じビルダー）
     │   ├── kernel-metadata.json
@@ -119,11 +125,8 @@ kaggleAI/
     ├── assemble_patch_dataset.py                # patch Dataset の組み立て
     ├── build_capture_patch.py                   # patch 採取ノート生成
     ├── capture_patch/                           # 採取用ノート（使い捨て）
-    ├── diag/                                   # マウント形式の切り分け用ミニノート（使い捨て）
-    │   ├── kernel-metadata.json
-    │   └── diag.ipynb
-    ├── _v10_cycle.sh                           # push → 完了待ち → 成果物回収の自動サイクル
-    │                                           # （GPU session 上限2で実行中は push が弾かれるため）
+    ├── check_notebooks.py                      # コミット済み ipynb == ビルダー出力 を確認
+    ├── archive/                                # 調査用の使い捨てノート（probe / diag / cycle スクリプト）
     ├── smoke/                                  # 動作検証用（Secrets / Dataset 不要）
     │   ├── kernel-metadata.json
     │   └── smoke-orcarouter-qwen38-27b.ipynb
@@ -236,7 +239,7 @@ Notebook を開き、右側 **Add-ons → Secrets → Add a Secret**:
 | `API_PASS` | 設定すると Basic 認証が有効になる | 不要（既定は認証なし） |
 | `API_USER` | Basic 認証のユーザー名（`API_PASS` 設定時のみ） | 不要（既定 `ollama`） |
 | `NGROK_TOKEN` | ngrok の authtoken | **ngrok 版のみ必須** |
-| `NGROK_DOMAIN` | ngrok の dev domain | 任意（埋め込み既定値を上書き） |
+| `NGROK_DOMAIN` | ngrok の dev domain | 任意（埋め込み既定値を上書き。既定値は `config.env`） |
 | `GITHUB_TOKEN` | gist 権限つきトークン（`gh auth token` の出力） | 任意（Gist 自動配布を使う場合） |
 | `GIST_ID` | 配布先 Gist の ID | 任意（既定 Gist を使用） |
 | `KAGGLE_USERNAME` | Kaggle ユーザー名 | Step1 のみ |
@@ -657,14 +660,16 @@ Private Network Access で遮断されるため http 配信が必要）。
 
 ### 停止ボタン
 
-- `POST /stop` でプロキシ/ランチャー終了
+- `POST /stop`（ヘッダ `X-Kc-Stop: 1` 必須、`API_PASS` 設定時は Basic 認証も必須）でプロキシ/ランチャー終了
 - `/quota` が JSON を返す間（プロキシ稼働中）のみ表示
 - Kaggle / uzu 共通（プロキシ稼働時）
 
 ### keepalive ON/OFF / リセット
 
 - 初期: `RUN=1`, `MINUTES=60`
-- API リクエスト送信ごとに `/tmp/keepalive.conf` を `RUN=1 MINUTES=60` にリセット
+- 生成リクエスト（`/v1/chat/completions` `/v1/completions` `/api/chat` `/api/generate` など）ごとに
+  `/tmp/keepalive.conf` を `RUN=1 MINUTES=60` にリセット（`/api/ps` などのポーリングでは延長しない）
+- 延長を重ねてもセル開始からの合計は `MAX_MINUTES`（480 分）で打ち切る
 - 停止ボタン: `RUN=0` → keepalive ループは翌サイクルで終了
 - 最終リセットから 60分経過で自動終了
 
@@ -870,7 +875,7 @@ Ollama の手前に `kaggle/step2/auth_proxy.py` を置いて
 | `/` | `llama-chat.html` を返す |
 | `/healthz` | ローカルで即答（上流を見ない） |
 | `/quota` | Kaggle GPU 残量を返す。`--no-quota` なら `available:false` |
-| `/stop` | 応答後に終了。`--stop-pid` があればその PID にも SIGTERM |
+| `/stop` | `POST` + `X-Kc-Stop: 1`（+ `API_PASS` 時は認証）で応答後に終了。`--stop-pid` があればその PID にも SIGTERM |
 | `/api/*` `/v1/*` | 上流へ中継（ストリーミング対応） |
 
 ```
@@ -1186,3 +1191,14 @@ python3 kaggle/build_keepalive_test.py
 - [ngrok: Domains](https://dashboard.ngrok.com/domains) — 固定URL（dev domain）の取得
 - [GitHub: cyberytti/OllamaKaggle](https://github.com/cyberytti/OllamaKaggle)
 - [Kaggle](https://www.kaggle.com) / [Ollama](https://ollama.com)
+
+## 開発時のチェック
+
+```bash
+python3 kaggle/step2/_selftest_proxy.py     # プロキシ
+python3 kaggle/step2/_selftest_builder.py   # ノート内関数
+python3 kaggle/check_notebooks.py           # auth_proxy.py / llama-chat.html を直したら再生成漏れが無いか
+ruff check .
+```
+
+同じものを GitHub Actions（`.github/workflows/ci.yml`）でも回している。

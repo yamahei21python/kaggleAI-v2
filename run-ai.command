@@ -21,13 +21,12 @@ set -uo pipefail
 SCRIPT_DIR="${0:A:h}"
 cd "${SCRIPT_DIR}" || exit 1
 
-# Finder 起動は PATH が最小限。kaggle CLI は pip --user で
-# ~/Library/Python/3.9/bin に入っているので明示する。
-export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.local/bin:${HOME}/Library/Python/3.9/bin:${PATH}"
+source "${SCRIPT_DIR}/lib/launcher-common.zsh"
 
-UZU_PORT="${UZU_PORT:-9931}"
-UZU_UI_PORT="${UZU_UI_PORT:-8899}"
-RELAY_PORT="${KC_RELAY_PORT:-19950}"
+# run-uzu-server.command にも同じ値を渡す（export しないと子は既定値を使う）
+export UZU_PORT="${UZU_PORT:-${CFG_UZU_PORT:-9931}}"
+export UZU_UI_PORT="${UZU_UI_PORT:-${CFG_UI_PORT:-8899}}"
+RELAY_PORT="${KC_RELAY_PORT:-${CFG_RELAY_PORT:-19950}}"
 TIMEOUT="${KC_TIMEOUT:-900}"
 NO_OPEN="${KC_NO_OPEN:-0}"
 
@@ -76,36 +75,19 @@ echo "▶ target=${TARGET}"
 echo
 
 # ---- 共通ヘルパ --------------------------------------------
-http_code() {  # $1=url $2=timeout(既定5)
-  local c
-  c="$(curl -s -o /dev/null -w '%{http_code}' -m "${2:-5}" \
-        -H "ngrok-skip-browser-warning: true" "$1" 2>/dev/null)"
-  echo "${c:-000}"
-}
-
 port_busy() {  # $1=port
   lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
 }
 
 # uzu は /v1/models が返れば会話可能（モデルロード完了後に応答する）
 uzu_ready() {
-  [[ "$(http_code "http://127.0.0.1:${UZU_PORT}/v1/models" 3)" == "200" ]]
+  [[ "$(kc_http_code "http://127.0.0.1:${UZU_PORT}/v1/models" 3)" == "200" ]]
 }
 
 # Kaggle は /api/ps に size_vram > 0 のモデルが居れば会話可能。
 # /api/tags は Ollama 起動時点で 200 を返すので判定に使えない。
-KAGGLE_DOMAIN="${KC_DOMAIN:-rebalance-cornflake-sagging.ngrok-free.dev}"
+KAGGLE_DOMAIN="${KC_DOMAIN:-${CFG_NGROK_DOMAIN}}"
 KAGGLE_BASE="https://${KAGGLE_DOMAIN}"
-
-kaggle_model_ready() {
-  local body
-  body="$(curl -s -m 10 -H "ngrok-skip-browser-warning: true" \
-            "${KAGGLE_BASE}/api/ps" 2>/dev/null)"
-  [[ -z "${body}" ]] && return 1
-  [[ "${body}" == *'"models":[]'* ]] && return 1
-  [[ "${body}" =~ '"size_vram":[1-9]' ]] && return 0
-  return 1
-}
 
 # ---- uzu 起動 ----------------------------------------------
 # run-uzu-server.command は前面で動き続けるので、バックグラウンドで起動して
@@ -146,93 +128,30 @@ start_uzu() {
 }
 
 # ---- Kaggle 起動 -------------------------------------------
-RELAY_PID=""
 start_kaggle() {
-  if kaggle_model_ready; then
+  if kc_model_ready "${KAGGLE_BASE}"; then
     echo "✅ Kaggle: 既に起動済み・会話可能"
   else
     # トンネルは生きているがモデル未常駐なら、push せずに待つ
-    if [[ "$(http_code "${KAGGLE_BASE}/healthz")" == "200" ]]; then
+    if [[ "$(kc_http_code "${KAGGLE_BASE}/healthz" 5)" == "200" ]]; then
       echo "ℹ Kaggle: 起動済みだがモデル未常駐。VRAM 常駐を待つ..."
     else
       echo "⏳ Kaggle: push 中..."
-      local out rc
-      out="$(kaggle kernels push -p "${SCRIPT_DIR}/kaggle/step2-ngrok" 2>&1)"
-      rc=$?
-      echo "${out}" | sed -n '1,4p'
-      if (( rc != 0 )); then
-        if echo "${out}" | grep -q "Maximum batch GPU session count"; then
-          cat >&2 <<'EOS'
-❌ GPU セッションが 2 本埋まっています。
-   Kaggle の UI で古いカーネルを停止してください
-   （`kaggle kernels stop` は CLI に存在しません）。
-EOS
-        else
-          echo "❌ Kaggle: push 失敗（rc=${rc}）" >&2
-        fi
-        return 1
-      fi
+      kc_require_kaggle || return 1
+      kc_push_kernel "${SCRIPT_DIR}/kaggle/step2-ngrok" || return 1
     fi
-
     # モデルが VRAM に乗るまで待つ（実測: ロードに 250 秒前後）
-    local deadline i=0
-    deadline=$(( $(date +%s) + TIMEOUT ))
-    while (( $(date +%s) < deadline )); do
-      i=$(( i + 1 ))
-      if kaggle_model_ready; then
-        echo "✅ Kaggle: 会話可能（${i} 回目）"
-        break
-      fi
-      if (( i % 6 == 0 )); then
-        echo "   ⏳ モデルをロード中（VRAM 未常駐）... ${i}"
-      fi
-      sleep 10
-    done
-    if ! kaggle_model_ready; then
+    if ! kc_wait_model "${KAGGLE_BASE}" "${TIMEOUT}"; then
       echo "⚠ Kaggle: ${TIMEOUT}s 待ってもモデル未常駐。UI は開きます（遅い可能性）。" >&2
     fi
   fi
 
   # ---- 中継を立てる（ngrok の警告ページ回避）----
-  # ngrok 無料枠はブラウザの HTML 取得に ERR_NGROK_6024 を返す。
-  # ヘッダ ngrok-skip-browser-warning を付けたリクエストは素通りするので、
-  # ローカル中継にそのヘッダを肩代わりさせる。
-  local proxy_py="${SCRIPT_DIR}/kaggle/step2/auth_proxy.py"
-
-  if [[ ! -f "${proxy_py}" ]]; then
-    echo "⚠ 中継に必要な ${proxy_py} がありません" >&2
-    return 1
-  fi
-
-  # 配信する UI はローカルの llama-chat.html をそのまま使う。
-  # 上流（Kaggle）から取ると、push 済みの古い版が返ってきて
-  # ローカルと見た目が食い違う。HTML 側は同一オリジンを見るので、
-  # 中継がこのファイルを配ればそのまま動く。
-  local local_ui="${SCRIPT_DIR}/llama-chat.html"
-
-  if [[ ! -f "${local_ui}" ]]; then
-    echo "⚠ ${local_ui} がありません" >&2
-    return 1
-  fi
-
-  # 上流が生きているかだけ確認する（HTML は使わない）
-  if [[ "$(http_code "${KAGGLE_BASE}/healthz")" != "200" ]]; then
+  if [[ "$(kc_http_code "${KAGGLE_BASE}/healthz" 5)" != "200" ]]; then
     echo "⚠ Kaggle: 上流が応答していません（中継は立てます）" >&2
   fi
-
-  pkill -f "auth_proxy.py --port ${RELAY_PORT}" 2>/dev/null || true
-  sleep 1
-  python3 "${proxy_py}" --port "${RELAY_PORT}" --upstream "${KAGGLE_BASE}" \
-    --chat-html "${local_ui}" \
-    --upstream-header "ngrok-skip-browser-warning=true" \
-    >/tmp/kc-relay.log 2>&1 &
-  RELAY_PID=$!
-  sleep 2
-  if kill -0 "${RELAY_PID}" 2>/dev/null; then
-    echo "✅ Kaggle: 中継起動（PID ${RELAY_PID} / port ${RELAY_PORT}）"
-  else
-    echo "⚠ 中継の起動に失敗（/tmp/kc-relay.log）" >&2
-    RELAY_PID=""
+  if kc_start_relay "${KAGGLE_BASE}" "${RELAY_PORT}"; then
+    echo "✅ Kaggle: 中継起動（PID ${KC_RELAY_PID} / port ${RELAY_PORT}）"
   fi
   return 0
 }
@@ -255,7 +174,9 @@ stop_all() {
   if pkill -f "uzu/target/release/cli server" 2>/dev/null; then
     echo "  ✅ uzu サーバーを停止"
   fi
-  if pkill -f "http.server ${UZU_UI_PORT}" 2>/dev/null; then
+  # UI は auth_proxy.py が配信している（旧: python -m http.server）
+  if pkill -f "auth_proxy.py --port ${UZU_UI_PORT}" 2>/dev/null \
+     || pkill -f "http.server ${UZU_UI_PORT}" 2>/dev/null; then
     echo "  ✅ uzu UI サーバーを停止"
   fi
 
@@ -273,7 +194,7 @@ stop_all() {
 
   echo
   echo "  ℹ Kaggle の GPU セッションはここからは止められません。"
-  echo "    止めるには UI から: https://www.kaggle.com/code/yamahei21python/step2-orcarouter-qwen38-27b-ngrok-fixed"
+  echo "    止めるには UI から: https://www.kaggle.com/code/${CFG_KERNEL_SLUG_NGROK}"
 }
 
 # ---- 本体 --------------------------------------------------
@@ -304,7 +225,8 @@ esac
 echo
 echo "============================================================"
 
-UZU_URL="http://127.0.0.1:${UZU_UI_PORT}/llama-chat.html?port=${UZU_PORT}"
+# UI は auth_proxy.py が / で配る（/llama-chat.html は上流へ転送されて 502 になる）
+UZU_URL="http://127.0.0.1:${UZU_UI_PORT}/"
 KAGGLE_UI="http://127.0.0.1:${RELAY_PORT}/"
 
 case "${TARGET}" in

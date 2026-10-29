@@ -10,7 +10,6 @@ Kaggle 上でノートブックを実行すると、HuggingFace からモデル�
 Kaggle Dataset として公開する。
 """
 import json
-import os
 import pathlib
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -84,7 +83,7 @@ print(f"ダウンロード先: {{OUT_DIR}}")
 print(f"モデル: {{MODEL_ID}}")
 """))
 
-cells.append(_cell("code", f"""# モデルダウンロード
+cells.append(_cell("code", """# モデルダウンロード
 # サイズ約 19GB。進捗が表示されるまで数分かかる場合あり。
 start = time.time()
 snapshot_download(
@@ -95,11 +94,11 @@ snapshot_download(
     resume_download=True,
 )
 elapsed = time.time() - start
-print(f"✅ ダウンロード完了: {{elapsed/60:.1f}}分")
+print(f"✅ ダウンロード完了: {elapsed/60:.1f}分")
 
 # サイズ確認
-!du -sh {{OUT_DIR}}
-!ls -la {{OUT_DIR}}
+!du -sh {OUT_DIR}
+!ls -la {OUT_DIR}
 """))
 
 cells.append(_cell("code", f"""# Kaggle Dataset メタデータ作成

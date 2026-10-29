@@ -11,6 +11,7 @@
   7. OPTIONS プリフライト → 204 をローカル即答（上流へ流さない）
   8. 非 ASCII Authorization でも 500 にならない
   9. API_PASS を設定したときだけ 401 に戻る（任意機能の退行検知）
+ 10. /stop は POST + X-Kc-Stop 必須、API_PASS 設定時は認証も必須
   + ノート埋め込み == auth_proxy.py / llama-chat.html
   + UI が認証なしで 200・秘密を含まない
 """
@@ -52,6 +53,7 @@ def read_log(n=300):
         return ""
 
 UP_PORT, PROXY_PORT = 18901, 18902
+KD_PATH = pathlib.Path("/tmp/keepalive.conf")
 USER, PASS_ = "tester", "s3cret-pass"
 TOKEN = base64.b64encode(f"{USER}:{PASS_}".encode()).decode()
 AUTH = {"Authorization": f"Basic {TOKEN}"}
@@ -298,6 +300,7 @@ if started:
     # 1b) UI に残り時間表示と停止ボタンの器があるか
     check("UI に残り時間の器", b'id="quotaLeft"' in ui, "quotaLeft")
     check("UI に停止ボタンの器", b'id="stopServer"' in ui, "stopServer")
+    check("UI の停止は X-Kc-Stop を送る", b"'X-Kc-Stop': '1'" in ui)
 
     # 1c) /quota は管理エンドポイントとして応答する
     #     kaggle.json が無い環境では available=false でも 200 を返す仕様。
@@ -448,6 +451,42 @@ if started:
         r = urllib.request.urlopen(req, timeout=5)
         check("API_PASS 設定時→認証ありで200", r.status == 200,
               f"HTTP {r.status}")
+
+        # 10) /stop は認証より前に処理されていた（誰でも Kaggle セッションを
+        #     止められた）退行の検知。成功系は最後に 1 回だけ叩く（proxy が落ちる）。
+        def _stop(method, headers):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{P2}/stop", method=method,
+                data=b"" if method == "POST" else None, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return r.status
+            except urllib.error.HTTPError as e:
+                return e.code
+
+        _ka_b = KD_PATH.read_bytes() if KD_PATH.is_file() else None
+        KD_PATH.write_text("RUN=1\nMINUTES=5\n")
+        check("/stop GET → 405", _stop("GET", {}) == 405)
+        check("/stop POST ヘッダ無し → 405", _stop("POST", {}) == 405)
+        check("/stop POST 認証無し → 401",
+              _stop("POST", {"X-Kc-Stop": "1"}) == 401)
+        check("拒否された /stop で proxy は落ちない", p2.poll() is None)
+        check("拒否された /stop で keepalive を止めない",
+              KD_PATH.read_text() == "RUN=1\nMINUTES=5\n")
+        check("/stop POST 認証あり → 200",
+              _stop("POST", {"X-Kc-Stop": "1", **AUTH}) == 200)
+        try:
+            p2.wait(5)
+        except Exception:
+            pass
+        check("認証ありの /stop で proxy が終了", p2.poll() is not None)
+        if _ka_b is None:
+            try:
+                KD_PATH.unlink()
+            except OSError:
+                pass
+        else:
+            KD_PATH.write_bytes(_ka_b)
     finally:
         p2.terminate()
         try:
@@ -510,17 +549,17 @@ try:
         check("チャット送信で RUN=1/MINUTES=60 にリセット", False,
               f"{type(e).__name__}: {e}")
 
-    # 上流へ中継されるリクエストは GET でも延長される（実装は _relay の
-    # 先頭で _reset_keepalive()）。UI のポーリングでも延びる仕様なので、
-    # ここは「延びる」が正。延ばしたくないのは /quota（下で確認）。
-    KD.write_text("RUN=0\nMINUTES=1\n")
-    try:
-        urllib.request.urlopen(f"{BASE}/v1/models", timeout=10).read()
-    except Exception:
-        pass
-    txt = KD.read_text()
-    check("GET /v1/models（中継）でも延長される",
-          "RUN=1" in txt and "MINUTES=60" in txt, txt.replace("\n", " "))
+    # 延長するのは生成リクエストだけ。/v1/models や /api/ps のポーリング
+    # （ランチャーの起動確認・第三者のスキャン）では GPU セッションを延命しない。
+    for _poll in ("/v1/models", "/api/ps"):
+        KD.write_text("RUN=0\nMINUTES=1\n")
+        try:
+            urllib.request.urlopen(f"{BASE}{_poll}", timeout=10).read()
+        except Exception:
+            pass
+        txt = KD.read_text()
+        check(f"GET {_poll}（中継）では延長しない", "MINUTES=1" in txt,
+              txt.replace("\n", " "))
 
     # 管理系 /quota も書き換えない
     KD.write_text("RUN=0\nMINUTES=1\n")

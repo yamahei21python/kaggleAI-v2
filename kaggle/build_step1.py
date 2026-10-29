@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Step1 notebook builder: orcarouter/Qwen3.8-27B-Uncensored -> Kaggle Dataset"""
+import pathlib
 import json
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 DATASET_SLUG = "my-ollama-orcarouter-qwen38-27b"
-OUT = "step1-orcarouter-qwen38-27b-dl.ipynb"
+# 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
+OUT = str(pathlib.Path(__file__).resolve().parent / "step1" / "step1-orcarouter-qwen38-27b-dl.ipynb")
 
 cells = []
 
@@ -81,11 +83,11 @@ print(subprocess.run(["/usr/local/bin/ollama", "--version"],
 
 cells.append(("markdown", "---\n### ⬇️ モデルダウンロード（16.5 GiB / 10〜30分）\n"))
 
-cells.append(("code", f'''# Ollama サーバー起動 → モデル pull
+cells.append(("code", '''# Ollama サーバー起動 → モデル pull
 import subprocess, os, time
 
 OLLAMA_BIN = "/usr/local/bin/ollama"
-env = {{**os.environ, "OLLAMA_MODELS": OLLAMA_MODELS_DIR}}
+env = {**os.environ, "OLLAMA_MODELS": OLLAMA_MODELS_DIR}
 
 with open("/tmp/ollama_serve.log", "w") as log:
     proc = subprocess.Popen([OLLAMA_BIN, "serve"], env=env,
@@ -96,17 +98,17 @@ for i in range(60):
     r = subprocess.run([OLLAMA_BIN, "list"], env=env,
                        capture_output=True, text=True)
     if r.returncode == 0:
-        print(f"✅ Ollama サーバー起動（{{i+1}}s）")
+        print(f"✅ Ollama サーバー起動（{i+1}s）")
         break
     time.sleep(1)
 else:
     print(open("/tmp/ollama_serve.log").read()[-2000:])
     raise RuntimeError("Ollama サーバー起動失敗")
 
-print(f"⏳ pull: {{MODEL}}  （16.5 GiB / 10〜30分）")
+print(f"⏳ pull: {MODEL}  （16.5 GiB / 10〜30分）")
 t0 = time.time()
 subprocess.run([OLLAMA_BIN, "pull", MODEL], env=env, check=True, timeout=7200)
-print(f"✅ ダウンロード完了（{{(time.time()-t0)/60:.1f}} 分）")
+print(f"✅ ダウンロード完了（{(time.time()-t0)/60:.1f} 分）")
 
 print(subprocess.run([OLLAMA_BIN, "list"], env=env,
                      capture_output=True, text=True).stdout)
