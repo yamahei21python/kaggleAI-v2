@@ -9,6 +9,12 @@ import base64
 import json
 import os
 import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import kcconfig  # noqa: E402
+
+CFG = kcconfig.load()
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 DATASET = "my-ollama-orcarouter-qwen38-27b"
@@ -813,7 +819,7 @@ subprocess.run([NGROK_BIN, "config", "add-authtoken", _tok],
 # ---- 固定ドメイン ----
 # 優先順: 環境変数 NGROK_DOMAIN → Secrets NGROK_DOMAIN → 埋め込み既定値。
 # 既定値を埋めているので、未設定でも必ず固定URLになる（Secret は上書き用）。
-NGROK_DOMAIN_DEFAULT = "rebalance-cornflake-sagging.ngrok-free.dev"
+NGROK_DOMAIN_DEFAULT = "''' + CFG["NGROK_DOMAIN"] + '''"
 NGROK_DOMAIN = os.environ.get("NGROK_DOMAIN", "").strip()
 if not NGROK_DOMAIN:
     try:
@@ -992,8 +998,8 @@ cells.append(("code", '''# 現在の公開URLを Gist に書き出す（取得�
 # keepalive で cloudflared が再起動したときも同じ関数を呼ぶ。
 import json, os, urllib.request
 
-GIST_ID_DEFAULT = "2b44ac8cb115012a31d3c46661af933f"
-GIST_OWNER = "yamahei21python"
+GIST_ID_DEFAULT = "''' + CFG["GIST_ID"] + '''"
+GIST_OWNER = "''' + CFG["GIST_OWNER"] + '''"
 # 環境変数 → Secrets → 既定値（GITHUB_TOKEN と同じ解決順に揃える）
 GIST_ID = os.environ.get("GIST_ID", "").strip()
 if not GIST_ID:
@@ -1329,7 +1335,9 @@ if not save_output("connection_info.txt", report + "\\n"):
 cells.append(("markdown", """---
 ### 🔋 キープアライブ
 
-既定 **5 分**（検証用）で自動終了します（`KEEPALIVE_MINUTES` で変更、上限 480）。
+最後のチャット送信から **60 分**（`KEEPALIVE_RESET_MINUTES`）で自動終了します。
+送信のたびに延長されますが、セル開始からの合計は **480 分**（`MAX_MINUTES`）で打ち切ります。
+UI の ■ ボタン（`/stop`）で即終了します。
 
 > **なぜ無限ループにしないのか**
 > 実行が完了しないと `/kaggle/working` の zip が生成されず、**ログも成果物も一切取得できません**。
@@ -1346,37 +1354,30 @@ cells.append(("code", '''# キープアライブ: 有限ループ（完了させ
 # 検証中は 5 分、完成後の運用は 480 分（Kaggle の 9h 上限より短い最大値）。
 import os, subprocess, time, re, json, urllib.request, urllib.error
 
-KEEPALIVE_MINUTES = 5         # 検証用。完成したら 480 に戻す
-MAX_MINUTES = 480             # これを超えると成果物ごと消えるので実装でも守る
+# 維持時間は /tmp/keepalive.conf（proxy がチャット送信ごとに書き直す）で決まる。
+# MAX_MINUTES はセル開始からの合計上限。延長を重ねてもこれを超えない
+# （超えて Kaggle の実行時間上限に達すると成果物ごと消える）。
+MAX_MINUTES = 480
 TUNNEL_CHECK_EVERY = 10       # 公開URL疎通は 10 分ごと（外部リクエスト削減）
 
-# 0以下は「維持しない」意図だが、丸めて 480 にすると意図せず8時間固定になる。
-# 誤設定を黙って膨らませないため、0以下は即 fail（証跡を残して止める）。
-if KEEPALIVE_MINUTES <= 0:
-    fail(f"KEEPALIVE_MINUTES={KEEPALIVE_MINUTES} は無効（1〜{MAX_MINUTES} で指定）")
-# 記述だけ上限を書くと 600 などに書き換えた人が成果物を失うので、ここで丸める
-if KEEPALIVE_MINUTES > MAX_MINUTES:
-    print(f"⚠ KEEPALIVE_MINUTES={KEEPALIVE_MINUTES} → {MAX_MINUTES} に制限")
-    KEEPALIVE_MINUTES = MAX_MINUTES
-
 KEEPALIVE_CONF = "/tmp/keepalive.conf"   # ON/OFF + MINUTES の共有ファイル
-KEEPALIVE_KEEPALIVE = 60                 # チャット送信ごとにリセットする時間（分）
+KEEPALIVE_RESET_MINUTES = 60             # チャット送信ごとにリセットする時間（分）
 
 
 def _read_keepalive_conf():
-    """RUN=1/0 と MINUTES を読み取り（デフォルトは 1 と KEEPALIVE_KEEPALIVE）。"""
+    """RUN=1/0 と MINUTES を読み取り（デフォルトは 1 と KEEPALIVE_RESET_MINUTES）。"""
     try:
         with open(KEEPALIVE_CONF) as f:
             lines = [l.strip() for l in f if l.strip() and "=" in l]
         d = dict(l.split("=", 1) for l in lines)
         run = int(d.get("RUN", 1))
-        minutes = int(d.get("MINUTES", KEEPALIVE_KEEPALIVE))
+        minutes = int(d.get("MINUTES", KEEPALIVE_RESET_MINUTES))
     except FileNotFoundError:
-        run, minutes = 1, KEEPALIVE_KEEPALIVE
+        run, minutes = 1, KEEPALIVE_RESET_MINUTES
     except Exception:
-        run, minutes = 1, KEEPALIVE_KEEPALIVE
+        run, minutes = 1, KEEPALIVE_RESET_MINUTES
     if run <= 0:
-        return 0, KEEPALIVE_KEEPALIVE   # RUN<=0 は「維持しない」
+        return 0, KEEPALIVE_RESET_MINUTES   # RUN<=0 は「維持しない」
     if minutes <= 0:
         fail(f"KEEPALIVE_MINUTES={minutes} は無効（1〜{MAX_MINUTES} で指定）")
     if minutes > MAX_MINUTES:
@@ -1389,7 +1390,7 @@ def _reset_keepalive():
     """チャット送信ごとに時間リセット（ON 維持）。"""
     try:
         with open(KEEPALIVE_CONF, "w") as f:
-            f.write(f"RUN=1\\nMINUTES={KEEPALIVE_KEEPALIVE}\\n")
+            f.write(f"RUN=1\\nMINUTES={KEEPALIVE_RESET_MINUTES}\\n")
     except Exception:
         pass
 
@@ -1428,7 +1429,7 @@ def _gpu():
 print(f"Public URL: {url}")
 RUN, KEEPALIVE_MINUTES = _read_keepalive_conf()
 if RUN:
-    print(f"🔋 ON。{KEEPALIVE_KEEPALIVE}分間維持（チャット送信でリセット、■ で停止）")
+    print(f"🔋 ON。{KEEPALIVE_RESET_MINUTES}分間維持（チャット送信でリセット、■ で停止）")
 else:
     print(f"🛑 ON/OFF OFF（ RUN=0 ）。即時終了します")
     KEEPALIVE_MINUTES = 0
@@ -1457,7 +1458,7 @@ i = 0
 # for ではなく while にする理由: proxy はチャット送信ごとに
 # /tmp/keepalive.conf を MINUTES=60 で書き直す。for の range は開始時に
 # 固定されるため、延長が効かない（実測バグ）。conf の mtime 変化で延ばす。
-limit = KEEPALIVE_MINUTES
+limit = min(KEEPALIVE_MINUTES, MAX_MINUTES)
 conf_mtime = _conf_mtime()
 while i < limit:
     i += 1
@@ -1468,8 +1469,9 @@ while i < limit:
     _m = _conf_mtime()
     if _m != conf_mtime:
         conf_mtime = _m
-        limit = i - 1 + KEEPALIVE_MINUTES
-        print(f"♻ アクティビティ検出 → 残り {KEEPALIVE_MINUTES} 分に延長")
+        limit = min(i - 1 + KEEPALIVE_MINUTES, MAX_MINUTES)
+        print(f"♻ アクティビティ検出 → 残り {limit - i + 1} 分に延長"
+              f"（合計上限 {MAX_MINUTES} 分）")
     ran_any = True
     time.sleep(60)
     ollama_st, cf_st = _proc("ollama"), _proc(TUNNEL_NAME)
@@ -1506,7 +1508,7 @@ while i < limit:
                 tunnel_dead = 0
                 _restarted_now = True
         except Exception as _e:
-            print(f"⚠ cloudflared 再起動失敗: {type(_e).__name__}: {_e}")
+            print(f"⚠ {TUNNEL_NAME} 再起動失敗: {type(_e).__name__}: {_e}")
 
     line = (f"[{time.strftime('%H:%M:%S')}] "
             f"ollama={ollama_st} {TUNNEL_NAME}={cf_st} | GPU: {_gpu()}")

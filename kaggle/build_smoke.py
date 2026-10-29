@@ -2,10 +2,12 @@
 """Smoke test: prove Ollama + orcarouter/Qwen3.8-27B-Uncensored runs on Kaggle T4 x2.
 No Kaggle Secrets required. No Dataset required (pulls from registry).
 """
+import pathlib
 import json
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
-OUT = "smoke-orcarouter-qwen38-27b.ipynb"
+# 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
+OUT = str(pathlib.Path(__file__).resolve().parent / "smoke" / "smoke-orcarouter-qwen38-27b.ipynb")
 
 cells = []
 

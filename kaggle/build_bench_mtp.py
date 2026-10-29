@@ -4,9 +4,11 @@
 Ollama を経由せず llama-server を直に起動し、MTP の有無で生成速度を比較する。
 モデルは orcarouter/Qwen3.8-27B-Uncensored（qwen35、nextn_predict_layers=1 内蔵）。
 """
+import pathlib
 import json
 
-OUT = "bench-mtp-orcarouter-qwen38-27b.ipynb"
+# 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
+OUT = str(pathlib.Path(__file__).resolve().parent / "bench_mtp" / "bench-mtp-orcarouter-qwen38-27b.ipynb")
 
 cells = []
 
@@ -106,26 +108,26 @@ if not HAS_MTP:
 
 cells.append(("markdown", "---\n### 3️⃣ モデル GGUF を入手\n"))
 
-cells.append(("code", f'''# Ollama で pull してから blob から GGUF を取り出す。
+cells.append(("code", '''# Ollama で pull してから blob から GGUF を取り出す。
 # （llama-server は GGUF を直接読むので、Ollama の blob をそのまま使える）
 import os, subprocess, time, glob, json
 
 MODEL_NAME = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 OLLAMA_BIN = "/usr/local/bin/ollama"
 
-env = {{**os.environ, "OLLAMA_MODELS": OLLAMA_MODELS}}
+env = {**os.environ, "OLLAMA_MODELS": OLLAMA_MODELS}
 with open("/tmp/ollama_boot.log", "w") as log:
     subprocess.Popen([OLLAMA_BIN, "serve"], env=env, stdout=log, stderr=log)
 for i in range(60):
     if subprocess.run([OLLAMA_BIN, "list"], env=env, capture_output=True).returncode == 0:
-        print(f"✅ server up ({{i+1}}s)")
+        print(f"✅ server up ({i+1}s)")
         break
     time.sleep(1)
 
-print(f"⏳ pull: {{MODEL_NAME}}")
+print(f"⏳ pull: {MODEL_NAME}")
 t0 = time.time()
 subprocess.run([OLLAMA_BIN, "pull", MODEL_NAME], env=env, check=True, timeout=7200)
-print(f"✅ pull 完了 ({{(time.time()-t0)/60:.1f}} 分)")
+print(f"✅ pull 完了 ({(time.time()-t0)/60:.1f} 分)")
 
 # manifest から model 層の blob を特定
 MANIFEST = os.path.join(
@@ -136,11 +138,11 @@ for layer in man["layers"]:
     if layer["mediaType"] == "application/vnd.ollama.image.model":
         digest = layer["digest"].replace("sha256:", "sha256-")
         MODEL_BLOB = os.path.join(OLLAMA_MODELS, "blobs", digest)
-        print(f"  model 層: {{layer['size']/1024**3:.2f}} GiB")
+        print(f"  model 層: {layer['size']/1024**3:.2f} GiB")
         break
 if not MODEL_BLOB or not os.path.isfile(MODEL_BLOB):
-    raise RuntimeError(f"model blob が見つかりません: {{MODEL_BLOB}}")
-print(f"✅ GGUF: {{MODEL_BLOB}}")
+    raise RuntimeError(f"model blob が見つかりません: {MODEL_BLOB}")
+print(f"✅ GGUF: {MODEL_BLOB}")
 
 # Ollama はもう不要（VRAM を空ける）
 subprocess.run(["pkill", "-9", "ollama"], capture_output=True)
