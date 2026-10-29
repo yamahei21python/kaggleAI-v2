@@ -4,12 +4,13 @@
 #
 # 使い方:
 #   ./run-uzu-server.command                 # ダブルクリック or 実行
-#   UZU_REASONING_EFFORT=default ./run-uzu-server.command   # thinking ON
+#   UZU_REASONING_EFFORT=disabled ./run-uzu-server.command  # thinking OFF
 #   UZU_PORT=9940 ./run-uzu-server.command
 #
 # 環境変数:
 #   UZU_PORT              待受ポート (既定 9931)
-#   UZU_REASONING_EFFORT  リクエストが指定しない場合の既定 (disabled|default|low|medium|high|xhigh, 既定 disabled)
+#   UZU_UI_PORT           チャット UI のポート (既定 8899)
+#   UZU_REASONING_EFFORT  リクエストが指定しない場合の既定 (disabled|default|low|medium|high|xhigh, 既定 default)
 #   UZU_KEEP_OLLAMA=1     Ollama 常駐モデルを止めない
 #   UZU_NO_OPEN=1         ブラウザを自動で開かない
 set -euo pipefail
@@ -31,6 +32,28 @@ BACKUP_SPEC_CONFIG="${BACKUP}/speculator-config.json"
 HOST="127.0.0.1"
 PORT="${UZU_PORT:-9931}"
 REASONING="${UZU_REASONING_EFFORT:-default}"
+
+UI_PORT="${UZU_UI_PORT:-8899}"
+UI_PID=""
+SERVER_PID=""
+CLEANED=0
+
+validate_port() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "${value}" =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
+    echo "invalid ${name}: ${value}" >&2
+    exit 1
+  fi
+}
+
+validate_port UZU_PORT "${PORT}"
+validate_port UZU_UI_PORT "${UI_PORT}"
+
+if [[ "${PORT}" == "${UI_PORT}" ]]; then
+  echo "UZU_PORT and UZU_UI_PORT must differ" >&2
+  exit 1
+fi
 
 restore_file() {
   local source="$1"
@@ -177,28 +200,6 @@ if lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
   exit 1
 fi
 
-UI_PORT="${UZU_UI_PORT:-8899}"
-UI_PID=""
-SERVER_PID=""
-CLEANED=0
-
-validate_port() {
-  local name="$1"
-  local value="$2"
-  if [[ ! "${value}" =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
-    echo "invalid ${name}: ${value}" >&2
-    exit 1
-  fi
-}
-
-validate_port UZU_PORT "${PORT}"
-validate_port UZU_UI_PORT "${UI_PORT}"
-
-if [[ "${PORT}" == "${UI_PORT}" ]]; then
-  echo "UZU_PORT and UZU_UI_PORT must differ" >&2
-  exit 1
-fi
-
 cleanup() {
   (( CLEANED )) && return 0
   CLEANED=1
@@ -281,10 +282,6 @@ echo "  browser   : ${UI_URL}"
 echo "  stop      : Ctrl+C"
 echo "============================================================"
 echo
-
-if [[ "${UZU_NO_OPEN:-0}" != "1" ]]; then
-  : # ブラウザはモデル準備完了後に開く
-fi
 
 cd "${ROOT}"
 UZU_REASONING_EFFORT="${REASONING}" "${CLI}" server \

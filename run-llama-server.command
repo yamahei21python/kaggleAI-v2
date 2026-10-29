@@ -82,7 +82,7 @@ if [ ! -f "$MODEL_BLOB" ]; then
   echo "   $MODEL_BLOB"
   echo
   echo "   先に Ollama で pull してください:"
-  if [ "$MODEL_CHOICE" = "9b" ]; then
+  if [ "$ALIAS" = "qwen35-9b" ]; then
     echo "     ollama pull huihui_ai/qwen3.5-abliterated:9b"
   else
     echo "     ollama pull orcarouter/Qwen3.8-27B-Uncensored:latest"
@@ -106,8 +106,9 @@ fi
 
 # ポートが使用中なら止める
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "⚠  ポート $PORT は使用中です。"
-  echo "   既存の llama-server を停止しますか？"
+  echo "⚠  ポート $PORT は使用中です:"
+  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN | sed -n '2,4p'
+  echo "   このプロセスを停止しますか？"
   read -r -p "   y で停止 / それ以外で中止: " ans
   if [ "$ans" = "y" ]; then
     lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t | xargs -r kill -9 2>/dev/null
