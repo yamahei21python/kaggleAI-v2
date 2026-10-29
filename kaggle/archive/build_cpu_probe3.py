@@ -17,7 +17,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 DATASET_ID = "yamahei21python/qwen38-27b-uncensored-hauhaucs-awq-mtp"
 
 PROXY_B64 = base64.b64encode(
-    (HERE / "step2" / "auth_proxy.py").read_bytes()).decode()
+    (HERE.parent / "step2" / "auth_proxy.py").read_bytes()).decode()
 
 
 def _nb(md, code):
