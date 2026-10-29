@@ -1,0 +1,26 @@
+[
+  {
+    "engine": "llama.cpp",
+    "target_prompt_tokens": 4096,
+    "prompt_tokens": 4117,
+    "gen_tokens": 256,
+    "prefill_tps": 155.5606607228413,
+    "decode_tps": 12.90908641737314,
+    "prefill_ms": 26465.56,
+    "decode_ms": 19753.528,
+    "wall_s": 46.271,
+    "timestamp": "2026-10-28T09:57:21+0900"
+  },
+  {
+    "engine": "llama.cpp",
+    "target_prompt_tokens": 8192,
+    "prompt_tokens": 8207,
+    "gen_tokens": 256,
+    "prefill_tps": 74.24358971691453,
+    "decode_tps": 5.933897498831953,
+    "prefill_ms": 110541.53,
+    "decode_ms": 42973.442,
+    "wall_s": 153.542,
+    "timestamp": "2026-10-28T10:00:55+0900"
+  }
+]

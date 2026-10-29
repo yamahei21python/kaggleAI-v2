@@ -1,0 +1,16 @@
+{
+  "id": "yamahei21python/step2-vllm-uvbench",
+  "title": "Step2 vLLM uvbench",
+  "code_file": "step2-vllm-uvbench.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}

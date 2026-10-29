@@ -1,0 +1,11 @@
+.venv-kaggle/
+.perch/
+.playwright-mcp/
+.wheel/
+*.gguf
+*.log
+out/
+out.*/
+kaggle-dataset/
+kaggle-dataset-*/
+.DS_Store

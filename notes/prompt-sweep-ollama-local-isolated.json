@@ -1,0 +1,15 @@
+[
+  {
+    "engine": "ollama",
+    "target_prompt_tokens": 128,
+    "prompt_tokens": 147,
+    "gen_tokens": 256,
+    "prefill_tps": 145.88905484733755,
+    "decode_tps": 6.167557404901927,
+    "prefill_ms": 1007.615,
+    "decode_ms": 41507.518,
+    "wall_s": 42.595,
+    "load_s": 0.007,
+    "timestamp": "2026-10-28T10:13:36+0900"
+  }
+]

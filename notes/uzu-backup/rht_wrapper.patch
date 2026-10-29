@@ -1,0 +1,13 @@
+diff --git a/crates/uzu-engine/src/encodable_block/linear/rht_wrapper.rs b/crates/uzu-engine/src/encodable_block/linear/rht_wrapper.rs
+index 4772b0f..2e0251b 100644
+--- a/crates/uzu-engine/src/encodable_block/linear/rht_wrapper.rs
++++ b/crates/uzu-engine/src/encodable_block/linear/rht_wrapper.rs
+@@ -121,7 +121,7 @@ impl<B: Backend> RHTLinearWrapper<B> {
+         if input_preparation.activation_quantization.is_some() {
+             inner_linear.optimize_weights_layout(context).map_err(RHTLinearWrapperError::BackendError)?;
+         }
+-        if input_preparation.activation_quantization.is_some() && !allow_prequantized_activation {
++        if !allow_prequantized_activation {
+             let wrapper = Self::build_self_contained(input_data_type, input_preparation, inner_linear, context)?;
+             Ok(Some((Box::new(wrapper), None)))
+         } else {

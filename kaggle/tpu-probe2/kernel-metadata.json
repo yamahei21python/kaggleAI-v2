@@ -1,0 +1,17 @@
+{
+  "id": "yamahei21python/tpu-probe2",
+  "title": "tpu probe2",
+  "code_file": "tpu-probe2.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": true,
+  "enable_internet": false,
+  "keywords": [],
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": [],
+  "machine_shape": "TpuV5E8"
+}

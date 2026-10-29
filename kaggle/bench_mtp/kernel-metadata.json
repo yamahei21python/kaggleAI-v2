@@ -1,0 +1,16 @@
+{
+  "id": "yamahei21python/bench-mtp-spec-decoding-orcarouter-qwen3-8-27b",
+  "title": "Bench: MTP spec decoding orcarouter Qwen3.8-27B",
+  "code_file": "bench-mtp-orcarouter-qwen38-27b.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}

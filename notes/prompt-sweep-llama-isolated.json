@@ -1,0 +1,50 @@
+[
+  {
+    "engine": "llama.cpp",
+    "target_prompt_tokens": 128,
+    "prompt_tokens": 147,
+    "gen_tokens": 256,
+    "prefill_tps": 147.46318185420407,
+    "decode_tps": 14.633167997663284,
+    "prefill_ms": 996.859,
+    "decode_ms": 17426.165,
+    "wall_s": 18.43,
+    "timestamp": "2026-10-28T10:03:33+0900"
+  },
+  {
+    "engine": "llama.cpp",
+    "target_prompt_tokens": 1024,
+    "prompt_tokens": 1037,
+    "gen_tokens": 256,
+    "prefill_tps": 174.97366958424433,
+    "decode_tps": 14.855477179482014,
+    "prefill_ms": 5926.606,
+    "decode_ms": 17165.386,
+    "wall_s": 23.191,
+    "timestamp": "2026-10-28T10:05:56+0900"
+  },
+  {
+    "engine": "llama.cpp",
+    "target_prompt_tokens": 4096,
+    "prompt_tokens": 4117,
+    "gen_tokens": 256,
+    "prefill_tps": 143.58719097626528,
+    "decode_tps": 11.139058255964201,
+    "prefill_ms": 28672.474,
+    "decode_ms": 22892.42,
+    "wall_s": 51.625,
+    "timestamp": "2026-10-28T10:08:48+0900"
+  },
+  {
+    "engine": "llama.cpp",
+    "target_prompt_tokens": 8192,
+    "prompt_tokens": 8207,
+    "gen_tokens": 256,
+    "prefill_tps": 133.9012779340875,
+    "decode_tps": 8.89477967473779,
+    "prefill_ms": 61291.424,
+    "decode_ms": 28668.501,
+    "wall_s": 90.046,
+    "timestamp": "2026-10-28T10:12:18+0900"
+  }
+]

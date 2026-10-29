@@ -1,0 +1,22 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "uzu-local": {
+      "name": "uzu (local, M3)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:9931/v1",
+        "apiKey": "dummy"
+      },
+      "models": {
+        "uzu-stage": {
+          "name": "Qwen3.5 9B-M (uzu, spec decoding)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        }
+      }
+    }
+  }
+}

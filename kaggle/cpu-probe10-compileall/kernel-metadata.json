@@ -1,0 +1,16 @@
+{
+  "id": "yamahei21python/python-3-13-compileall",
+  "title": "python-3-13-compileall",
+  "code_file": "cpu-probe10-compileall.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}

@@ -1,0 +1,18 @@
+{
+  "id": "yamahei21python/whl-probe",
+  "title": "whl probe",
+  "code_file": "whl-probe.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "keywords": [],
+  "dataset_sources": [
+    "yamahei21python/vllm-wheelhouse"
+  ],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}

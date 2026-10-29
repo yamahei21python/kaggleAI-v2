@@ -1,0 +1,68 @@
+{
+  "Apple M6": {
+    "tree_budget": 16,
+    "max_tree_depth": 16,
+    "dflash_depth_override": null,
+    "construction_method": {
+      "type": "Weaver",
+      "rounds": 16,
+      "expand_per_round": 4,
+      "expand_width": 4
+    }
+  },
+  "Apple M3": {
+    "tree_budget": 16,
+    "max_tree_depth": 16,
+    "dflash_depth_override": null,
+    "construction_method": {
+      "type": "Weaver",
+      "rounds": 16,
+      "expand_per_round": 4,
+      "expand_width": 4
+    }
+  },
+  "Apple M5": {
+    "tree_budget": 16,
+    "max_tree_depth": 16,
+    "dflash_depth_override": null,
+    "construction_method": {
+      "type": "Weaver",
+      "rounds": 16,
+      "expand_per_round": 4,
+      "expand_width": 4
+    }
+  },
+  "Apple M5 Pro": {
+    "tree_budget": 16,
+    "max_tree_depth": 16,
+    "dflash_depth_override": null,
+    "construction_method": {
+      "type": "Weaver",
+      "rounds": 16,
+      "expand_per_round": 4,
+      "expand_width": 4
+    }
+  },
+  "Apple M5 Max": {
+    "tree_budget": 16,
+    "max_tree_depth": 16,
+    "dflash_depth_override": null,
+    "construction_method": {
+      "type": "Weaver",
+      "rounds": 16,
+      "expand_per_round": 4,
+      "expand_width": 4
+    }
+  },
+  "Apple M5 Ultra": {
+    "tree_budget": 16,
+    "max_tree_depth": 16,
+    "dflash_depth_override": null,
+    "construction_method": {
+      "type": "Weaver",
+      "rounds": 16,
+      "expand_per_round": 4,
+      "expand_width": 4
+    }
+  }
+}

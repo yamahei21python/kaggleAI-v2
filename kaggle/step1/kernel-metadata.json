@@ -1,0 +1,16 @@
+{
+  "id": "yamahei21python/step1-orcarouter-qwen38-27b-dl",
+  "title": "Step1: orcarouter Qwen3.8-27B DL",
+  "code_file": "step1-orcarouter-qwen38-27b-dl.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}

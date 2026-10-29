@@ -1,0 +1,20 @@
+{
+  "id": "yamahei21python/step2-orcarouter-qwen38-27b-cloudflared",
+  "title": "Step2 orcarouter qwen38 27b cloudflared",
+  "code_file": "step2-orcarouter-qwen38-27b-cloudflared.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [
+    "yamahei21python/my-ollama-orcarouter-qwen38-27b",
+    "yamahei21python/my-ollama-orcarouter-qwen38-27b-patch",
+    "yamahei21python/my-cloudflared-bin"
+  ],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}

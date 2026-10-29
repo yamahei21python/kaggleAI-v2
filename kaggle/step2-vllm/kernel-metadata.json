@@ -1,0 +1,16 @@
+{
+  "id": "yamahei21python/prepare-vllm-dataset",
+  "title": "Prepare vLLM Dataset",
+  "code_file": "prepare-vllm-dataset.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}

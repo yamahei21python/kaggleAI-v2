@@ -1,0 +1,16 @@
+{
+  "id": "yamahei21python/smoke-orcarouter-qwen38-27b",
+  "title": "Smoke: orcarouter Qwen3.8-27B on T4x2",
+  "code_file": "smoke-orcarouter-qwen38-27b.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}
