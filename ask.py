@@ -14,49 +14,55 @@
     python3 ask.py --model orcarouter/Qwen3.8-27B-Uncensored:latest "..."
 """
 import argparse
+import base64
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
 
-GIST_BASE = ("https://gist.githubusercontent.com/yamahei21python/"
-             "2b44ac8cb115012a31d3c46661af933f/raw/")
-GIST_RAW = GIST_BASE + "url.txt"
+import kcconfig
+
+_CFG = kcconfig.load()
+GIST_RAW = ("https://gist.githubusercontent.com/%s/%s/raw/url.txt"
+            % (_CFG.get("GIST_OWNER", ""), _CFG.get("GIST_ID", "")))
 DEFAULT_MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 PASS_FILE = pathlib.Path.home() / ".orcarouter_pass"
-# ノートに埋め込まれた既定パスワード（build_step2.py と一致）。
-# 環境変数 API_PASS / ~/.orcarouter_pass があれば Basic 認証を付ける（任意）。
+# Gist は書き換えられうる前提で扱う。cloudflared の quick tunnel 以外は信用しない
+# （API_PASS を設定していると、任意ホストに Basic 認証を送ってしまうため）。
+GIST_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com/?")
+
+
+class AskError(Exception):
+    """1 回の問い合わせの失敗（対話モードでは表示して続行する）。"""
+
+
+def fixed_url(explicit=None):
+    """--url / LLM_URL で固定された URL。無ければ None（Gist を使う）。"""
+    url = explicit or os.environ.get("LLM_URL", "").strip()
+    return url.rstrip("/") if url else None
 
 
 def resolve_url(explicit=None):
     """現在の公開URLを決める。Gist は CDN キャッシュ対策で毎回クエリを変える。"""
-    if explicit:
-        return explicit.rstrip("/")
-    env = os.environ.get("LLM_URL", "").strip()
-    if env:
-        return env.rstrip("/")
+    fixed = fixed_url(explicit)
+    if fixed:
+        return fixed
     req = urllib.request.Request(
         GIST_RAW + "?t=" + str(int(time.time())),
         headers={"Cache-Control": "no-cache"},
     )
-    with urllib.request.urlopen(req, timeout=20) as r:
-        url = r.read().decode().strip()
-    if not url.startswith("https://"):
-        raise SystemExit("Gist の内容が URL ではありません: " + repr(url))
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            url = r.read().decode().strip()
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise AskError("Gist から URL を取得できません: %s" % e) from e
+    if not GIST_URL_RE.fullmatch(url):
+        raise AskError("Gist の内容が想定外の URL です: " + repr(url))
     return url.rstrip("/")
-
-
-def _gist_text(name):
-    """Gist の 1 ファイルを取る（CDN キャッシュ回避のクエリ付き）。"""
-    req = urllib.request.Request(
-        GIST_BASE + name + "?t=" + str(int(time.time())),
-        headers={"Cache-Control": "no-cache"},
-    )
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return r.read().decode().strip()
 
 
 def resolve_auth():
@@ -75,7 +81,6 @@ def resolve_auth():
 
 
 def post(url, user, pw, payload, timeout=600):
-    import base64
     headers = {
         "Content-Type": "application/json",
         # ngrok 無料枠のブラウザ向け警告ページを踏まないためのヘッダ
@@ -95,7 +100,8 @@ def post(url, user, pw, payload, timeout=600):
 
 
 def ask(url, user, pw, model, messages, temperature, max_tokens,
-        allow_retry=True, explicit_url=None):
+        allow_retry=True, fixed=False):
+    """1 回問い合わせて (message, 使った URL) を返す。失敗は AskError。"""
     payload = {
         "model": model,
         "messages": messages,
@@ -108,22 +114,26 @@ def ask(url, user, pw, model, messages, temperature, max_tokens,
         body = e.read().decode(errors="replace")[:500]
         # 530/502/504 = tunnel 失効（cloudflared 再起動で URL が変わった）。
         # Gist から取り直して1回だけ再試行する。
-        if allow_retry and e.code in (502, 503, 504, 530) and not explicit_url:
+        if allow_retry and e.code in (502, 503, 504, 530) and not fixed:
             print("# tunnel 失効 (HTTP %s) → URL を取り直して再試行" % e.code,
                   file=sys.stderr)
             return ask(resolve_url(), user, pw, model, messages, temperature,
-                       max_tokens, allow_retry=False, explicit_url=None)
-        raise SystemExit("HTTP %s: %s" % (e.code, body))
-    except urllib.error.URLError as e:
-        if allow_retry and not explicit_url:
+                       max_tokens, allow_retry=False)
+        raise AskError("HTTP %s: %s" % (e.code, body)) from e
+    except (urllib.error.URLError, TimeoutError) as e:
+        if allow_retry and not fixed:
             print("# 接続失敗 → URL を取り直して再試行", file=sys.stderr)
             return ask(resolve_url(), user, pw, model, messages, temperature,
-                       max_tokens, allow_retry=False, explicit_url=None)
-        raise SystemExit("接続失敗（tunnel 切れ / カーネル停止の可能性）: %s" % e)
+                       max_tokens, allow_retry=False)
+        raise AskError("接続失敗（tunnel 切れ / カーネル停止の可能性）: %s" % e) from e
 
-    msg = data["choices"][0]["message"]
-    usage = data.get("usage", {})
-    print(msg.get("content", "").strip())
+    try:
+        msg = data["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise AskError("想定外の応答: %s" % str(data)[:300]) from e
+    usage = data.get("usage") or {}
+    # thinking 系モデルは content が null（reasoning_content のみ）になりうる
+    print((msg.get("content") or "").strip())
     print("\n--- %s tok (prompt %s / completion %s) ---" % (
         usage.get("total_tokens"), usage.get("prompt_tokens"),
         usage.get("completion_tokens")), file=sys.stderr)
@@ -140,7 +150,11 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=512)
     a = ap.parse_args()
 
-    url = resolve_url(a.url)
+    fixed = fixed_url(a.url) is not None
+    try:
+        url = resolve_url(a.url)
+    except AskError as e:
+        raise SystemExit(str(e)) from e
     user, pw = resolve_auth()
     print("# " + url, file=sys.stderr)
 
@@ -148,8 +162,11 @@ def main():
 
     if a.prompt:
         messages.append({"role": "user", "content": " ".join(a.prompt)})
-        ask(url, user, pw, a.model, messages, a.temperature, a.max_tokens,
-            explicit_url=a.url)
+        try:
+            ask(url, user, pw, a.model, messages, a.temperature, a.max_tokens,
+                fixed=fixed)
+        except AskError as e:
+            raise SystemExit(str(e)) from e
         return
 
     print("# 対話モード（/reset 履歴クリア, /quit 終了）", file=sys.stderr)
@@ -168,9 +185,16 @@ def main():
             print("# 履歴をクリア", file=sys.stderr)
             continue
         messages.append({"role": "user", "content": line})
-        msg, url = ask(url, user, pw, a.model, messages, a.temperature,
-                       a.max_tokens, explicit_url=a.url)
-        messages.append({"role": "assistant", "content": msg.get("content", "")})
+        try:
+            msg, url = ask(url, user, pw, a.model, messages, a.temperature,
+                           a.max_tokens, fixed=fixed)
+        except AskError as e:
+            # 失敗した発言は履歴から外し、会話は続ける
+            messages.pop()
+            print("# " + str(e), file=sys.stderr)
+            continue
+        messages.append({"role": "assistant",
+                         "content": msg.get("content") or ""})
 
 
 if __name__ == "__main__":
