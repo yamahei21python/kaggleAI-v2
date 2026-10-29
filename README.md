@@ -133,9 +133,16 @@ kaggleAI/
     ├── bench/                                  # コンテキスト長 vs 速度の実測
     │   ├── kernel-metadata.json
     │   └── bench-ctx-orcarouter-qwen38-27b.ipynb
-    └── bench_mtp/                              # llama-server 直起動 + MTP の実測
-        ├── kernel-metadata.json
-        └── bench-mtp-orcarouter-qwen38-27b.ipynb
+    ├── bench_mtp/                              # llama-server 直起動 + MTP の実測
+    │   ├── kernel-metadata.json
+    │   └── bench-mtp-orcarouter-qwen38-27b.ipynb
+    ├── step2-direct-ngrok/                     # llama-server 直起動 + ngrok（Ollama なし）
+    ├── cpu-check/                              # CPU で llama-server が起動するか（GPU 不使用）
+    ├── exllama-cpu-preflight/                  # CPU イメージで ExLlama がどこまで可能か
+    └── exl3-gpu-check/                         # ExLlamaV3 + EXL3 の GPU 起動検証
+
+notes/
+└── exllamav3-kaggle-decisions.md               # EXL3 版の決定事項ログ
 ```
 
 ### vLLM 版（AWQ + MTP / Ollama 版と併存）
@@ -181,6 +188,34 @@ python3 build_step1.py && python3 build_step2.py && python3 build_smoke.py \
 # ngrok 版（固定URL）を追加生成する場合
 STEP2_TUNNEL=ngrok python3 build_step2.py
 ```
+
+### ExLlamaV3 版（EXL3 / 検証中）
+
+GGUF（Ollama / llama.cpp）とは別系統として、**EXL3 量子化 + exllamav3** で同じ
+Qwen3.8-27B-Uncensored を動かせるか検証しています。決定事項・却下した選択肢は
+`notes/exllamav3-kaggle-decisions.md` にまとめてあります。
+
+| 項目 | 内容 |
+|---|---|
+| モデル | `Lygodactylus/Qwen3.8-27B-Uncensored-exl3-4bpw`（15.9 GiB / 3 シャード） |
+| エンジン | exllamav3 1.6.5（`qwen3_5` アーキテクチャ + MTP 対応、Turing sm75 カーネルあり） |
+| 起動方式 | T4 x2 に**レイヤー分割**（tensor parallel は未対応） |
+| 制約 | **テキスト専用**（vision は不可）。thinking の制御は GGUF 版ほど柔軟でない |
+| GPU 検証 | `kaggle/exl3-gpu-check/`（`yamahei21python/exl3-qwen38-gpu-check`） |
+| CPU 調査 | `kaggle/exllama-cpu-preflight/`（CPU イメージは torch が `+cpu` ビルドで import 不可） |
+
+検証カーネルは 1 セッションで「環境 → exllamav3 導入（torch/CUDA 一致の
+プリビルド wheel 優先、無ければ JIT）→ import → HF から 15.9 GiB DL →
+2×T4 ロード → 日本語 1 生成」を通し、`/kaggle/working/result.json` に
+各段の所要秒・VRAM・tok/s を残します（どこで失敗しても exit 0）。
+
+```bash
+cd kaggleAI/kaggle/exl3-gpu-check && kaggle kernels push
+```
+
+> GPU クォータは有限なので 1 回で決める前提。失敗時は GGUF / llama.cpp 版に戻します。
+> モデルは Dataset 化せず HF からランタイム DL（`/kaggle/working` は 20 GiB 上限のため
+> `/kaggle/temp` → `/tmp` の順に空きの大きい場所へ）。
 
 ---
 

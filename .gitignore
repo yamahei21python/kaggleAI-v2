@@ -13,3 +13,4 @@ kaggle/wheelhouse-files/
 __pycache__/
 config.local.env
 .ruff_cache/
+.qoder/
