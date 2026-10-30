@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 import traceback
+import urllib.parse
 import urllib.request
 
 RESULT = "/kaggle/working/result.json"
@@ -107,24 +108,38 @@ def stage_env():
 
 
 # ── 2. インストール ─────────────────────────────────────────
-def pick_wheel_url():
-    """torch/CUDA/python が一致するプリビルド wheel の URL。無ければ None。"""
+def wheel_candidates():
+    """torch 版が一致する wheel 名を、CUDA の近い順に列挙する。
+
+    Kaggle GPU イメージは torch 2.13.0+cu130 だが、上流の配布は cu132。
+    CUDA は同一メジャー（13.x）なので動く見込みが高く、ビルド定義
+    （build.yml の cudaarch）に sm_75（T4）が含まれる。
+    """
     import torch
     tv = torch.__version__.split("+")[0]
     cu = (torch.version.cuda or "").replace(".", "")
     py = f"cp{sys.version_info.major}{sys.version_info.minor}"
-    if cu != "128" or tv not in ("2.8.0", "2.10.0", "2.11.0"):
-        return None
-    name = (f"exllamav3-{EXL3_VERSION}+cu{cu}.torch{tv}-"
-            f"{py}-{py}-linux_x86_64.whl")
-    url = ("https://github.com/turboderp-org/exllamav3/releases/download/"
-           f"v{EXL3_VERSION}/{name}")
-    try:
-        req = urllib.request.Request(url, method="HEAD")
-        with urllib.request.urlopen(req, timeout=30):
-            return url
-    except Exception:
-        return None
+    cus = ([f"cu{cu}"] if cu else []) + ["cu132", "cu130", "cu128"]
+    seen = []
+    for c in cus:
+        if c not in seen:
+            seen.append(c)
+    return [f"exllamav3-{EXL3_VERSION}+{c}.torch{tv}-{py}-{py}-linux_x86_64.whl"
+            for c in seen]
+
+
+def pick_wheel_url():
+    """実在するプリビルド wheel の (URL, ファイル名)。無ければ (None, None)。"""
+    for name in wheel_candidates():
+        url = ("https://github.com/turboderp-org/exllamav3/releases/download/"
+               f"v{EXL3_VERSION}/{urllib.parse.quote(name, safe='')}")
+        try:
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=30):
+                return url, name
+        except Exception:
+            continue
+    return None, None
 
 
 def stage_install():
@@ -133,10 +148,11 @@ def stage_install():
     env = {**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1",
            "MAX_JOBS": str(min(4, os.cpu_count() or 4))}
 
-    url = pick_wheel_url()
+    url, name = pick_wheel_url()
     if url:
-        print(f"プリビルド wheel: {os.path.basename(url)}")
+        print(f"プリビルド wheel: {name}")
         data["install_method"] = "wheel"
+        data["wheel_name"] = name
         data["wheel_url"] = url
         target = url
     else:
@@ -149,6 +165,18 @@ def stage_install():
     print(f"rc={r.returncode}  {dt}s")
     print(tail(r.stdout + "\n" + r.stderr, 30))
     data.update(pip_rc=r.returncode, pip_seconds=dt)
+
+    if r.returncode != 0 and url:
+        # wheel は HTTP 200 でも torch ABI 不一致などで失敗しうる。JIT に切替
+        data["wheel_error_tail"] = tail(r.stderr, 40)
+        print("wheel 導入失敗 → PyPI 版（JIT）で再試行")
+        data["install_method"] = "pypi_jit_fallback"
+        r, dt = sh([sys.executable, "-m", "pip", "install", "-U",
+                    "--no-cache-dir", "exllamav3"], timeout=1800, env=env)
+        print(f"rc={r.returncode}  {dt}s")
+        print(tail(r.stdout + "\n" + r.stderr, 30))
+        data.update(pip_rc=r.returncode, pip_seconds=dt)
+
     if r.returncode != 0:
         data["pip_error_tail"] = tail(r.stderr, 60)
         raise RuntimeError("pip install 失敗")
@@ -162,18 +190,44 @@ def stage_install():
 
 
 # ── 3. import（JIT ならここでコンパイル）─────────────────────
+IMPORT_CODE = (
+    "import json, exllamav3\n"
+    "print(json.dumps({'version': getattr(exllamav3, '__version__', '?'),\n"
+    "                  'dir': exllamav3.__file__}))\n"
+)
+
+
+def _import_probe():
+    return sh([sys.executable, "-c", IMPORT_CODE], timeout=5400)
+
+
 def stage_import():
     print()
     print("--- import exllamav3 ---")
-    code = (
-        "import json, exllamav3\n"
-        "print(json.dumps({'version': getattr(exllamav3, '__version__', '?'),\n"
-        "                  'dir': exllamav3.__file__}))\n"
-    )
-    r, dt = sh([sys.executable, "-c", code], timeout=5400)
+    r, dt = _import_probe()
     print(f"rc={r.returncode}  {dt}s")
     print(tail(r.stdout + "\n" + r.stderr, 30))
     data.update(import_ok=r.returncode == 0, import_seconds=dt)
+
+    # cu132 wheel を cu130 の torch に載せた等で import が落ちる場合は JIT へ。
+    # （JIT のコンパイルは import 時に走るので timeout は長め）
+    if r.returncode != 0 and str(data.get("install_method", "")).startswith("wheel"):
+        data["wheel_import_error"] = tail(r.stderr, 40)
+        print("wheel import 失敗 → PyPI（JIT）で再導入")
+        env = {**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+               "MAX_JOBS": str(min(4, os.cpu_count() or 4))}
+        pr, pdt = sh([sys.executable, "-m", "pip", "install", "-U",
+                      "--no-cache-dir", "exllamav3"], timeout=1800, env=env)
+        data.update(install_method="pypi_jit_fallback", pip_rc=pr.returncode,
+                    pip_seconds=pdt)
+        print(f"pip rc={pr.returncode}  {pdt}s")
+        r, dt = _import_probe()
+        data["import_seconds"] = round(
+            (data.get("import_seconds") or 0) + dt, 1)
+        data["import_ok"] = r.returncode == 0
+        print(f"import rc={r.returncode}  {dt}s")
+        print(tail(r.stdout + "\n" + r.stderr, 30))
+
     if r.returncode != 0:
         data["import_error_tail"] = tail(r.stderr, 60)
         raise RuntimeError("import exllamav3 失敗")
@@ -287,13 +341,39 @@ def stage_load_generate():
 
     t0 = time.time()
     config = Config.from_directory(data["model_dir"])
-    config.max_seq_len = 8192
+    # コンテキスト長は Config ではなく Cache の max_num_tokens で決まる
     tokenizer = Tokenizer.from_config(config)
+
+    # MTP ヘッドは重みを読む前に Model だけ作れる。max_history は
+    # 投機検証の巻き戻し幅で、target 側の Cache にも同じ値を要求する。
+    draft_model = None
+    max_history = 0
+    if "mtp" in getattr(config, "model_classes", {}):
+        try:
+            draft_model = Model.from_config(config, component="mtp")
+            max_history = max(draft_model.caps.get("default_draft_size", 4), 4)
+        except Exception as e:
+            data["mtp_init_error"] = f"{type(e).__name__}: {e}"
+            draft_model = None
+
     model = Model.from_config(config)
-    cache = Cache(model, max_num_tokens=4096, max_batch_size=1)
+    cache = Cache(model, max_num_tokens=4096, max_history=max_history,
+                  max_batch_size=1)
     model.load(progressbar=False)  # 空き VRAM を見て 2 枚にレイヤー分割
     load_dt = round(time.time() - t0, 1)
     print(f"ロード完了: {load_dt}s")
+
+    # 初回生成がカーネルコンパイル/GEMM オートチューニングを払うと
+    # tok/s が過小に出る。Generator を付ける前に温める。
+    t_w = time.time()
+    try:
+        model.warmup(cache=cache, max_chunk_size=256, long_context=False,
+                     progressbar=False)
+        data["warmup_seconds"] = round(time.time() - t_w, 1)
+        print(f"warmup 完了: {data['warmup_seconds']}s")
+    except Exception as e:
+        data["warmup_error"] = f"{type(e).__name__}: {e}"
+        print(f"warmup 失敗（続行）: {data['warmup_error']}")
 
     per_gpu = {}
     for i in range(torch.cuda.device_count()):
@@ -342,26 +422,26 @@ def stage_load_generate():
     save()
 
     if os.environ.get("MEASURE_MTP", "1") == "1":
-        stage_mtp(model, config, cache, tokenizer, ids, stops, tps)
+        stage_mtp(model, config, cache, tokenizer, ids, stops, tps,
+                  draft_model, max_history)
 
 
 # ── 7. MTP 投機デコード（任意・失敗しても継続）───────────────
-def stage_mtp(model, config, cache, tokenizer, ids, stops, base_tps):
+def stage_mtp(model, config, cache, tokenizer, ids, stops, base_tps,
+              draft_model, max_history):
     print()
     print("--- MTP 投機デコード ---")
     try:
-        if "mtp" not in getattr(config, "model_classes", {}):
+        if draft_model is None:
             print(" MTP コンポーネントが無い → skip")
             data["mtp"] = {"ok": False, "reason": "no mtp component"}
             data["stage"] = "done"
             save()
             return
-        from exllamav3 import Cache, Generator, Model
+        from exllamav3 import Cache, Generator
         from exllamav3.cache import CacheLayer_fp16
 
         t0 = time.time()
-        draft_model = Model.from_config(config, component="mtp")
-        max_history = max(draft_model.caps.get("default_draft_size", 4), 4)
         draft_cache = Cache(draft_model, max_num_tokens=4096,
                             layer_type=CacheLayer_fp16,
                             max_history=max_history, max_batch_size=1)
@@ -372,6 +452,8 @@ def stage_mtp(model, config, cache, tokenizer, ids, stops, base_tps):
         generator = Generator(model=model, cache=cache, tokenizer=tokenizer,
                               draft_model=draft_model,
                               draft_cache=draft_cache)
+        # draft 側のカーネルは初回生成で温まるため、計測前に 1 回捨てる
+        run_job(generator, ids, stops, max_new_tokens=8)
         text, final, wall = run_job(generator, ids, stops)
 
         tokens = (final or {}).get("new_tokens")

@@ -140,10 +140,12 @@ kaggleAI/
     ├── cpu-check/                              # CPU で llama-server が起動するか（GPU 不使用）
     ├── exllama-cpu-preflight/                  # CPU イメージで ExLlama がどこまで可能か
     ├── exl3-dataset-upload/                    # HF → Kaggle Dataset へ直接アップロード（CPU）
-    └── exl3-gpu-check/                         # ExLlamaV3 + EXL3 の GPU 起動検証
+    ├── exl3-gpu-check/                         # ExLlamaV3 + EXL3 の GPU 起動検証
+    └── exl3-serve/                             # EXL3 配信（GPU）+ dryrun / keepalive（build_kernel.py で生成）
 
 notes/
-└── exllamav3-kaggle-decisions.md               # EXL3 版の決定事項ログ
+├── exllamav3-kaggle-decisions.md               # EXL3 版の決定事項ログ
+└── refactor-plan.md                            # リポジトリ再編・データセット整理の検討メモ
 ```
 
 ### vLLM 版（AWQ + MTP / Ollama 版と併存）
@@ -200,12 +202,14 @@ Qwen3.8-27B-Uncensored を動かせるか検証しています。決定事項・
 |---|---|
 | モデル | `Lygodactylus/Qwen3.8-27B-Uncensored-exl3-4bpw`（15.9 GiB / 3 シャード） |
 | エンジン | exllamav3 1.6.5（`qwen3_5` アーキテクチャ + MTP 対応、Turing sm75 カーネルあり） |
+| 導入 | プリビルド wheel `cu132.torch2.13.0.cp313` を第一候補（Kaggle は torch 2.13.0+cu130。sm75 内蔵）。pip/import 失敗時は PyPI JIT へ自動フォールバック |
 | 起動方式 | T4 x2 に**レイヤー分割**（tensor parallel は未対応） |
 | 制約 | **テキスト専用**（vision は不可）。thinking の制御は GGUF 版ほど柔軟でない |
 | GPU 検証 | `kaggle/exl3-gpu-check/`（`yamahei21python/exl3-qwen38-gpu-check`） |
 | モデル置き場 | `kaggle/exl3-dataset-upload/`（HF → Kaggle Dataset へ直接アップロード・CPU のみ） |
 | Dataset | `yamahei21python/qwen38-27b-uncensored-exl3-4bpw`（private / ready・3 シャード） |
-| 配信ラッパー | `kaggle/exl3-serve/`（OpenAI 互換の薄いサーバ + モック自己テスト） |
+| 配信カーネル | `kaggle/exl3-serve/`（`build_kernel.py` が GPU 版 / 乾燥走行 / keepalive テストを生成。OpenAI 互換 + Basic 認証 + trycloudflare + 時間予算で自動停止） |
+| 配管テスト | `yamahei21python/exl3-serve-dryrun`（mock で公開 URL まで疎通・`budget` 停止）/ `exl3-serve-keepalive`（keepalive 延長と `/stop` を実測） |
 | CPU 調査 | `kaggle/exllama-cpu-preflight/`（CPU イメージは torch が `+cpu` ビルドで import 不可） |
 
 検証カーネルは 1 セッションで「環境 → exllamav3 導入（torch/CUDA 一致の
@@ -219,6 +223,10 @@ cd kaggleAI/kaggle/exl3-dataset-upload && kaggle kernels push
 
 # 2) GPU 検証（GPU セッションはこれ 1 回）
 cd kaggleAI/kaggle/exl3-gpu-check && kaggle kernels push
+
+# 3) 配信（GPU）。事前に build_kernel.py で kernel/ を生成しておく
+python3 kaggleAI/kaggle/exl3-serve/build_kernel.py
+cd kaggleAI/kaggle/exl3-serve/kernel && kaggle kernels push   # push は即実行（GPU 消費）
 ```
 
 > GPU クォータは有限（30h/週）なので 1 回で決める前提。失敗時は GGUF / llama.cpp 版に戻します。

@@ -100,6 +100,53 @@ layer_type=CacheLayer_fp16, max_history=caps["default_draft_size"], max_batch_si
 `draft_model.load()` → `Generator(..., draft_model=, draft_cache=)`。
 MTP コンポーネントが無い/エラー時は `mtp.ok=false` を記録するだけで本体は成功扱い。
 
+## wheel 実物による API 静的一致確認（2026-10-30）
+
+PyPI の `exllamav3-1.6.5-py3-none-any.whl`（3.8 MB）を展開し、
+カーネル／配信ラッパーが呼ぶ API をソースと突き合わせた。**修正 3 件**:
+
+- `Config.max_seq_len` は**存在しない**（設定しても無効）。コンテキスト長は
+  `Cache(max_num_tokens=...)` で決まる。両方から削除。
+- **MTP は target 側の Cache にも `max_history` が必要**（投機検証の巻き戻し幅。
+  再帰層 KDA の conv ring / scan 入力をサイズする）。`model_init.init()` は
+  draft の `caps["default_draft_size"]`（=4）を **cache と draft_cache の両方**へ渡す。
+  カーネルも同じ値（4）を target に渡すよう修正。
+- **完了結果に `prompt_tokens` は無い**（`new_tokens` / `time_prefill` /
+  `time_generate` はある）。配信ラッパーの usage が常に 0 になっていたので、
+  入力長から算出するよう修正。SD 有効時のみ `accepted_draft_tokens` /
+  `rejected_draft_tokens` が付く。
+
+確認だけしたもの: `Job(input_ids, max_new_tokens, stop_conditions, sampler, seed)`、
+`hf_chat_template(..., enable_thinking=...)` は `**template_kwargs` 経由、
+`Cache(max_num_tokens)` は 256 の倍数必須（4096 は可）、
+`GreedySampler` は `ArgmaxSampler` の別名で export 済み、
+`TopPSampler(top_p, temperature, temperature_last)`、`Generator.clear_queue()`。
+
+計測の公平性のため `model.warmup(cache=cache, ...)` をロード後・Generator 前に追加
+（初回のカーネルコンパイル／GEMM オートチューニングが tok/s を過小にするため）。
+MTP は draft 側の初回コストを捨てジョブ 1 回で払ってから計測する。
+wheel 導入が ABI 不一致等で失敗した場合は PyPI JIT へ自動フォールバック。
+
+## プリビルド wheel と Kaggle GPU イメージ（2026-10-30 追記）
+
+- Kaggle GPU イメージの実測値（`notes/vllm-startup-speedup.md`）:
+  **Python 3.13 / torch 2.13.0+cu130 / CUDA 13.0 / T4 x2 (sm75)**。
+- v1.6.5 の GitHub Releases には **65 アセット**があり、CUDA 別に:
+  - `cu128`: torch 2.8.0 / 2.9.0 / 2.10.0 / 2.11.0
+  - `cu132`: torch 2.11.0 / 2.12.0 / **2.13.0**（cp310–cp314）
+- **ビルド定義の `cudaarch` は全 wheel 共通で `7.5 8.0 8.6 8.9 9.0 10.0 12.0+PTX`**
+  （`.github/workflows/build.yml`）。→ cu132 の wheel にも **T4 (sm75) カーネルが入る**。
+- したがって第一候補は `cu132.torch2.13.0.cp313`。torch 版は完全一致、CUDA だけ
+  13.2 ビルド vs 13.0 ランタイム（同一メジャー）という**マイナー差**がある。
+- カーネルの導入順: `cu{実測}` → `cu132` → `cu130` → `cu128` を HEAD で確認して最初に
+  実在するもの。**pip 失敗**は PyPI JIT、**import 失敗**（未定義シンボル等）も
+  PyPI JIT へ自動フォールバック。`result.json` に `install_method` /
+  `wheel_name` / `wheel_import_error` を残して判定材料にする。
+- JIT になった場合、sm75 は CUDA 13 でも残っているが、4 vCPU のコンパイルで
+  10〜30 分かかる見込み（GPU セッションの壁時計＝クォータを消費）。
+
+
+
 ## モデル Dataset 化（GPU クォータ温存）
 
 ローカル: `kaggle/exl3-dataset-upload/`（`yamahei21python/exl3-dataset-upload`）
@@ -152,6 +199,28 @@ Kaggle ノートには `KAGGLE_USERNAME` / `KAGGLE_KEY` が環境変数で入っ
 | 備考 | `blk.64.nextn.*`（MTP層）は未使用警告。CPU では `--spec-type` は無意味 |
 | 実用性 | **不可**（起動はするが 1 tok/s 前後）。CPU は「起動確認」まで |
 
+## 配信カーネル（exl3-serve）と乾燥走行（2026-10-30 完了）
+
+- 生成: `kaggle/exl3-serve/build_kernel.py` → `kernel/`（GPU・60 分）、
+  `dryrun/`（mock・5 分）、`keepalive/`（mock・keepalive 実測）。
+  script カーネルは code_file を 1 つしか push できないため、
+  chat_server / auth_proxy / llama-chat.html を base64 で埋め込む。
+- `exl3-serve-dryrun` v5: `ok: true` / 334 秒で `budget` 停止 /
+  公開 trycloudflare URL 経由の `/v1/chat/completions` が 200。
+- 乾燥走行で見つけて直したもの:
+  1. CPU ホストに `nvidia-smi` が無い → `stage_env` を例外許容に
+  2. `/kaggle/input` は読み取り専用で chmod 不可 → cloudflared を `/tmp` にコピーして実行
+  3. 公開疎通が時々 `ENETUNREACH`（同一 URL の GET 成功直後の POST でも）
+     → 3 回再試行し、失敗しても配信は継続（外側クライアントには影響なし）
+  4. ローカル疎通の生成リクエストが keepalive を書くため、mock の 5 分予算が
+     60 分に延びた → mock は keepalive を見ない（実運用の挙動は不変）
+- keepalive 実測（`MODE=keepalive`）: 予算 2 分を書き込み → 75 秒で生成リクエスト
+  → `RUN=1 MINUTES=60` と mtime 更新 → 元の締切 120 秒を越えて生存
+  → 180 秒に `/stop`（`X-Kc-Stop: 1`）で 200、loop が `stop` で終了。
+  ローカルと Kaggle（`exl3-serve-keepalive`・197.3 秒）の両方で passed。
+- 本番の停止条件: `/stop`（`RUN=0`）、または時間予算
+  （最終活動 + MINUTES、ハード上限 180 分）。生成リクエストで MINUTES=60 にリセット。
+
 ## 未決事項 / 次アクション
 
 1. **Dataset アップロード** → **完了**。`qwen38-27b-uncensored-exl3-4bpw` は `ready`
@@ -159,10 +228,8 @@ Kaggle ノートには `KAGGLE_USERNAME` / `KAGGLE_KEY` が環境変数で入っ
 2. **GPU 検証の実行**はリセット後（2026-10-31 09:00 JST）に 1 回。
    「導入 → ロード → 生成」に加えて **MTP 投機デコードの tok/s 倍率**も同時に回収する。
    wheel 一致（=JIT 回避）もこの 1 回で確定させる。
-3. **サーバ方式** → **薄い OpenAI 互換ラッパーを採用**（`kaggle/exl3-serve/chat_server.py`）。
-   TabbyAPI は不採用: exllamav3 を直接叩けば足り、依存と設定面が増えるだけ。
-   既存の `auth_proxy.py`（Basic 認証・keepalive リセット・/quota・/stop）と
-   そのまま直列に繋げられる。
-   残作業は配信カーネル（トンネル + 時間予算での自動停止）で、**T4 の速度確認後**に作る。
+3. **配信カーネル** → **作成済み・乾燥走行 green**（`kaggle/exl3-serve/`）。
+   残りはクォータ復帰後に `exl3-serve` を 1 回 push するだけ。push は即実行なので
+   GPU の残量を確認してから行う。
 4. **llama.cpp のCPU起動検証** → **完了（起動可・約 1 tok/s で実用不可）**。
    上記「llama-server の CPU 起動検証結果」参照。

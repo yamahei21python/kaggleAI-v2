@@ -41,13 +41,19 @@ class Exl3Engine:
         self.alias = alias
         self.enable_thinking = enable_thinking
         self.lock = threading.Lock()
+        self._prompt_len = 0
 
         cfg = Config.from_directory(model_dir)
-        cfg.max_seq_len = cache_tokens
         self.tokenizer = Tokenizer.from_config(cfg)
         model = Model.from_config(cfg)
         cache = Cache(model, max_num_tokens=cache_tokens, max_batch_size=1)
         model.load(progressbar=progressbar)  # 空き VRAM でレイヤー分割
+        # 初回リクエストがカーネルコンパイル/オートチューニングを払わないよう、
+        # Generator を付ける前に温める（失敗しても配信は続ける）
+        try:
+            model.warmup(cache=cache, progressbar=False)
+        except Exception as e:
+            print(f"warmup failed: {type(e).__name__}: {e}", flush=True)
         self.generator = Generator(model=model, cache=cache,
                                    tokenizer=self.tokenizer)
         self.context_length = cache_tokens
@@ -83,19 +89,22 @@ class Exl3Engine:
 
     def _job(self, messages, max_tokens, temperature, top_p, stop, seed):
         from exllamav3 import Job
+        ids = self._input_ids(messages)
+        # exllamav3 の完了結果に prompt_tokens は無いので入力長を控えておく
+        self._prompt_len = int(ids.shape[-1])
         return Job(
-            input_ids=self._input_ids(messages),
+            input_ids=ids,
             max_new_tokens=max(1, int(max_tokens)),
             stop_conditions=self._stop_conditions(stop),
             sampler=self._sampler(temperature, top_p),
             seed=seed,
         )
 
-    @staticmethod
-    def _usage(final):
+    def _usage(self, final):
         if not final:
             return {"prompt_tokens": 0, "completion_tokens": 0}
-        return {"prompt_tokens": int(final.get("prompt_tokens") or 0),
+        return {"prompt_tokens": int(final.get("prompt_tokens")
+                                     or self._prompt_len or 0),
                 "completion_tokens": int(final.get("new_tokens") or 0)}
 
     # ---- 非ストリーム ----
@@ -310,7 +319,9 @@ def make_server(engine, host="0.0.0.0", port=9931):
 def main():
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model-dir", required=True)
+    ap.add_argument("--model-dir", default="")
+    ap.add_argument("--mock", action="store_true",
+                    help="exllamav3 を使わず MockEngine で起動（配管テスト用）")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=9931)
     ap.add_argument("--alias", default=DEFAULT_ALIAS)
@@ -320,9 +331,15 @@ def main():
     a = ap.parse_args()
 
     t0 = time.time()
-    engine = Exl3Engine(a.model_dir, cache_tokens=a.cache_tokens,
-                        alias=a.alias, enable_thinking=a.enable_thinking,
-                        progressbar=not a.no_progress)
+    if a.mock:
+        engine = MockEngine()
+        engine.alias = a.alias
+    else:
+        if not a.model_dir:
+            ap.error("--model-dir is required unless --mock")
+        engine = Exl3Engine(a.model_dir, cache_tokens=a.cache_tokens,
+                            alias=a.alias, enable_thinking=a.enable_thinking,
+                            progressbar=not a.no_progress)
     print(f"loaded in {time.time() - t0:.0f}s; serving {a.alias} on "
           f"{a.host}:{a.port} (ctx {a.cache_tokens})", flush=True)
     make_server(engine, a.host, a.port).serve_forever()
