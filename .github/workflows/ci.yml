@@ -21,9 +21,9 @@ jobs:
       - name: ruff
         run: ruff check .
       - name: shellcheck (bash)
-        run: shellcheck -s bash run-llama-server.command notes/run_uzu_9b.sh
+        run: shellcheck -s bash notes/run_uzu_9b.sh
       - name: zsh syntax
-        run: for f in run-ai.command run-kaggle-chat.command run-uzu-server.command lib/launcher-common.zsh; do zsh -n "$f"; done
+        run: for f in run-ai.command run-kaggle-chat.command run-llama-server.command run-uzu-server.command lib/launcher-common.zsh; do zsh -n "$f"; done
       - name: proxy selftest
         run: python3 kaggle/step2/_selftest_proxy.py
       - name: builder selftest

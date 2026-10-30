@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/zsh
 # ============================================================
 # llama-server をローカルで起動する（Ollama を経由しない）
 #
@@ -17,30 +17,31 @@
 # ============================================================
 set -u
 
-# ---- 設定 ----------------------------------------------------
-LLAMA_SERVER="/Applications/Ollama.app/Contents/Resources/llama-server"
-OLLAMA_BLOBS="$HOME/.ollama/models/blobs"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="${0:A:h}"
+source "${SCRIPT_DIR}/lib/launcher-common.zsh"
 
+# ---- 設定 ----------------------------------------------------
 # モデル: 9b（既定・6.6 GB）または 27b（16.8 GB・RAM 16 GiB では不可）
 MODEL_CHOICE="${LLAMA_MODEL:-9b}"
 
 case "$MODEL_CHOICE" in
   9b|9B)
     # huihui_ai/qwen3.5-abliterated:9b の model 層
-    MODEL_BLOB="$OLLAMA_BLOBS/sha256-afb54ad43a39f947407f5cabc59856348d70e072baa5c62d436332157c151bcd"
+    MODEL_SHA="afb54ad43a39f947407f5cabc59856348d70e072baa5c62d436332157c151bcd"
     ALIAS="qwen35-9b"
+    PULL_HINT="huihui_ai/qwen3.5-abliterated:9b"
     DEFAULT_CTX=32768
     ;;
   27b|27B)
     # orcarouter/Qwen3.8-27B-Uncensored:latest の model 層
-    MODEL_BLOB="$OLLAMA_BLOBS/sha256-3445102e9cde5d562508642c100a2f5ac3368a5a3f748442811d7a95daee3bec"
+    MODEL_SHA="3445102e9cde5d562508642c100a2f5ac3368a5a3f748442811d7a95daee3bec"
     ALIAS="qwen38-27b"
+    PULL_HINT="orcarouter/Qwen3.8-27B-Uncensored:latest"
     DEFAULT_CTX=32768
     ;;
   *)
     echo "❌ LLAMA_MODEL は 9b か 27b を指定してください（指定値: $MODEL_CHOICE）"
-    read -r -p "Enter で閉じます..."
+    kc_pause
     exit 1
     ;;
 esac
@@ -51,14 +52,13 @@ HOST="127.0.0.1"
 USE_MTP="${LLAMA_MTP:-1}"        # 1 で MTP 有効（実測 1.18x）
 OPEN_AFTER="${LLAMA_OPEN:-browser}"  # browser | opencode | none
 UI_PORT="${LLAMA_UI_PORT:-8899}"
-PROXY_PY="${SCRIPT_DIR}/kaggle/step2/auth_proxy.py"
 UI_PID=""
 SERVER_PID=""
 
 # UI ポートを API ポートと重ねない（中継が上流に向かい詰む）
-if [ "${UI_PORT}" = "${PORT}" ]; then
+if [[ "${UI_PORT}" == "${PORT}" ]]; then
   echo "❌ LLAMA_UI_PORT (${UI_PORT}) と LLAMA_PORT (${PORT}) は同じにできません"
-  read -r -p "Enter で閉じます..."
+  kc_pause
   exit 1
 fi
 
@@ -68,50 +68,46 @@ echo "  llama-server 起動"
 echo "============================================================"
 echo
 
-if [ ! -x "$LLAMA_SERVER" ]; then
+if ! LLAMA_SERVER="$(kc_ollama_server_bin)"; then
   echo "❌ llama-server が見つかりません:"
-  echo "   $LLAMA_SERVER"
+  echo "   /Applications/Ollama.app/Contents/Resources/llama-server"
   echo
   echo "   Ollama.app がインストールされているか確認してください。"
-  read -r -p "Enter で閉じます..."
+  kc_pause
   exit 1
 fi
 
-if [ ! -f "$MODEL_BLOB" ]; then
+if ! MODEL_BLOB="$(kc_ollama_blob "${MODEL_SHA}")"; then
   echo "❌ モデルが見つかりません:"
-  echo "   $MODEL_BLOB"
+  echo "   ${HOME}/.ollama/models/blobs/sha256-${MODEL_SHA}"
   echo
   echo "   先に Ollama で pull してください:"
-  if [ "$ALIAS" = "qwen35-9b" ]; then
-    echo "     ollama pull huihui_ai/qwen3.5-abliterated:9b"
-  else
-    echo "     ollama pull orcarouter/Qwen3.8-27B-Uncensored:latest"
-  fi
-  read -r -p "Enter で閉じます..."
+  echo "     ollama pull ${PULL_HINT}"
+  kc_pause
   exit 1
 fi
 
 # 27B は RAM 16 GiB に載らないので警告
-if [ "$MODEL_CHOICE" = "27b" ]; then
+if [[ "${MODEL_CHOICE}" == "27b" || "${MODEL_CHOICE}" == "27B" ]]; then
   MEM_GIB=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))
-  if [ "$MEM_GIB" -lt 32 ]; then
+  if (( MEM_GIB < 32 )); then
     echo "⚠  この Mac の RAM は ${MEM_GIB} GiB です。"
     echo "   27B（16.8 GB）は RAM を超えるため、実用速度になりません（実測 0.10 tokens/s）。"
     echo "   続行しますか？"
-    read -r -p "   y で続行 / それ以外で中止: " ans
-    [ "$ans" = "y" ] || { echo "中止しました。"; exit 0; }
+    kc_ask "   y で続行 / それ以外で中止: "
+    [[ "${KC_ANSWER}" == "y" ]] || { echo "中止しました。"; exit 0; }
     echo
   fi
 fi
 
 # ポートが使用中なら止める
-if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "⚠  ポート $PORT は使用中です:"
-  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN | sed -n '2,4p'
+if kc_port_in_use "${PORT}"; then
+  echo "⚠  ポート ${PORT} は使用中です:"
+  kc_port_listener "${PORT}" | sed -n '2,4p'
   echo "   このプロセスを停止しますか？"
-  read -r -p "   y で停止 / それ以外で中止: " ans
-  if [ "$ans" = "y" ]; then
-    lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t | xargs -r kill -9 2>/dev/null
+  kc_ask "   y で停止 / それ以外で中止: "
+  if [[ "${KC_ANSWER}" == "y" ]]; then
+    kc_kill_port "${PORT}"
     sleep 2
     echo "   ✅ 停止しました"
   else
@@ -122,42 +118,45 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 # ---- 起動 ----------------------------------------------------
-echo "  モデル     : $ALIAS"
-echo "  実体       : $(basename "$MODEL_BLOB")"
-echo "  サイズ     : $(echo "scale=2; $(stat -f%z "$MODEL_BLOB") / 1024 / 1024 / 1024" | bc) GiB"
-echo "  コンテキスト: $CTX"
-echo "  MTP        : $([ "$USE_MTP" = "1" ] && echo '有効（--spec-type draft-mtp）' || echo '無効')"
-echo "  URL        : http://$HOST:$PORT"
+SIZE_GIB="$(awk -v bytes="$(stat -f%z "${MODEL_BLOB}")" 'BEGIN { printf "%.2f", bytes / 1073741824 }')"
+echo "  モデル     : ${ALIAS}"
+echo "  実体       : $(basename "${MODEL_BLOB}")"
+echo "  サイズ     : ${SIZE_GIB} GiB"
+echo "  コンテキスト: ${CTX}"
+if [[ "${USE_MTP}" == "1" ]]; then
+  echo "  MTP        : 有効（--spec-type draft-mtp）"
+else
+  echo "  MTP        : 無効"
+fi
+echo "  URL        : http://${HOST}:${PORT}"
 echo
 echo "  ⏳ ロード中...（初回は数秒〜1分）"
 echo
 
 # MTP は投機的デコード。9B で実測 16.0 → 18.9 tokens/s（1.18x）
-SPEC_ARGS=""
-[ "$USE_MTP" = "1" ] && SPEC_ARGS="--spec-type draft-mtp"
+SPEC_ARGS=()
+[[ "${USE_MTP}" == "1" ]] && SPEC_ARGS=(--spec-type draft-mtp)
 
 # KV キャッシュは q8_0 を明示する。
 # 指定しないと f16 になり、長い ctx で VRAM を溢れて CPU 推論に落ちる（実測 0.8 tps）
-KV_ARGS="--cache-type-k q8_0 --cache-type-v q8_0"
+KV_ARGS=(--cache-type-k q8_0 --cache-type-v q8_0)
 
-# thinking は切る（切らないと content が空になる）
-# shellcheck disable=SC2086
-"$LLAMA_SERVER" \
-  -m "$MODEL_BLOB" \
-  -c "$CTX" \
-  $KV_ARGS \
+"${LLAMA_SERVER}" \
+  -m "${MODEL_BLOB}" \
+  -c "${CTX}" \
+  "${KV_ARGS[@]}" \
   -ngl all \
   -fa on \
   -np 1 \
-  --host "$HOST" \
-  --port "$PORT" \
+  --host "${HOST}" \
+  --port "${PORT}" \
   --jinja \
   --temp 0 \
-  --alias "$ALIAS" \
+  --alias "${ALIAS}" \
   --reasoning off \
   --reasoning-budget 0 \
   --cors-origins '*' \
-  $SPEC_ARGS \
+  "${SPEC_ARGS[@]}" \
   > /tmp/llama-server.log 2>&1 &
 
 SERVER_PID=$!
@@ -166,11 +165,14 @@ SERVER_PID=$!
 # （--stop-pid で自分を SIGTERM され、ここが走って子プロセスを殺す）
 CLEANED=0
 cleanup() {
-  [ "${CLEANED}" = "1" ] && return 0
+  (( CLEANED )) && return 0
   CLEANED=1
   echo; echo "  停止中..."
-  [ -n "$UI_PID" ] && kill -9 "$UI_PID" 2>/dev/null
-  [ -n "$SERVER_PID" ] && kill -9 "$SERVER_PID" 2>/dev/null
+  # KC_UI_PID は kc_start_ui_proxy が起動直後に設定する。起動待ちの途中で
+  # 止められても中継が孤児にならないよう、呼び出し元の UI_PID と両方見る。
+  [[ -n "${UI_PID}" ]] && kill -9 "${UI_PID}" 2>/dev/null
+  [[ -n "${KC_UI_PID:-}" ]] && kill -9 "${KC_UI_PID}" 2>/dev/null
+  [[ -n "${SERVER_PID}" ]] && kill -9 "${SERVER_PID}" 2>/dev/null
   echo "  ✅ llama-server を停止しました"
 }
 trap cleanup EXIT
@@ -179,29 +181,29 @@ trap 'exit 143' TERM
 
 # ---- 起動待ち → ブラウザを開く -------------------------------
 READY=0
-for i in $(seq 1 180); do
-  if curl -s --max-time 2 "http://$HOST:$PORT/health" 2>/dev/null | grep -q '"ok"'; then
+for i in {1..180}; do
+  if curl -s --max-time 2 "http://${HOST}:${PORT}/health" 2>/dev/null | grep -q '"ok"'; then
     READY=1
     echo "  ✅ 起動完了（${i}秒）"
     break
   fi
   # プロセスが死んでいないか
-  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+  if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
     echo "  ❌ llama-server が落ちました。ログ:"
     echo
     tail -30 /tmp/llama-server.log
-    read -r -p "Enter で閉じます..."
+    kc_pause
     exit 1
   fi
   sleep 1
 done
 
-if [ "$READY" -ne 1 ]; then
+if (( READY != 1 )); then
   echo "  ❌ 起動がタイムアウトしました（180秒）。ログ:"
   echo
   tail -30 /tmp/llama-server.log
-  kill -9 "$SERVER_PID" 2>/dev/null
-  read -r -p "Enter で閉じます..."
+  kill -9 "${SERVER_PID}" 2>/dev/null
+  kc_pause
   exit 1
 fi
 
@@ -209,63 +211,56 @@ fi
 # file:// だと /quota・/stop が無く「■ 停止」ボタンが出ない。
 # 上流は llama-server、自分は --stop-pid に渡す（ランチャーを SIGTERM
 # で落とせば cleanup trap が llama-server と UI をまとめて落とす）。
-UI_URL="http://$HOST:$UI_PORT/"
-if [ ! -f "$PROXY_PY" ]; then
-  echo "⚠ auth_proxy.py が見つからないため file:// で開きます（停止ボタン無し）:"
-  echo "   $PROXY_PY"
-  UI_URL="file://$SCRIPT_DIR/llama-chat.html?port=$PORT"
-else
-  if lsof -nP -iTCP:"$UI_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "❌ UI ポート $UI_PORT は使用中です（他のランチャー？）。"
+UI_URL="file://${SCRIPT_DIR}/llama-chat.html?port=${PORT}"
+kc_start_ui_proxy "http://${HOST}:${PORT}" "${UI_PORT}" $$ "llama" 0
+case $? in
+  0)
+    UI_PID="${KC_UI_PID}"
+    UI_URL="${KC_UI_URL}"
+    ;;
+  2)
+    echo "⚠ auth_proxy.py が見つからないため file:// で開きます（停止ボタン無し）:"
+    echo "   ${KC_PROXY_PY}"
+    ;;
+  3)
+    echo "❌ UI ポート ${UI_PORT} は使用中です（他のランチャー？）。"
     echo "   LLAMA_UI_PORT=<別ポート> で起動し直してください。"
-    read -r -p "Enter で閉じます..."
+    kc_pause
     exit 1
-  fi
-  python3 "$PROXY_PY" \
-    --port "$UI_PORT" --host "$HOST" \
-    --upstream "http://$HOST:$PORT" \
-    --chat-html "$SCRIPT_DIR/llama-chat.html" \
-    --stop-pid $$ \
-    --no-quota \
-    >/tmp/llama-ui-proxy.log 2>&1 &
-  UI_PID=$!
-  sleep 1
-  if ! curl -fsS -o /dev/null -m 2 "http://$HOST:$UI_PORT/" 2>/dev/null; then
+    ;;
+  *)
     echo "⚠ UI 中継が起動しなかった（/tmp/llama-ui-proxy.log）。file:// で開きます（停止ボタン無し）。"
-    kill -9 "$UI_PID" 2>/dev/null
-    UI_PID=""
-    UI_URL="file://$SCRIPT_DIR/llama-chat.html?port=$PORT"
-  fi
-fi
+    ;;
+esac
 
 echo
 echo "============================================================"
 echo "  ✅ 使えます"
 echo "============================================================"
 echo
-echo "  チャット UI : $UI_URL"
-echo "  OpenAI互換  : http://$HOST:$PORT/v1"
-echo "  モデル名    : $ALIAS"
+echo "  チャット UI : ${UI_URL}"
+echo "  OpenAI互換  : http://${HOST}:${PORT}/v1"
+echo "  モデル名    : ${ALIAS}"
 echo
 echo "  Python から:"
 echo "    from openai import OpenAI"
-echo "    c = OpenAI(base_url=\"http://$HOST:$PORT/v1\", api_key=\"dummy\")"
-echo "    c.chat.completions.create(model=\"$ALIAS\", messages=[{\"role\":\"user\",\"content\":\"hi\"}])"
+echo "    c = OpenAI(base_url=\"http://${HOST}:${PORT}/v1\", api_key=\"dummy\")"
+echo "    c.chat.completions.create(model=\"${ALIAS}\", messages=[{\"role\":\"user\",\"content\":\"hi\"}])"
 echo
 echo "  停止するには Ctrl+C を押してください。"
 echo
 
 # ---- 起動後の動作 --------------------------------------------
-case "$OPEN_AFTER" in
+case "${OPEN_AFTER}" in
   opencode)
     if command -v opencode >/dev/null 2>&1; then
-      echo "  🚀 opencode を起動します（モデル: llama-local/$ALIAS）"
+      echo "  🚀 opencode を起動します（モデル: llama-local/${ALIAS}）"
       echo "     ※ 初回は opencode 側にプロバイダ登録が必要です"
       echo
-      opencode --model "llama-local/$ALIAS" "$SCRIPT_DIR"
+      opencode --model "llama-local/${ALIAS}" "${SCRIPT_DIR}"
     else
       echo "  ⚠  opencode が見つかりません。ブラウザを開きます。"
-      open "$UI_URL"
+      open "${UI_URL}"
     fi
     ;;
   none)
@@ -273,9 +268,9 @@ case "$OPEN_AFTER" in
     ;;
   *)
     # 既定: 自前のチャット UI を開く（llama-server 同梱の Web UI は Ollama 版に含まれていない）
-    open "$UI_URL"
+    open "${UI_URL}"
     ;;
 esac
 
 # ---- 終了まで待つ --------------------------------------------
-wait "$SERVER_PID"
+wait "${SERVER_PID}"

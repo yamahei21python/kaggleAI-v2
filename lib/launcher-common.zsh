@@ -1,4 +1,5 @@
-# run-kaggle-chat.command / run-ai.command の共通処理。
+# run-kaggle-chat.command / run-ai.command / run-llama-server.command /
+# run-uzu-server.command の共通処理。
 # 使い方: SCRIPT_DIR を決めてから `source "${SCRIPT_DIR}/lib/launcher-common.zsh"`
 
 # Finder から起動すると PATH が最小限（/usr/bin:/bin:/usr/sbin:/sbin）になる。
@@ -118,5 +119,96 @@ kc_start_relay() {  # $1=upstream base url $2=port
   fi
   echo "⚠ 中継の起動に失敗しました（/tmp/kc-relay.log）" >&2
   KC_RELAY_PID=""
+  return 1
+}
+
+# ---- 対話 ----
+# zsh の `read -p` は coprocess 指定と解釈されて失敗する（実測）。
+# プロンプトは `read "var?prompt"` の形でしか出せないのでここに集約する。
+kc_ask() {  # $1=prompt → KC_ANSWER
+  local answer=""
+  read -r "answer?$1" || true
+  KC_ANSWER="${answer}"
+}
+
+kc_pause() {  # $1=prompt（既定: Enter で閉じます）
+  read -r "?${1:-Enter で閉じます...}" || true
+}
+
+# ---- ポート ----
+# lsof は macOS 標準。LISTEN だけを見る（TIME_WAIT を掴まない）。
+kc_port_in_use() {  # $1=port
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+kc_port_listener() {  # $1=port（表示用）
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null
+}
+
+kc_kill_port() {  # $1=port
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | xargs kill -9 2>/dev/null || true
+}
+
+# ---- Ollama 同梱の llama-server / blob ----
+# Ollama.app の中のバイナリを使う。PATH に無い場合の検索順を 1 箇所に閉じる。
+kc_ollama_server_bin() {
+  local candidates=(
+    "/Applications/Ollama.app/Contents/Resources/llama-server"
+    "$(command -v llama-server 2>/dev/null)"
+    "/opt/homebrew/bin/llama-server"
+    "/usr/local/bin/llama-server"
+  )
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -n "${c}" && -x "${c}" ]]; then
+      echo "${c}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+kc_ollama_blob() {  # $1=sha256（64 hex）
+  local path="${HOME}/.ollama/models/blobs/sha256-$1"
+  [[ -f "${path}" ]] || return 1
+  echo "${path}"
+}
+
+# ---- チャット UI 中継 ----
+# auth_proxy.py を起動して UI を配る。成功時は KC_UI_PID / KC_UI_URL を設定。
+# $1=upstream base url  $2=ui port  $3=停止時に SIGTERM する PID
+# $4=ログ名（/tmp/<name>-ui-proxy.log）  $5=1 なら quota 有効（既定は --no-quota）
+# 戻り値: 0=起動 1=起動失敗 2=必要ファイル無し 3=ポート使用中
+kc_start_ui_proxy() {
+  KC_UI_PID=""
+  KC_UI_URL=""
+  local upstream="$1" port="$2" stop_pid="$3" log_name="${4:-ui}" quota="${5:-0}"
+  if [[ ! -f "${KC_PROXY_PY}" || ! -f "${KC_CHAT_HTML}" ]]; then
+    return 2
+  fi
+  if kc_port_in_use "${port}"; then
+    return 3
+  fi
+  local quota_args=()
+  [[ "${quota}" == "1" ]] || quota_args=(--no-quota)
+  python3 "${KC_PROXY_PY}" \
+    --port "${port}" --host 127.0.0.1 \
+    --upstream "${upstream}" \
+    --chat-html "${KC_CHAT_HTML}" \
+    --stop-pid "${stop_pid}" \
+    "${quota_args[@]}" \
+    >"/tmp/${log_name}-ui-proxy.log" 2>&1 &
+  KC_UI_PID=$!
+  local i
+  for i in {1..40}; do
+    if curl -fsS -o /dev/null -m 1 "http://127.0.0.1:${port}/" 2>/dev/null; then
+      KC_UI_URL="http://127.0.0.1:${port}/"
+      return 0
+    fi
+    kill -0 "${KC_UI_PID}" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill "${KC_UI_PID}" 2>/dev/null || true
+  KC_UI_PID=""
   return 1
 }

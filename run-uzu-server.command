@@ -16,6 +16,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
+source "${SCRIPT_DIR}/lib/launcher-common.zsh"
+
 ROOT="${HOME}/Myproject/uzu"
 MODEL="${HOME}/.cache/uzu-stage"
 SHAPES="${MODEL}/speculator/shapes.json"
@@ -194,9 +196,9 @@ if actual != expected:
     print(f"pinned encoding: {path}")
 PY
 
-if lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+if kc_port_in_use "${PORT}"; then
   echo "port ${PORT} already in use. stop the process or set UZU_PORT." >&2
-  lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN | sed -n '2,3p' >&2
+  kc_port_listener "${PORT}" | sed -n '2,3p' >&2
   exit 1
 fi
 
@@ -211,66 +213,43 @@ cleanup() {
     kill "${UI_PID}" 2>/dev/null || true
     wait "${UI_PID}" 2>/dev/null || true
   fi
+  # kc_start_ui_proxy の起動待ち中に止められた場合の孤児対策。
+  if [[ -n "${KC_UI_PID:-}" ]]; then
+    kill "${KC_UI_PID}" 2>/dev/null || true
+    wait "${KC_UI_PID}" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# file:// から 127.0.0.1 への fetch は Chrome の Private Network Access で
-# 遮断される。llama-chat.html は http で配信する。
-if lsof -nP -iTCP:"${UI_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "UI port ${UI_PORT} in use; set UZU_UI_PORT to another port." >&2
-  exit 1
-fi
-
 # UI は静的サーバーではなく auth_proxy.py で配信する。
 # 理由: /stop（停止ボタン）を受けるには動的なエンドポイントが要る。
 # プロキシは UI を / で配り、API は上流（uzu）へ中継する。
 # これで Kaggle 側と同じ HTML・同じ操作感になる。
-UI_URL="http://127.0.0.1:${UI_PORT}/"
-
-PROXY_PY="${SCRIPT_DIR}/kaggle/step2/auth_proxy.py"
-if [[ ! -f "${PROXY_PY}" ]]; then
-  echo "auth_proxy.py が見つかりません: ${PROXY_PY}" >&2
-  echo "UI 無しで続行します。" >&2
-  UI_URL="(unavailable)"
-else
-  # --stop-pid に自分（ランチャー）の PID を渡す。
-  # ブラウザの停止ボタン → proxy の /stop → ランチャーに SIGTERM
-  # → trap cleanup が uzu と UI をまとめて落とす。
-  # --no-quota: uzu に GPU クォータは無いので残り時間は出さない。
-  python3 "${PROXY_PY}" \
-    --port "${UI_PORT}" \
-    --host 127.0.0.1 \
-    --upstream "http://${HOST}:${PORT}" \
-    --chat-html "${SCRIPT_DIR}/llama-chat.html" \
-    --stop-pid $$ \
-    --no-quota \
-    >/tmp/uzu-ui-proxy.log 2>&1 &
-  UI_PID=$!
-fi
-
-ui_ready=0
-for _ in {1..40}; do
-  if curl -fsS -o /dev/null -m 1 2>/dev/null "http://127.0.0.1:${UI_PORT}/"; then
-    ui_ready=1
-    break
-  fi
-  if ! kill -0 "${UI_PID}" 2>/dev/null; then
-    break
-  fi
-  sleep 0.5
-done
-
-if (( ui_ready == 0 )); then
-  echo "UI server failed to start on ${UI_PORT}; continuing without browser UI." >&2
-  if [[ -n "${UI_PID}" ]]; then
-    kill "${UI_PID}" 2>/dev/null || true
-    wait "${UI_PID}" 2>/dev/null || true
-  fi
-  UI_PID=""
-  UI_URL="(unavailable)"
-fi
+# --stop-pid に自分（ランチャー）の PID を渡す。ブラウザの停止ボタン →
+# proxy の /stop → ランチャーに SIGTERM → trap cleanup が両方落とす。
+# --no-quota: uzu に GPU クォータは無いので残り時間は出さない。
+UI_URL="(unavailable)"
+ui_rc=0
+kc_start_ui_proxy "http://${HOST}:${PORT}" "${UI_PORT}" $$ "uzu" 0 || ui_rc=$?
+case "${ui_rc}" in
+  0)
+    UI_PID="${KC_UI_PID}"
+    UI_URL="${KC_UI_URL}"
+    ;;
+  2)
+    echo "auth_proxy.py が見つかりません: ${KC_PROXY_PY}" >&2
+    echo "UI 無しで続行します。" >&2
+    ;;
+  3)
+    echo "UI port ${UI_PORT} in use; set UZU_UI_PORT to another port." >&2
+    exit 1
+    ;;
+  *)
+    echo "UI server failed to start on ${UI_PORT}; continuing without browser UI." >&2
+    ;;
+esac
 
 echo "============================================================"
 echo "  uzu 9B-M server"
