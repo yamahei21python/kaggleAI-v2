@@ -38,7 +38,8 @@ def test_bundle():
     print("\n=== source_bundle ===")
     src = runtime.source_bundle("net", "proc", "storage", "keepalive", "proxy", "ollama")
     for fn in ("def kc_probe_url", "def kc_proc_state", "def kc_save_output",
-               "def kc_read_conf", "def kc_start_proxy", "def kc_unload_model"):
+               "def kc_read_conf", "def kc_start_proxy", "def kc_unload_model",
+               "def kc_detect_gpu", "def kc_wait_gpu_idle", "def kc_ollama_chat"):
         check(f"{fn} が含まれる", fn in src)
     try:
         compile(src, "<bundle>", "exec")
@@ -243,7 +244,7 @@ def test_keepalive():
 # proc
 # --------------------------------------------------------------------------
 def test_proc():
-    print("\n=== proc（死活 / 停止） ===")
+    print("\n=== proc（死活 / 停止 / GPU） ===")
     # 一意な argv トークンを持つ子プロセスを作り、argv 一致で検証する。
     token = f"kcsleeper-{time.time_ns()}"
     p = subprocess.Popen([sys.executable, "-c",
@@ -261,6 +262,72 @@ def test_proc():
     finally:
         if p.poll() is None:
             p.kill()
+
+    # GPU 検出は nvidia-smi を差し替えて CSV パースだけを見る
+    class _R:
+        stdout = "Tesla T4, 15360\nTesla T4, 15360\n"
+
+    orig_run = proc.subprocess.run
+    proc.subprocess.run = lambda *a, **kw: _R()
+    try:
+        names, mems = proc.kc_detect_gpu()
+        check("kc_detect_gpu が名前/VRAM を返す",
+              names == ["Tesla T4", "Tesla T4"] and mems == [15360, 15360],
+              f"{names} {mems}")
+
+        class _Idle:
+            stdout = "0\n0\n"
+
+        proc.subprocess.run = lambda *a, **kw: _Idle()
+        check("kc_wait_gpu_idle は空きなら 0", proc.kc_wait_gpu_idle() == 0)
+
+        class _Busy:
+            stdout = "12000\n"
+
+        proc.subprocess.run = lambda *a, **kw: _Busy()
+        check("kc_wait_gpu_idle は埋まっていれば -1",
+              proc.kc_wait_gpu_idle(timeout=1) == -1)
+    finally:
+        proc.subprocess.run = orig_run
+
+
+def test_ollama():
+    print("\n=== ollama（chat） ===")
+    from runtime.engines import ollama
+    seen = {}
+
+    class _Chat(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            seen["payload"] = json.loads(raw)
+            body = json.dumps({"message": {"content": "OK"}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = socketserver.TCPServer(("127.0.0.1", 0), _Chat)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        d = ollama.kc_ollama_chat(port, "m", "hi", num_predict=3, timeout=10)
+        check("応答 dict を返す", d.get("message", {}).get("content") == "OK")
+        p = seen["payload"]
+        check("model/messages/options を送る",
+              p["model"] == "m"
+              and p["messages"] == [{"role": "user", "content": "hi"}]
+              and p["options"] == {"num_predict": 3, "temperature": 0},
+              str(p))
+        check("think 未指定ならキーを入れない", "think" not in p)
+        ollama.kc_ollama_chat(port, "m", "hi", think=False, timeout=10)
+        check("think=False は送る", seen["payload"].get("think") is False)
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 # --------------------------------------------------------------------------
@@ -294,6 +361,7 @@ if __name__ == "__main__":
     test_storage()
     test_keepalive()
     test_proc()
+    test_ollama()
     test_proxy()
     print()
     if FAILS:

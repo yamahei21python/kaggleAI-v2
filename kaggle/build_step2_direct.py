@@ -104,7 +104,7 @@ cells.append(("markdown", "---\n### ⚙️ 設定（GPU検出 → コンテキ�
 cells.append(("code", f'''# ============================================================
 # Step 2 (直起動): llama-server を Ollama 経由せず起動
 # ============================================================
-import json, os, re, subprocess, time
+import os
 
 MODEL_NAME = "{MODEL}"
 DATASET_SLUG = "{DATASET}"
@@ -159,29 +159,7 @@ print(f"DATASET : {{DATASET_PATH}}")
 print(f"PATCH   : {{PATCH_PATH}}")
 
 
-def _detect_gpu():
-    """全 GPU の (名前, VRAM MiB) を返す。"""
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=15,
-        ).stdout.strip()
-        if not out:
-            return [], []
-        names, mems = [], []
-        for line in out.splitlines():
-            if not line.strip():
-                continue
-            parts = line.split(",")
-            names.append(parts[0].strip())
-            mems.append(int(re.sub(r"[^0-9]", "", parts[1])))
-        return names, mems
-    except Exception as e:
-        print(f"GPU 検出失敗: {{e}}")
-        return [], []
-
-
-_gpu_names, _vram_each = _detect_gpu()
+_gpu_names, _vram_each = kc_detect_gpu()
 VRAM_TOTAL = sum(_vram_each)
 print(f"GPU      : {{_gpu_names}}")
 print(f"VRAM     : {{_vram_each}} MiB each  →  合計 {{VRAM_TOTAL}} MiB")

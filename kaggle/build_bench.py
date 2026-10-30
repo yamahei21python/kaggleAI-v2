@@ -6,6 +6,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from kbuild import pack_nb  # noqa: E402
+from runtime import source_bundle  # noqa: E402
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 # 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
@@ -38,27 +39,15 @@ T4 x2 にしては遅い。262K の KV 確保が原因ではないか。
 - Secrets 不要
 """))
 
+# ── 共通ランタイム ──────────────────────────────────────────
+# GPU 検出・VRAM 解放待ち・Ollama /api/chat は runtime/ を真実源にする。
+cells.append(("markdown", "---\n### 🧩 共通ランタイム（GPU / chat）\n\n"
+                          "`runtime/` の真実源をビルダーが連結して埋め込んでいます。\n"))
+cells.append(("code", source_bundle("proc", "ollama")))
+
 cells.append(("markdown", "---\n### 1️⃣ GPU 確認\n"))
 
-cells.append(("code", '''import os, re, subprocess
-
-def _gpus():
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=15).stdout.strip()
-        names, mems = [], []
-        for line in out.splitlines():
-            if line.strip():
-                p = line.split(",")
-                names.append(p[0].strip())
-                mems.append(int(re.sub(r"[^0-9]", "", p[1])))
-        return names, mems
-    except Exception as e:
-        print("検出失敗:", e)
-        return [], []
-
-GPU_NAMES, VRAM_EACH = _gpus()
+cells.append(("code", '''GPU_NAMES, VRAM_EACH = kc_detect_gpu()
 VRAM_TOTAL = sum(VRAM_EACH)
 print(f"GPU  : {GPU_NAMES}")
 print(f"VRAM : {VRAM_EACH} MiB each → 合計 {VRAM_TOTAL} MiB ({VRAM_TOTAL/1024:.1f} GiB)")
@@ -103,7 +92,7 @@ print(f"✅ pull 完了 ({{(time.time()-t0)/60:.1f}} 分)")
 cells.append(("markdown", "---\n### 3️⃣ ベンチマーク本体\n"))
 
 cells.append(("code", '''# 各コンテキスト長で Ollama を再起動 → 同じプロンプトで計測
-import json, os, subprocess, time, urllib.request
+import os, json, subprocess, time
 
 OLLAMA_BIN = "/usr/local/bin/ollama"
 PROMPT = "1から20までの素数を列挙して。数字だけをカンマ区切りで。"
@@ -112,15 +101,7 @@ CTX_LIST = [32768, 131072, 262144]
 
 def _free_vram(timeout=180):
     """llama-server が VRAM を手放すまで待つ。戻り値は待った秒数（失敗は -1）。"""
-    for i in range(timeout):
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True).stdout.strip()
-        used = [int(x) for x in out.splitlines() if x.strip().isdigit()]
-        if used and max(used) < 500:
-            return i
-        time.sleep(1)
-    return -1
+    return kc_wait_gpu_idle(timeout=timeout)
 
 
 def _restart(ctx):
@@ -161,18 +142,8 @@ def _restart(ctx):
 
 
 def _chat(prompt, num_predict=64, timeout=2400):
-    body = json.dumps({
-        "model": MODEL_NAME,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False,
-        "think": False,
-        "options": {"num_predict": num_predict, "temperature": 0},
-    }).encode()
-    req = urllib.request.Request(
-        "http://localhost:11434/api/chat", data=body,
-        headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
+    return kc_ollama_chat(11434, MODEL_NAME, prompt,
+                          num_predict=num_predict, timeout=timeout, think=False)
 
 
 results = []

@@ -1,4 +1,5 @@
 """プロセス・GPU 状態の確認と後片付け（生成コードへ埋め込む）。"""
+import re
 import subprocess
 import time
 
@@ -44,6 +45,45 @@ def kc_gpu_usage(timeout=5):
         ).stdout.strip().replace("\n", " | ")
     except Exception:
         return "N/A"
+
+
+def kc_detect_gpu(timeout=15):
+    """全 GPU の (名前, VRAM MiB) を返す。検出失敗は ([], [])。"""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total",
+             "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=timeout,
+        ).stdout.strip()
+        names, mems = [], []
+        for line in out.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(",")
+            names.append(parts[0].strip())
+            mems.append(int(re.sub(r"[^0-9]", "", parts[1])))
+        return names, mems
+    except Exception as e:
+        print(f"GPU 検出失敗: {e}")
+        return [], []
+
+
+def kc_wait_gpu_idle(limit_mib=500, timeout=180):
+    """全 GPU の使用量が limit 未満になるまで待つ。経過秒、失敗は -1。
+
+    名前は ollama の kc_wait_vram_free（/api/ps を見る）と衝突させない。
+    """
+    for i in range(timeout):
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        used = [int(x) for x in out.splitlines() if x.strip().isdigit()]
+        if used and max(used) < limit_mib:
+            return i
+        time.sleep(1)
+    return -1
 
 
 def _kc_argv(pattern):

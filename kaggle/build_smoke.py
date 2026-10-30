@@ -8,6 +8,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from kbuild import pack_nb  # noqa: E402
+from runtime import source_bundle  # noqa: E402
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 # 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
@@ -32,31 +33,17 @@ cells.append(("markdown", f"""# 🧪 Smoke test: {MODEL} on T4 x2
 > 公開（cloudflared）はしません。まずスタックが動くことを確認するのが目的です。
 """))
 
+# ── 共通ランタイム ──────────────────────────────────────────
+# GPU 検出と Ollama /api/chat は runtime/ を真実源にする。
+cells.append(("markdown", "---\n### 🧩 共通ランタイム（GPU / chat）\n\n"
+                          "`runtime/` の真実源をビルダーが連結して埋め込んでいます。\n"))
+cells.append(("code", source_bundle("proc", "ollama")))
+
 cells.append(("markdown", "---\n### 1️⃣ GPU 確認\n"))
 
-cells.append(("code", '''import os, re, subprocess
+cells.append(("code", '''import subprocess
 
-def _detect_gpu():
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=15,
-        ).stdout.strip()
-        if not out:
-            return [], []
-        names, mems = [], []
-        for line in out.splitlines():
-            if not line.strip():
-                continue
-            p = line.split(",")
-            names.append(p[0].strip())
-            mems.append(int(re.sub(r"[^0-9]", "", p[1])))
-        return names, mems
-    except Exception as e:
-        print(f"検出失敗: {e}")
-        return [], []
-
-GPU_NAMES, VRAM_EACH = _detect_gpu()
+GPU_NAMES, VRAM_EACH = kc_detect_gpu()
 VRAM_TOTAL = sum(VRAM_EACH)
 
 print(f"GPU  : {GPU_NAMES}")
@@ -166,20 +153,11 @@ print(subprocess.run([OLLAMA_BIN, "list"], env=env,
 
 cells.append(("markdown", "---\n### 5️⃣ 推論テスト（本番）\n"))
 
-cells.append(("code", '''import json, time, urllib.request
+cells.append(("code", '''import time
 
 def _chat(prompt, num_predict=64, timeout=1800):
-    body = json.dumps({
-        "model": MODEL_NAME,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False,
-        "options": {"num_predict": num_predict, "temperature": 0},
-    }).encode()
-    req = urllib.request.Request(
-        "http://localhost:11434/api/chat", data=body,
-        headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
+    return kc_ollama_chat(11434, MODEL_NAME, prompt,
+                          num_predict=num_predict, timeout=timeout)
 
 print("=" * 60)
 print("  テスト1: 短文（モデルロード込み）")

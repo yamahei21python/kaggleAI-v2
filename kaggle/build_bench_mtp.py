@@ -10,6 +10,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from kbuild import pack_nb  # noqa: E402
+from runtime import source_bundle  # noqa: E402
 
 # 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
 OUT = str(HERE / "bench_mtp" / "bench-mtp-orcarouter-qwen38-27b.ipynb")
@@ -39,27 +40,15 @@ cells.append(("markdown", """# 📊 Benchmark: llama-server 直起動 + MTP 投�
 - Secrets 不要
 """))
 
+# ── 共通ランタイム ──────────────────────────────────────────
+# GPU 検出・VRAM 解放待ちと JSON POST は runtime/ を真実源にする。
+cells.append(("markdown", "---\n### 🧩 共通ランタイム（GPU / HTTP）\n\n"
+                          "`runtime/` の真実源をビルダーが連結して埋め込んでいます。\n"))
+cells.append(("code", source_bundle("net", "proc")))
+
 cells.append(("markdown", "---\n### 1️⃣ GPU 確認\n"))
 
-cells.append(("code", '''import os, re, subprocess
-
-def _gpus():
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=15).stdout.strip()
-        names, mems = [], []
-        for line in out.splitlines():
-            if line.strip():
-                p = line.split(",")
-                names.append(p[0].strip())
-                mems.append(int(re.sub(r"[^0-9]", "", p[1])))
-        return names, mems
-    except Exception as e:
-        print("検出失敗:", e)
-        return [], []
-
-GPU_NAMES, VRAM_EACH = _gpus()
+cells.append(("code", '''GPU_NAMES, VRAM_EACH = kc_detect_gpu()
 VRAM_TOTAL = sum(VRAM_EACH)
 print(f"GPU  : {GPU_NAMES}")
 print(f"VRAM : {VRAM_EACH} MiB each → 合計 {VRAM_TOTAL} MiB ({VRAM_TOTAL/1024:.1f} GiB)")
@@ -170,15 +159,7 @@ KV_TYPE = "q8_0"      # Ollama 版と同じ。これが無いと VRAM 溢れで 
 
 def _free_vram(timeout=180):
     """VRAM が解放されるまで待つ（残留プロセス対策）。"""
-    for i in range(timeout):
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True).stdout.strip()
-        used = [int(x) for x in out.splitlines() if x.strip().isdigit()]
-        if used and max(used) < 500:
-            return i
-        time.sleep(1)
-    return -1
+    return kc_wait_gpu_idle(timeout=timeout)
 
 
 def _start(spec_type):
@@ -228,18 +209,17 @@ def _start(spec_type):
 
 
 def _chat(prompt, num_predict=64, timeout=1800):
-    body = json.dumps({
+    body = {
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "temperature": 0,
         "n_predict": num_predict,
         "cache_prompt": False,
-    }).encode()
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{PORT}/v1/chat/completions", data=body,
-        headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
+    }
+    resp = kc_post_json(f"http://127.0.0.1:{PORT}/v1/chat/completions", body,
+                        timeout=timeout)
+    with resp:
+        return json.loads(resp.read())
 
 
 results = []

@@ -1,7 +1,29 @@
-"""Ollama 固有のモデル解放処理（生成コードへ埋め込む）。"""
+"""Ollama 固有の推論・モデル解放処理（生成コードへ埋め込む）。"""
 import json
 import time
 import urllib.request
+
+
+def kc_ollama_chat(port, model, prompt, num_predict=64, timeout=1800,
+                   think=None):
+    """Ollama /api/chat を 1 回叩き、応答 dict を返す（非ストリーム）。
+
+    think=None はボディにキーを入れない（Ollama 既定に任せる）。
+    """
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "options": {"num_predict": num_predict, "temperature": 0},
+    }
+    if think is not None:
+        body["think"] = think
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/chat",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
 
 
 def kc_unload_model(port, model, timeout=60):

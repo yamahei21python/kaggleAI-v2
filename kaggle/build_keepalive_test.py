@@ -6,6 +6,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from kbuild import embed, pack_nb  # noqa: E402
+from runtime import source_bundle  # noqa: E402
 
 OUT = str(HERE / "step2" / "step2-keepalive-test.ipynb")
 pathlib.Path(OUT).parent.mkdir(parents=True, exist_ok=True)
@@ -25,7 +26,7 @@ def _b64_chunks(b64_str, size=1000):
 
 KEEPALIVE_CELL = '''# 🔋 キープアライブ ON/OFF 自動検証（GPU 不要）
 # /tmp/keepalive.conf を自動操作して、残り時間表示 + リセット + 停止を検証。
-import subprocess, time, re, json, urllib.request, urllib.error
+import time
 
 MAX_MINUTES = 480
 KEEPALIVE_CONF = "/tmp/keepalive.conf"
@@ -37,32 +38,15 @@ STOP_AT = 25                      # 25 秒後に停止ボタンシミュレー�
 
 def _read_keepalive_conf():
     """RUN=1/0 と MINUTES を読み取り（デフォルトは 1 と KEEPALIVE_KEEPALIVE）。"""
-    try:
-        with open(KEEPALIVE_CONF) as f:
-            lines = [l.strip() for l in f if l.strip() and "=" in l]
-        d = dict(l.split("=", 1) for l in lines)
-        run = int(d.get("RUN", 1))
-        minutes = int(d.get("MINUTES", KEEPALIVE_KEEPALIVE))
-    except FileNotFoundError:
-        run, minutes = 1, KEEPALIVE_KEEPALIVE
-    except Exception:
-        run, minutes = 1, KEEPALIVE_KEEPALIVE
-    if run <= 0:
-        return 0, KEEPALIVE_KEEPALIVE
-    if minutes <= 0:
-        print(f"⚠ KEEPALIVE_MINUTES={minutes} は無効（1〜{MAX_MINUTES} で指定）")
-        return 0, KEEPALIVE_KEEPALIVE
-    if minutes > MAX_MINUTES:
-        print(f"⚠ KEEPALIVE_MINUTES={minutes} → {MAX_MINUTES} に制限")
-        minutes = MAX_MINUTES
+    run, minutes, _mtime = kc_read_conf(
+        KEEPALIVE_CONF, KEEPALIVE_KEEPALIVE, MAX_MINUTES, on_invalid="zero")
     return run, minutes
 
 
 def _reset_keepalive():
     """チャット送信ごとに時間リセット（ON 維持）。"""
     try:
-        with open(KEEPALIVE_CONF, "w") as f:
-            f.write(f"RUN=1\\nMINUTES={KEEPALIVE_KEEPALIVE}\\n")
+        kc_write_conf(KEEPALIVE_CONF, 1, KEEPALIVE_KEEPALIVE)
         print("🔄 keepalive リセット → 60 分")
         return True
     except Exception as e:
@@ -73,8 +57,7 @@ def _reset_keepalive():
 def _stop_keepalive():
     """停止ボタン：RUN=0 にする。"""
     try:
-        with open(KEEPALIVE_CONF, "w") as f:
-            f.write("RUN=0\\n")
+        kc_write_conf(KEEPALIVE_CONF, 0)
         print("🛑 keepalive 停止 → RUN=0")
         return True
     except Exception as e:
@@ -145,7 +128,9 @@ print(report)
 
 EXTERNAL_CELL_TEMPLATE = '''# 🌐 外部受信テスト（GPU 不要・Internet On）
 # auth_proxy.py + cloudflared quick tunnel で、インターネットからのアクセスを確認。
-import base64, os, subprocess, time, re, urllib.request, json
+import base64, os, subprocess, time, urllib.request
+
+PORT = 8080
 
 PROXY_SRC_B64 = (
 __PROXY_B64__
@@ -170,41 +155,23 @@ with open("/tmp/llama-chat.html", "wb") as f:
     f.write(base64.b64decode(CHAT_SRC_B64))
 print("✅ proxy / chat ui デコード完了")
 
-# --- プロキシ起動 ---
-proxy_proc = subprocess.Popen(
-    ["python3", "/tmp/auth_proxy.py", "--port", "8080",
-     "--upstream", "http://127.0.0.1:11434",
-     "--chat-html", "/tmp/llama-chat.html", "--no-quota"],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-)
+# --- プロキシ起動（/healthz まで待つ） ---
+proxy_proc = kc_start_proxy(
+    PORT, "http://127.0.0.1:11434", "/tmp/llama-chat.html", "/tmp/auth_proxy.py",
+    extra_args=("--no-quota",))
 print(f"🚀 proxy PID: {proxy_proc.pid}")
-time.sleep(2)
 
 # --- cloudflared 起動 ---
 TUNNEL_LOG = "/tmp/cloudflared.log"
 subprocess.run(["pkill", "-x", "cloudflared"], capture_output=True)
 time.sleep(1)
 with open(TUNNEL_LOG, "w") as log:
-    cf_proc = subprocess.Popen([CF_BIN, "tunnel", "--url", "http://127.0.0.1:8080", "--no-autoupdate"],
+    cf_proc = subprocess.Popen([CF_BIN, "tunnel", "--url", f"http://127.0.0.1:{PORT}", "--no-autoupdate"],
                                 stdout=log, stderr=log)
 print(f"🚀 cloudflared PID: {cf_proc.pid}")
 
 # --- 公開URL取得 ---
-URL_RE = re.compile(r"https://[a-z0-9-]+\\.trycloudflare\\.com")
-public_url = ""
-for i in range(90):
-    try:
-        with open(TUNNEL_LOG) as f:
-            m = URL_RE.search(f.read())
-        if m:
-            public_url = m.group(0)
-            break
-    except FileNotFoundError:
-        pass
-    time.sleep(1)
-    if i % 10 == 9:
-        print(f"⏳ URL 待ち ({i+1}/90)...")
-
+public_url = kc_wait_url("cloudflared", TUNNEL_LOG)
 if not public_url:
     print("cloudflared ログ（末尾 2000 文字）:")
     try:
@@ -215,10 +182,11 @@ if not public_url:
 
 print(f"🌍 Public URL: {public_url}")
 
-# --- DNS 伝播待ち ---
+# --- DNS 伝播待ち（healthz が通るまで） ---
 print()
-print("DNS 伝播待ち 10秒...")
-time.sleep(10)
+print("DNS 伝播待ち...")
+_elapsed = kc_wait_http(f"{public_url}/healthz", attempts=10, interval=3)
+print(f"  {'✅ 疎通 OK' if _elapsed is not None else '⚠ 未確立'}")
 
 # --- 接続情報保存 ---
 with open("public_url.txt", "w") as f:
@@ -252,10 +220,12 @@ for path in ["/healthz", "/quota"]:
         print(f"GET {path}: 10 回リトライ後も失敗")
 
 # --- 停止テスト ---
+# /stop は POST + X-Kc-Stop: 1 が必須（無いと 405 でプロキシは落ちない）。
 print()
 print("POST /stop ...")
 try:
-    req = urllib.request.Request(f"{public_url}/stop", method="POST", data=b"")
+    req = urllib.request.Request(f"{public_url}/stop", method="POST", data=b"",
+                                 headers={"X-Kc-Stop": "1"})
     with urllib.request.urlopen(req, timeout=10) as r:
         body = r.read().decode()
         print(f"/stop: {r.status} {body[:200]}")
@@ -291,7 +261,15 @@ GPU を使わず、以下を確認するノート。
 1. keepalive の **残り時間表示・リセット・停止**
 2. auth_proxy.py + cloudflared quick tunnel での **外部からのアクセス受信**
 
----
+"""))
+cells.append(("markdown", """---
+### 🧩 共通ランタイム（tunnel / keepalive / proxy）
+
+`runtime/` の真実源をビルダーが連結して埋め込んでいます。
+
+"""))
+cells.append(("code", source_bundle("net", "keepalive", "proxy")))
+cells.append(("markdown", """---
 
 ## セル 1: keepalive 自動検証ループ
 

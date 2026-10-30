@@ -194,6 +194,13 @@ Template）。`runtime/` を真実源にして base64 埋め込みする方式�
 5. **`build_step2_vllm.py` を最後**（最大・起動ラダーが複雑。回帰テストをここで追加）
 6. bench / smoke / keepalive_test — probe / net は段 2 で共有済みにし、ここでは
    残りの定型（chat / gpus 出力）を寄せる。
+   - 進捗: `runtime/proc.py` に GPU 検出 / アイドル待ち（`kc_detect_gpu` /
+     `kc_wait_gpu_idle`）、`runtime/engines/ollama.py` に `kc_ollama_chat` を追加。
+     smoke / bench / bench_mtp は GPU 検出と chat を runtime 呼び出しへ置換。
+     keepalive_test は keepalive / proxy / tunnel を `source_bundle` 埋め込みへ移行
+     （`/stop` に `X-Kc-Stop` ヘッダを追加し、潜在 405 を修正）。
+     step2 / direct / vLLM の各ビルダーに残っていた `_detect_gpu` も
+     `kc_detect_gpu()` に統一。
 7. クライアント統合（`cli/`）、テスト移設（`tests/`、フェイククロックで keepalive）、
    notes 再編、生成物ポリシー（`build/` + gitignore + CI 検証）、
    **README 再構成**（現行 1,255 行は旧パスを直書き。新レイアウトへ移し、手順詳細は
