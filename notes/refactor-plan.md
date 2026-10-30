@@ -302,11 +302,13 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 3. **URL の配布経路がエンジンで違う** — Ollama 版は Gist に `url.txt` を
    書く（`build_step2.py:438-503`）が、`exl3-serve` は `result.json` のみ。
    手元の `ask.py` は Gist 前提なので URL を拾えない。
-   → spec に publish 段（gist / result / 手動）を持たせる。
+   → spec に publish 段（gist / result / 手動）を持たせる。**一部完了**
+   （exl3 も `publish_url()` で Gist に書く。spec への明示は未着手）。
 4. **`/quota` がカーネルで動かない** — `auth_proxy.py:61` は
    `~/.kaggle/kaggle.json` しか読まないため、ビルダーは `--no-quota` を
    渡している。Kaggle では環境変数 `KAGGLE_USERNAME`/`KAGGLE_KEY` があるので
-   env も読めるようにする。
+   env も読めるようにする。**完了**（`runtime/quota.py` が env を読む。
+   `--no-quota` が残るのは keepalive-test とローカル uzu のみ、いずれも意図的）。
 
 ### P1: 重複・再現性・検証
 
