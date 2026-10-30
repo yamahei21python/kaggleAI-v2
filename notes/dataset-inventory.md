@@ -8,6 +8,9 @@
 注意:
 - `size` が 0 のものは API がサイズを返さない（private で計算されていない）。
   実際の容量は「実体」欄の推定値。
+- `kaggle datasets list` の `size` は**圧縮後**の値で、実ファイルサイズとは一致しない
+  （例: `my-cloudflared-bin` は API 20 MB / 実ファイル 40 MB）。表の容量は
+  `kaggle datasets files` の実ファイル合計を優先し、API 値しか無いものはそのまま。
 - `datasets files` が大きなディレクトリで空を返すことがあるため、
   ファイル数は参考値。
 - **全件 private**（他ユーザーは利用していない）。`downloadCount` は自分の再取得を含む。
@@ -19,18 +22,19 @@
 | 1 | `qwen38-27b-uncensored-hauhaucs-awq-mtp` | AWQ モデル + MTP ヘッド + `.cache/huggingface/` ゴミ | 不明（0 表記・約 16 GiB） | 10-28 | 26 | **20** | 保持（vLLM 本体）。再版時に `.cache` を除外 |
 | 2 | `my-ollama-orcarouter-qwen38-27b` | Ollama blobs（16.5 GiB + 0.93 GiB）+ manifests | 16.5 GiB | 10-27 | 5 | 5 | 保持（Ollama 版モデル） |
 | 3 | `my-ollama-orcarouter-qwen38-27b-patch` | `bin/ollama` + `lib/ollama`（ランタイム） | 1.06 GB | 10-28 | 5 | 5 | 保持（Ollama 版ランタイム） |
-| 4 | `my-cloudflared-bin` | `cloudflared` 1 ファイル（版不明） | 40 MB | 10-27 | 6 | 5 | 保持（後日 `infra-…-<ver>` へ移行） |
+| 4 | `my-cloudflared-bin` | `cloudflared` 1 ファイル（版不明） | 40 MB（実ファイル 40,247,428 B） | 10-27 | 6 | 5 | 保持（後日 `infra-…-<ver>` へ移行） |
 | 5 | `vllm-wheelhouse` | wheel 群 + MANIFEST.txt | 3.0 GB | 10-29 | 4 | 2 | 保持 |
 | 6 | `qwen38-27b-uncensored-exl3-4bpw` | EXL3 3 シャード + LICENSE | 15.9 GiB | 10-29 | 2 | 0（push 前） | 保持（EXL3 検証待ち） |
 | 7 | `qwen3-27b-uncensored-gguf` | `Qwen3.8-27B-Uncensored-Q4_K_M.gguf` | 15.7 GiB | 10-27 | 0 | 0 | **要判断**（EXL3 失敗時のフォールバック） |
-| 8 | `my-ollama-qwen3-6-35b` | Ollama（35B 系・旧） | 22.3 GiB | 07-27 | 0 | 0 | **削除（確定 2026-10-30）** |
-| 9 | `my-ollama-qwen2-5-coder-14b` | Ollama（14B コーダー・旧） | 8.4 GiB | 07-28 | 0 | 0 | **削除（確定 2026-10-30）** |
-| 10 | `my-ollama-gemma3-1b` | Ollama（Gemma 3 1B・旧） | 0.8 GiB | 07-27 | 0 | 0 | **削除（確定 2026-10-30）** |
-| 11 | `kawamura-finetune` | embedder/reranker 学習データ | 20 MB | 08-28 | 0 | 2 | 保持（#12 と統合検討） |
-| 12 | `kawamura-ruri-ft-data` | embedder 学習データ + スクリプト | 0.16 MB | 08-28 | 0 | 1 | 保持（#11 と統合検討） |
+| 8 | `my-ollama-qwen3-6-35b` | Ollama（35B 系・旧） | 22.3 GiB | 07-27 | 0 | 0 | **削除済み（2026-10-30）** |
+| 9 | `my-ollama-qwen2-5-coder-14b` | Ollama（14B コーダー・旧） | 8.4 GiB | 07-28 | 0 | 0 | **削除済み（2026-10-30）** |
+| 10 | `my-ollama-gemma3-1b` | Ollama（Gemma 3 1B・旧） | 0.8 GiB | 07-27 | 0 | 0 | **削除済み（2026-10-30）** |
+| 11 | `kawamura-finetune` | embedder/reranker 学習データ | 20 MB（実ファイル 22,030,906 B） | 08-28 | 0 | 2 | 保持（#12 と統合検討） |
+| 12 | `kawamura-ruri-ft-data` | embedder 学習データ + スクリプト | 4 MB（実ファイル 4,195,551 B） | 08-28 | 0 | 1 | 保持（#11 と統合検討） |
 
-合計は概算 **約 100 GiB**。#1〜#6・#11・#12 は保持、#8〜#10 を削除すると
-約 31.5 GiB 減で **約 68.5 GiB** になる。#7（15.7 GiB）は 10/31 の GPU 検証後に判断。
+削除前の合計は概算 **約 100 GiB**。#8〜#10（約 31.5 GiB）は
+**2026-10-30 に削除実行済み**で、残りは **約 68.5 GiB**（9 件）。
+#7（15.7 GiB）は 10/31 の GPU 検証後に判断。
 
 ## 判定の観点
 
@@ -44,7 +48,7 @@
 
 ## 統合（まとめる）候補
 
-決定事項: **#8〜#10 は削除、それ以外は保持**。以下は「今すぐは統合しないが、
+決定事項: **#8〜#10 は削除（2026-10-30 実行済み）、それ以外は保持**。以下は「今すぐは統合しないが、
 次に版を作るとき（再アップロード・新規作成）にまとめる」方針。
 Kaggle の slug は `dataset_sources` が slug 参照＝最新版マウントなので、
 **既存 slug の統合・改名はしない**（依存カーネル 20・5・6 本が壊れる）。
@@ -64,12 +68,17 @@ Kaggle の slug は `dataset_sources` が slug 参照＝最新版マウントな
 - アップロードは `kbuild upload-dataset` に一本化し `.cache/` `.git/` `*.lock` を既定除外。
 - 各カーネルの `stage_env` でマウント版を `result.json` に記録。
 
-## 削除の手順（実行はまだしない）
+## 削除の手順（2026-10-30 実行済み）
 
 CLI 2.x（Python 3.10+）が必要。現行 PATH は 1.7.4.5 で `delete` が無い。
 
+2026-10-30 時点: `~/.venv-kaggle2` を作成（Kaggle CLI 2.2.5、
+`datasets delete` の存在を確認）。削除前チェック（存在・依存 0）の後、
+**#8〜#10 の 3 件を削除実行し、一覧が 12 → 9 件になったことを確認済み**。
+以下は再現用の手順として残す。
+
 ```bash
-# 準備（PATH は変更しない）
+# 準備（PATH は変更しない。作成済みなら再実行不要）
 /opt/homebrew/bin/python3.12 -m venv ~/.venv-kaggle2
 ~/.venv-kaggle2/bin/pip install -U kaggle
 ~/.venv-kaggle2/bin/kaggle --version   # 2.2.5
