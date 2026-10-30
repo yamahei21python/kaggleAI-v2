@@ -179,7 +179,8 @@ Template）。`runtime/` を真実源にして base64 埋め込みする方式�
    exl3-serve を移行し、生成物が旧ビルダーとバイト一致することを確認。
    - 進捗: 梱包層 `kbuild/`（`embed` / `metadata` / `pack_nb` / `pack_script`）を
      抽出。exl3（byte 一致）、step2、direct、step1、smoke、bench、bench_mtp、
-     keepalive を移行済み。vLLM 系（prebuilt cells）と生成コードの一元化は未着手。
+     keepalive、vLLM 系 3 本を移行済み（全 12 ノートで生成一致）。残りは
+     生成コード（proxy / tunnel / keepalive / verify）の一元化。
 3. **`build_step2.py`**（cells 外部化済みで最も楽）→ **`build_step2_direct.py`**。
    生成物は AST + 正規化一致で比較（byte 一致は exl3 のみ）。
 4. **`build_vllm_dataset.py` → `build_vllm_dryrun.py`**
@@ -253,7 +254,7 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 ## 効果見積り
 
 - ビルダー 6,524 行（+ `exl3-serve/build_kernel.py` 619 行）→ 共通 ~300 行 + spec 各 50–150 行。ビルダー層は **80% 前後**まで共通化可能（実測の重複表）。生成コード側（proxy / tunnel / keepalive / verify）の一元化が最も効く。
-- `check_notebooks.py` の対象 7 冊 → 全カーネルの「生成一致」検証に置換（比較は AST + 正規化、exl3 のみ byte）。
+- `check_notebooks.py` の対象 7 冊 → 12 冊（direct / vLLM dataset / dryrun / vLLM 本体 2 種を追加）。比較は AST + 正規化、exl3 のみ byte。
 - 現役／退役がディレクトリ構造で自明になる。
 
 ## 未考慮点の調査（2026-10-30 追記）

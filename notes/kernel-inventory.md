@@ -56,17 +56,18 @@ id に紐づく）。ここでは「どれが現役で、どのビルダーが�
 
 ## 生成一致チェックの現状
 
-`kaggle/check_notebooks.py` が再生成して比較しているのは 7 冊:
+`kaggle/check_notebooks.py` が再生成して比較しているのは 12 冊:
 
 - `step1` / `step2`（cloudflared・ngrok）/ `smoke` / `bench` / `bench_mtp` /
-  `step2-keepalive-test`
+  `step2-keepalive-test` / `step2-direct-ngrok`
+- `prepare-vllm-dataset` / `step2-vllm-dryrun` /
+  `step2-vllm-qwen38-27b-cloudflared` / `step2-vllm-qwen38-27b-ngrok`
 
 対象外（理由）:
 
-- `step2-direct-ngrok` … TARGETS 未登録。追加は段 3 で行う。
-- `step2-vllm-kernel/*`、`step2-vllm-dryrun` … 同じく未登録。段 4–5 で追加。
 - `exl3-serve/*` … script 方式。`_selftest_build.py` がバイト一致を確認。
 - ビルダー無しの script 4 本 … 生成物ではなくソースそのもの。
+- 退役 2 本 … 再生成の対象外。
 
 ## 移行 2 への引き継ぎ
 

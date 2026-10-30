@@ -28,6 +28,14 @@ TARGETS = [
     ("build_bench.py", {}, "bench/bench-ctx-orcarouter-qwen38-27b.ipynb"),
     ("build_bench_mtp.py", {}, "bench_mtp/bench-mtp-orcarouter-qwen38-27b.ipynb"),
     ("build_keepalive_test.py", {}, "step2/step2-keepalive-test.ipynb"),
+    ("build_step2_direct.py", {"STEP2D_TUNNEL": "ngrok"},
+     "step2-direct-ngrok/step2-direct-ngrok.ipynb"),
+    ("build_vllm_dataset.py", {}, "step2-vllm/prepare-vllm-dataset.ipynb"),
+    ("build_vllm_dryrun.py", {}, "step2-vllm-dryrun/step2-vllm-dryrun.ipynb"),
+    ("build_step2_vllm.py", {"STEP2_TUNNEL": "cloudflared"},
+     "step2-vllm-kernel/cloudflared/step2-vllm-qwen38-27b-cloudflared.ipynb"),
+    ("build_step2_vllm.py", {"STEP2_TUNNEL": "ngrok"},
+     "step2-vllm-kernel/ngrok/step2-vllm-qwen38-27b-ngrok.ipynb"),
 ]
 
 
@@ -49,7 +57,8 @@ def main():
         shutil.copytree(ROOT / "kbuild", work / "kbuild",
                         ignore=shutil.ignore_patterns("__pycache__"))
         for builder, extra, out in TARGETS:
-            env = {k: v for k, v in os.environ.items() if k != "STEP2_TUNNEL"}
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith("STEP2")}
             env.update(extra)
             r = subprocess.run([sys.executable, str(work / "kaggle" / builder)],
                                cwd=work, env=env, capture_output=True, text=True)

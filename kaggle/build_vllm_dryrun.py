@@ -15,9 +15,12 @@
     python3 kaggle/build_vllm_dryrun.py
     cd kaggle/step2-vllm-dryrun && kaggle kernels push
 """
-import base64
-import json
 import pathlib
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from kbuild import embed, metadata, pack_nb  # noqa: E402
 
 OWNER = "yamahei21python"
 DATASET_SLUG = "qwen38-27b-uncensored-hauhaucs-awq-mtp"
@@ -25,17 +28,12 @@ DATASET_ID = f"{OWNER}/{DATASET_SLUG}"
 SERVED_NAME = "qwen3.8-27b-awq"
 SLUG = "step2-vllm-dryrun"
 
-HERE = pathlib.Path(__file__).resolve().parent
 OUT_DIR = HERE / "step2-vllm-dryrun"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 OUT = OUT_DIR / f"{SLUG}.ipynb"
 
-PROXY_SRC_B64 = base64.b64encode(
-    (HERE / "step2" / "auth_proxy.py").read_bytes()
-).decode()
-CHAT_SRC_B64 = base64.b64encode(
-    (HERE.parent / "llama-chat.html").read_bytes()
-).decode()
+PROXY_SRC_B64 = embed.b64_file(HERE / "step2" / "auth_proxy.py")
+CHAT_SRC_B64 = embed.b64_file(HERE.parent / "llama-chat.html")
 
 cells = []
 
@@ -857,19 +855,7 @@ print("🧹 停止済（proxy / cloudflared / mock）")
 ''')
 
 # ── 書き出し ────────────────────────────────────────────────
-nb = {
-    "cells": cells,
-    "metadata": {
-        "kernelspec": {"display_name": "Python 3", "language": "python",
-                       "name": "python3"},
-        "language_info": {"name": "python", "version": "3.11.0"},
-    },
-    "nbformat": 4,
-    "nbformat_minor": 5,
-}
-with open(OUT, "w") as f:
-    json.dump(nb, f, ensure_ascii=False, indent=1)
-print(f"wrote {OUT}: {len(cells)} cells")
+pack_nb.write_cells(OUT, cells, "3.11.0")
 
 meta = {
     "id": f"{OWNER}/{SLUG}",
@@ -887,6 +873,5 @@ meta = {
     "competition_sources": [],
     "model_sources": [],
 }
-with open(OUT_DIR / "kernel-metadata.json", "w") as f:
-    json.dump(meta, f, ensure_ascii=False, indent=2)
+metadata.write(OUT_DIR / "kernel-metadata.json", meta)
 print(f"wrote {OUT_DIR / 'kernel-metadata.json'}")

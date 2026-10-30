@@ -9,10 +9,12 @@
 Kaggle 上でノートブックを実行すると、HuggingFace からモデルをダウンロードし、
 Kaggle Dataset として公開する。
 """
-import json
 import pathlib
+import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from kbuild import metadata, pack_nb  # noqa: E402
 OUT_DIR = HERE / "step2-vllm"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -154,20 +156,7 @@ Dataset URL: `https://www.kaggle.com/datasets/{DATASET_ID}`
 この URL を `build_step2_vllm.py` の `DATASET_ID` に設定して Step2 notebook を生成する。
 """))
 
-nb = {
-    "cells": cells,
-    "metadata": {
-        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
-        "language_info": {"name": "python", "version": "3.10.0"},
-    },
-    "nbformat": 4,
-    "nbformat_minor": 5,
-}
-
-with open(NB_PATH, "w") as f:
-    json.dump(nb, f, ensure_ascii=False, indent=1)
-print(f"wrote {NB_PATH}: {len(cells)} cells")
-
+pack_nb.write_cells(NB_PATH, cells)
 kernel_meta = {
     "id": f"{OWNER}/prepare-vllm-dataset",
     "title": "Prepare vLLM Dataset",
@@ -185,6 +174,5 @@ kernel_meta = {
     "model_sources": [],
 }
 
-with open(META_PATH, "w") as f:
-    json.dump(kernel_meta, f, indent=2)
+metadata.write(META_PATH, kernel_meta)
 print(f"wrote {META_PATH}")

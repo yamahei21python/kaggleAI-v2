@@ -11,10 +11,9 @@
 出力: kaggle/step2-vllm-kernel/step2-vllm-qwen38-27b-<tunnel>.ipynb
       （push はしない。Dataset 作成完了後に手動で push する）
 """
-import base64
-import json
 import os
 import pathlib
+import sys
 
 # ── 固定パラメータ ──────────────────────────────────────────
 OWNER = "yamahei21python"
@@ -29,6 +28,8 @@ if TUNNEL not in ("cloudflared", "ngrok"):
 IS_NGROK = TUNNEL == "ngrok"
 
 HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from kbuild import embed, metadata, pack_nb  # noqa: E402
 # prepare-vllm-dataset.ipynb / kernel-metadata.json と同じディレクトリに置くと
 # メタデータが衝突するので、kernel 用は専用ディレクトリへ分ける。
 # トンネルごとにディレクトリを分ける。kernel-metadata.json は push 時の
@@ -38,12 +39,8 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 OUT = OUT_DIR / f"step2-vllm-qwen38-27b-{TUNNEL}.ipynb"
 
 # 単一ソース（kaggle/step2/*）をそのまま埋め込む。notebook 側で二重管理しない。
-PROXY_SRC_B64 = base64.b64encode(
-    (HERE / "step2" / "auth_proxy.py").read_bytes()
-).decode()
-CHAT_SRC_B64 = base64.b64encode(
-    (HERE.parent / "llama-chat.html").read_bytes()
-).decode()
+PROXY_SRC_B64 = embed.b64_file(HERE / "step2" / "auth_proxy.py")
+CHAT_SRC_B64 = embed.b64_file(HERE.parent / "llama-chat.html")
 
 cells = []
 
@@ -2119,20 +2116,7 @@ elif not saved:
 ''')
 
 # ── 書き出し ────────────────────────────────────────────────
-nb = {
-    "cells": cells,
-    "metadata": {
-        "kernelspec": {"display_name": "Python 3", "language": "python",
-                       "name": "python3"},
-        "language_info": {"name": "python", "version": "3.10.0"},
-    },
-    "nbformat": 4,
-    "nbformat_minor": 5,
-}
-
-with open(OUT, "w") as f:
-    json.dump(nb, f, ensure_ascii=False, indent=1)
-print(f"wrote {OUT}: {len(cells)} cells")
+pack_nb.write_cells(OUT, cells, "3.10.0")
 
 # ── kernel-metadata.json（push 用・まだ push しない）─────────
 SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}"
@@ -2159,6 +2143,5 @@ meta = {
     "model_sources": [],
 }
 meta_path = OUT_DIR / "kernel-metadata.json"
-with open(meta_path, "w") as f:
-    json.dump(meta, f, ensure_ascii=False, indent=2)
+metadata.write(meta_path, meta)
 print(f"wrote {meta_path}")
