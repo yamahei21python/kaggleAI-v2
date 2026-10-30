@@ -11,7 +11,7 @@ exllamav3）とローカルのランチャー・クライアントまで。
 | カーネル用ディレクトリ | `kaggle/` 直下に 19 ディレクトリ + `build_*.py` 11 本（step2 系だけで 8 バリエーション） |
 | ビルダー | `kaggle/build_*.py` 11 本、計 6,524 行（最大 `build_step2_vllm.py` 2,163 行）+ `exl3-serve/build_kernel.py` 619 行 |
 | 退役コード | `kaggle/archive/` 121 ファイル（旧カーネル 46 スナップショット = json+ipynb 46 組、py 18 / sh 10）、`notes/uzu-backup/` 13 |
-| ローカルランチャー | 4 本 計 1,026 行 + `lib/launcher-common.zsh` 122 行 |
+| ローカルランチャー | 4 本 計 1,000 行 + `lib/launcher-common.zsh` 214 行（0b 完了後） |
 | クライアント | `ask.py` / `kaggle-quota.py` / `kcconfig.py` がルート直下 |
 | テスト | `_selftest_proxy.py` / `_selftest_builder.py` / `exl3-serve/_selftest_server.py` + CI の notebook 一致（7 冊のみ） |
 
@@ -27,10 +27,18 @@ exllamav3）とローカルのランチャー・クライアントまで。
 3. **命名で現役／退役が判別できない** — `step2`, `step2-vllm`,
    `step2-vllm-kernel/{ngrok,cloudflared}`, `step2-direct-ngrok`, `step2-ka-test`。
 4. **実行時コードの真実源が暗黙** — `chat_server.py` / `auth_proxy.py` /
-   `llama-chat.html` を各ビルダーが個別に埋め込んでいる。
-5. **ローカル層の重複** — `run-llama-server` / `run-uzu-server` は
-   `lib/launcher-common.zsh` を使っていない。`run-llama-server` は
-   `/Applications/Ollama.app` と `~/.ollama/models/blobs` を直参照。
+   `llama-chat.html` を各ビルダーが個別に埋め込んでいる。さらに生成される
+   `main.py` の proxy 起動・トンネル・keepalive・verify が
+   `build_step2.py` / `build_step2_direct.py` / `build_vllm_dryrun.py` /
+   `build_step2_vllm.py` のテンプレート文字列として重複し、`exl3-serve` は
+   単一 Template で別系統。実質 2 系統（cell 外部化済み step2 / 単一テンプレート
+   exl3）に、両方の悪いところ取りの中間 3 本が挟まっている。
+5. **ローカル層の重複（0b で解消済み）** — `run-llama-server` は
+   `/Applications/Ollama.app` と `~/.ollama/models/blobs` を直参照していた。
+   → `lib/launcher-common.zsh` の `kc_ollama_server_bin` / `kc_ollama_blob` /
+   `kc_port_in_use` / `kc_start_ui_proxy` に集約し、4 本とも source する形に
+   した。`run-llama-server` は zsh 化（zsh の `read -p` は coprocess 扱いで
+   失敗するため `kc_ask` / `kc_pause` を追加）。
 6. **設定の分散** — `config.env` は launcher（`CFG_*` 経由）と `kcconfig.py` が
    読む共有値だけで、builder のノブ（`STEP2_TUNNEL` など）は環境変数でしか
    渡せない。ポート（9931 / 11435 / 19950 / 8899）は `config.env` と各コードの
@@ -97,22 +105,84 @@ Kernel(
 エンジン差（コンテキスト指定・thinking・MTP・起動待機）は spec ではなく
 `runtime/engines/*.py` の能力表に閉じ込める。クライアントは OpenAI `/v1` 一本のまま。
 
+## 共通化の範囲（2 層に分ける）
+
+「LLM 以外を共通化する」を正確に言うと、**推論エンジン固有の部分だけ残して、
+それ以外の配管を共通化**する。境界の目安は「モデル名・量子化・推論フラグを
+知らなくても書けるコードか」。知らなくて済むなら `runtime/`、知らないと
+書けないなら `runtime/engines/`。
+
+### 層 1: ビルダー層（梱包・生成）— ほぼ機械的に共通化できる
+
+実測した重複:
+
+| 部品 | 重複 |
+|---|---|
+| `_find_input` | 4 本（step2 / direct / vllm / dryrun） |
+| `_detect_gpu` | 4 本（+ bench/smoke 系にも類似） |
+| `probe_url` | 4 本（ngrok / cloudflared の分岐だけ違う） |
+| `save_output` / `fail` | 3 本 |
+| base64 埋め込み | 6 本 |
+| nbformat / cell id / language_info、metadata（title↔slug 検査）、`wait_http` / `http_json` / `secret`、keepalive conf 読み書き | エンジン知識ゼロ。`kbuild/` + `runtime/` へほぼそのまま移せる |
+
+ビルダー行数の大半はこの層。共通化率は **80% 前後**。
+
+### 層 2: 生成される実行時コード — 段 2 の最優先
+
+ビルダーの関数より効くのは、**生成される `main.py` の中身**が複数テンプレートに
+コピーされている点。proxy 起動・cloudflared / ngrok・keepalive・verify が
+`build_step2.py` / `build_step2_direct.py` / `build_vllm_dryrun.py` /
+`build_step2_vllm.py` に文字列として重複し、`exl3-serve` は別方式（単一
+Template）。`runtime/` を真実源にして base64 埋め込みする方式へ寄せれば、
+この重複は構造的に消える。**段 2 では kbuild 抽出と同じ優先度でここを一元化する。**
+
+### 共通化しない / 共有を限定する部分
+
+- **起動ラダーは共有しない** — vLLM の `--help` 事前検査 → フラグ選択 → TP=2 は
+  他エンジンと構造が違いすぎる。共有するのは「GPU 判定 → VRAM → コンテキスト
+  候補の決定」までで、起動関数は `runtime/engines/*.py` に残す。
+- vLLM: wheelhouse、`--help` 検査、起動ラダー、TP=2
+- llama-server: バイナリ / blob 解決、`--spec-type`（MTP）、`-c`
+- Ollama: `num_ctx`、`/api/ps`
+- EXL3: Cache、max_history、warmup、MTP 投げ込み
+- クライアントは既に OpenAI `/v1` で揃っているので、共通化ではなく現状維持。
+
+### 追加の判断（2026-10-30）
+
+1. **bench / smoke / bench_mtp も段 2 から `runtime/` を使う** — 段 6 まで待つと
+   `_gpus` / `_chat` の第 2 系統が残り、共通化が半分で止まる。少なくとも
+   probe / net は最初から共有する。
+2. **「バイト一致」は exl3 以外は AST + 正規化一致に緩める** — 全カーネルに
+   byte 一致を課すと、空白や cell id の差で移行が止まりやすい。step2 系は
+   `check_notebooks.py` 相当の意味比較で十分（exl3 は単一 Template なので
+   sha256 再現を維持）。
+3. **hosts は表駆動** — `probe_url` の種別は ngrok / cloudflared の 2 つだけ。
+   URL 抽出正規表現と再試行回数を表に持てば 1 関数で済む。
+4. **能力表を増やさない** — 共通化を広げると MTP / thinking / KV dtype /
+   起動待機の差が spec に漏れ出しやすい。`runtime/` の IF を増やさず、
+   能力表＋起動関数の線を維持する。
+
 ## 移行順（各段で差分検証 + CPU テスト green の後に次へ）
 
 0. **事前整理（ルート掃除 + README の扱い決定）** — コード移設より先に方針だけ決める。
    ルート直下の実験ゴミ（`out.*` 64 個・16.8 GB の gguf・bench ログ 2 本・`diagout`）と
    `kaggle-dataset-*` / `.wheel` の扱いを決めて gitignore を確定。README（1,255 行）は
    新レイアウトに合わせた再構成を段 7 に回し、それまでは現行パスのまま維持する。
-0b. **ローカルランチャーの common 化** — push 不要・クォータ不要でいつでも可能。
-   `run-llama-server` / `run-uzu-server` を共通 lib に寄せ、バイナリ／blob 解決を関数化。
+0b. **ローカルランチャーの common 化（完了）** — push 不要・クォータ不要。
+   `run-llama-server` / `run-uzu-server` を共通 lib に寄せ、バイナリ／blob 解決・
+   ポート検査・UI 中継の起動を関数化。`run-llama-server` は zsh 化。
 1. **棚卸し表** — 現役 / 準現役（`build_step2_direct.py`, `build_vllm_dryrun.py`）/
    退役（`step2-ka-test`, `capture_patch`, `archive/`）。カーネル id は変えない。
-2. **kbuild 抽出** — `exl3-serve/build_kernel.py` と `build_step2.py` の共通部分から。
-   まず exl3-serve を移行し、生成物が旧ビルダーと同一になることを確認。
-3. **`build_step2.py`**（cells 外部化済みで最も楽）→ **`build_step2_direct.py`**
+2. **kbuild 抽出 + 生成コードの一元化（最優先）** — `exl3-serve/build_kernel.py` と
+   `build_step2.py` の共通部分から。proxy / トンネル / keepalive / verify を
+   `runtime/` の真実源に寄せ、各ビルダーは base64 埋め込みで参照する。まず
+   exl3-serve を移行し、生成物が旧ビルダーとバイト一致することを確認。
+3. **`build_step2.py`**（cells 外部化済みで最も楽）→ **`build_step2_direct.py`**。
+   生成物は AST + 正規化一致で比較（byte 一致は exl3 のみ）。
 4. **`build_vllm_dataset.py` → `build_vllm_dryrun.py`**
 5. **`build_step2_vllm.py` を最後**（最大・起動ラダーが複雑。回帰テストをここで追加）
-6. bench / smoke / keepalive_test は準現役として後回し。
+6. bench / smoke / keepalive_test — probe / net は段 2 で共有済みにし、ここでは
+   残りの定型（chat / gpus 出力）を寄せる。
 7. クライアント統合（`cli/`）、テスト移設（`tests/`、フェイククロックで keepalive）、
    notes 再編、生成物ポリシー（`build/` + gitignore + CI 検証）、
    **README 再構成**（現行 1,255 行は旧パスを直書き。新レイアウトへ移し、手順詳細は
@@ -128,9 +198,9 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 
 | 段 | CPU テスト内容 | 合格条件 |
 |---|---|---|
-| 0b ランチャー | `zsh -n` / `shellcheck`、common lib の解決関数を一時 dir で単体 | 旧 2 本と生成コマンドが一致 |
-| 2 kbuild | 同一 spec → 生成 `main.py` の sha256 再現、py3.13 `ast.parse`、metadata 必須キー、base64 埋め込みの展開一致 | exl3-serve 3 モードの生成物が旧ビルダーとバイト一致 |
-| 3 step2 / direct | 同上 + `check_notebooks.py` 相当の生成一致 | 全カーネルで差分ゼロ |
+| 0b ランチャー | `zsh -n` / `shellcheck`、common lib の解決関数を一時 dir で単体 | 旧 2 本と生成コマンドが一致（完了） |
+| 2 kbuild / 生成コード | 同一 spec → `main.py` の sha256 再現、py3.13 `ast.parse`、metadata 必須キー、base64 展開一致、hosts 表の URL 抽出 | exl3-serve 3 モードが旧ビルダーとバイト一致。runtime 埋め込みが全ビルダーで同一ソース |
+| 3 step2 / direct | 同上 + `check_notebooks.py` 相当 | **AST + 正規化一致**（byte 一致は exl3 のみ） |
 | 4 vllm dataset / dryrun | データセット除外パターン（`.cache/` `*.lock`）のテスト、MANIFEST 生成 | 生成物一致・除外が効く |
 | 5 vllm 本体 | **引数組み立ての純関数テスト**（起動ラダーの各段を表駆動で）、`--help` 出力のパーサ | ラダー分岐が全ケース通る（実起動は GPU で） |
 | 6/7 テスト移設 | pytest 一式 + CI 追加、keepalive はフェイククロック | CI green |
@@ -168,6 +238,10 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 - 一括 `git mv` の大移動（新設 → 移行 → 削除の順で行う）
 - 退役カーネルの削除（`kaggle/archive/` は残す）
 - 4 エンジンの完全な統一抽象化（起動ラダーが違いすぎる。能力表＋起動関数で十分）
+- 共通化の拡大で能力差（MTP / thinking / KV dtype / 起動待機）が spec に漏れ出る
+  こと。`runtime/` の IF を増やさず、能力表＋起動関数の線を維持する
+- 全カーネルへの byte 一致要求（空白・cell id の差で移行が止まる。AST + 正規化
+  一致を既定とし、byte 一致は単一 Template の exl3 のみ）
 - Ollama ネイティブ `/api/chat` へのクライアント統一（`/v1` で足りる）
 - `__KEY__` 置換によるビルド時埋め込みの継続（コード以外は実行時環境変数へ）
 - GPU カーネルの push を伴う検証（push は即実行・クォータ消費）。ビルド検証は
@@ -175,8 +249,8 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 
 ## 効果見積り
 
-- ビルダー 6,524 行（+ `exl3-serve/build_kernel.py` 619 行）→ 共通 ~300 行 + spec 各 50–150 行。新カーネル追加は spec 1 個。
-- `check_notebooks.py` の対象 7 冊 → 全カーネルの「生成一致」検証に置換。
+- ビルダー 6,524 行（+ `exl3-serve/build_kernel.py` 619 行）→ 共通 ~300 行 + spec 各 50–150 行。ビルダー層は **80% 前後**まで共通化可能（実測の重複表）。生成コード側（proxy / tunnel / keepalive / verify）の一元化が最も効く。
+- `check_notebooks.py` の対象 7 冊 → 全カーネルの「生成一致」検証に置換（比較は AST + 正規化、exl3 のみ byte）。
 - 現役／退役がディレクトリ構造で自明になる。
 
 ## 未考慮点の調査（2026-10-30 追記）
@@ -241,7 +315,10 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 
 - ビルダー関数の重複、notebook/script 二系統、メタデータ生成の統一
 - vLLM の wheelhouse / 起動ラダー / TP=2、llama-server のバイナリ・blob 解決
-- ローカルランチャーの common 化、設定の一本化
+- ローカルランチャーの common 化、設定の一本化（0b 完了）
+- 生成コード（proxy / tunnel / keepalive / verify）の一元化を段 2 の最優先に
+- hosts（ngrok / cloudflared）の表駆動、bench/smoke も probe/net を段 2 から共有
+- 生成物の比較は AST + 正規化一致（byte 一致は exl3 のみ）
 
 ## データセット整理案（2026-10-30 調査）
 
