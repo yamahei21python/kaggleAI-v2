@@ -20,6 +20,7 @@ ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT))
 import kcconfig  # noqa: E402
 from kbuild import embed, metadata, pack_script  # noqa: E402
+from runtime import source_bundle  # noqa: E402
 
 CFG = kcconfig.load(ROOT)
 GIST_ID_DEFAULT = CFG.get("GIST_ID", "")
@@ -32,6 +33,8 @@ RUN_MINUTES = 60
 CHAT_B64 = embed.b64_file(HERE / "chat_server.py")
 PROXY_B64 = embed.b64_file(ROOT / "kaggle" / "step2" / "auth_proxy.py")
 HTML_B64 = embed.b64_file(ROOT / "llama-chat.html")
+# proxy 起動・tunnel URL 待ち・keepalive conf は runtime/ の真実源を使う。
+RUNTIME = source_bundle("net", "proc", "keepalive", "proxy")
 
 TEMPLATE = Template(r'''#!/usr/bin/env python3
 # 自動生成: kaggle/exl3-serve/build_kernel.py（直接編集しない）
@@ -44,7 +47,6 @@ import base64
 import glob
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -52,6 +54,8 @@ import threading
 import time
 import traceback
 import urllib.request
+
+$RUNTIME
 
 MODE = "$MODE"                 # "exl3" | "mock"
 ALIAS = "$ALIAS"
@@ -139,12 +143,12 @@ def stage_env():
     print(f"EXL3 serve ({MODE})")
     print("=" * 60)
     print(f"python : {sys.version.split()[0]}")
-    try:
-        r, _ = sh(["nvidia-smi", "--query-gpu=name,memory.total",
-                   "--format=csv,noheader"])
-        print(r.stdout.strip() or "(nvidia-smi 出力なし)")
-        data["nvidia_smi"] = r.stdout.strip()
-    except FileNotFoundError:
+    names, mems = kc_detect_gpu()
+    if names:
+        text = "\n".join(f"{n}, {m} MiB" for n, m in zip(names, mems))
+        print(text)
+        data["nvidia_smi"] = text
+    else:
         # CPU カーネル（乾燥走行）には nvidia-smi が無い
         print("nvidia-smi: なし（CPU ホスト）")
         data["nvidia_smi"] = None
@@ -285,13 +289,11 @@ def start_proxy():
     auth = "Basic " + base64.b64encode(
         f"{user}:{pass_}".encode()).decode()
     env = {**os.environ, "API_USER": user, "API_PASS": pass_}
-    cmd = [sys.executable, f"{WORK}/auth_proxy.py",
-           "--port", str(PROXY_PORT),
-           "--upstream", f"http://127.0.0.1:{CHAT_PORT}",
-           "--chat-html", f"{WORK}/llama-chat.html"]
-    log = open("/kaggle/working/auth_proxy.log", "w")
-    p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
-    wait_http(f"http://127.0.0.1:{PROXY_PORT}/healthz", 60)
+    p = kc_start_proxy(
+        PROXY_PORT, f"http://127.0.0.1:{CHAT_PORT}",
+        f"{WORK}/llama-chat.html", f"{WORK}/auth_proxy.py",
+        env=env, log_path="/kaggle/working/auth_proxy.log",
+        wait_seconds=60, label="auth_proxy", python=sys.executable)
     data["auth"] = "on"
     data["auth_user"] = user
     if not pass_secret:
@@ -373,21 +375,10 @@ def start_tunnel():
                           f"http://127.0.0.1:{PROXY_PORT}", "--no-autoupdate"],
                          stdout=log, stderr=subprocess.STDOUT)
     t0 = time.time()
-    url = None
-    while time.time() - t0 < 120:
-        try:
-            with open(log_path) as f:
-                txt = f.read()
-        except OSError:
-            txt = ""
-        m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", txt)
-        if m:
-            url = m.group(0)
-            break
+    url = kc_wait_url("cloudflared", log_path, seconds=120)
+    if not url:
         if p.poll() is not None:
             raise RuntimeError(f"cloudflared 終了 ({p.returncode})")
-        time.sleep(2)
-    if not url:
         raise RuntimeError("cloudflared の URL を取得できなかった")
     data["tunnel_seconds"] = round(time.time() - t0, 1)
     print(f"公開 URL: {url}")
@@ -427,7 +418,9 @@ def publish_url(url):
 
 def wait_public(url):
     try:
-        dt = wait_http(url + "/healthz", 120)
+        dt = kc_wait_http(url + "/healthz", attempts=24, interval=5)
+        if dt is None:
+            raise RuntimeError("公開 /healthz タイムアウト")
         data["public_health_seconds"] = dt
         print(f"公開 /healthz OK: {dt}s")
     except Exception as e:
@@ -437,22 +430,9 @@ def wait_public(url):
 
 # ── 6. キープアライブ / 時間予算 ────────────────────────────
 def read_conf():
-    run, minutes = 1, RUN_MINUTES
-    try:
-        txt = open(CONF).read()
-    except OSError:
-        return run, minutes, None
-    m = re.search(r"RUN=(\d)", txt)
-    if m:
-        run = int(m.group(1))
-    m = re.search(r"MINUTES=(\d+)", txt)
-    if m:
-        minutes = int(m.group(1))
-    try:
-        mtime = os.path.getmtime(CONF)
-    except OSError:
-        mtime = None
-    return run, minutes, mtime
+    # 上限は HARD_MAX_MINUTES 側で掛けるので、ここでは conf をクランプしない。
+    return kc_read_conf(CONF, RUN_MINUTES, 10 ** 9,
+                        on_invalid="zero", quiet_clamp=True)
 
 
 def loop(procs):
@@ -468,28 +448,14 @@ def loop(procs):
             run, minutes, mtime = read_conf()
             if run == 0:
                 return "stop"
-            last = max(started, mtime or started)
-            deadline = min(last + minutes * 60,
-                           started + HARD_MAX_MINUTES * 60)
+            deadline = kc_keepalive_deadline(started, minutes, mtime,
+                                             HARD_MAX_MINUTES)
             if time.time() >= deadline:
                 return "budget"
         for name, p in procs.items():
             if p.poll() is not None:
                 return f"{name}_exited({p.returncode})"
         time.sleep(20)
-
-
-def write_conf(run, minutes):
-    with open(CONF, "w") as f:
-        f.write(f"RUN={run}\nMINUTES={minutes}\n")
-
-
-def stop_via_proxy(auth):
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{PROXY_PORT}/stop", data=b"", method="POST",
-        headers={"X-Kc-Stop": "1", "Authorization": auth})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.status, json.loads(r.read())
 
 
 def run_keepalive_scenario(auth, procs):
@@ -501,7 +467,7 @@ def run_keepalive_scenario(auth, procs):
     4. 180 秒に /stop → loop が "stop" で抜ける
     """
     ka = {}
-    write_conf(1, 2)
+    kc_write_conf(CONF, 1, 2)
     t0 = time.time()
 
     def activity():
@@ -521,7 +487,7 @@ def run_keepalive_scenario(auth, procs):
     def stopper():
         time.sleep(180)
         try:
-            code, body = stop_via_proxy(auth)
+            code, body = kc_stop_via_proxy(PROXY_PORT, auth=auth)
             ka["stop_response"] = {"status": code, "body": body}
             print(f"/stop: {code} {body}")
         except Exception as e:
@@ -645,6 +611,7 @@ def write(mode, out_dir, meta, run_minutes):
         RUN_MINUTES=run_minutes, CHAT_B64=CHAT_B64,
         PROXY_B64=PROXY_B64, HTML_B64=HTML_B64,
         GIST_ID=GIST_ID_DEFAULT, GIST_OWNER=GIST_OWNER,
+        RUNTIME=RUNTIME,
     )
     pack_script.write(out_dir, body, meta)
 

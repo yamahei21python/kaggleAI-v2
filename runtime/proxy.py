@@ -7,11 +7,12 @@ import urllib.request
 
 def kc_start_proxy(port, upstream, chat_html, proxy_path,
                    extra_args=(), env=None, log_path="/tmp/auth_proxy.log",
-                   wait_seconds=30, label="プロキシ", fail=None):
+                   wait_seconds=30, label="プロキシ", fail=None,
+                   python="python3"):
     """auth_proxy.py を起動し /healthz を待つ。失敗時は fail() か RuntimeError。"""
     subprocess.run(["pkill", "-f", "auth_proxy.py"], capture_output=True)
     time.sleep(1)
-    cmd = ["python3", proxy_path, "--port", str(port),
+    cmd = [python, proxy_path, "--port", str(port),
            "--upstream", upstream, "--chat-html", chat_html, *extra_args]
     with open(log_path, "w") as log:
         proc = subprocess.Popen(cmd, env=env, stdout=log, stderr=log)

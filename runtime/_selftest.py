@@ -39,7 +39,8 @@ def test_bundle():
     src = runtime.source_bundle("net", "proc", "storage", "keepalive", "proxy", "ollama")
     for fn in ("def kc_probe_url", "def kc_proc_state", "def kc_save_output",
                "def kc_read_conf", "def kc_start_proxy", "def kc_unload_model",
-               "def kc_detect_gpu", "def kc_wait_gpu_idle", "def kc_ollama_chat"):
+               "def kc_detect_gpu", "def kc_wait_gpu_idle", "def kc_ollama_chat",
+               "def kc_keepalive_deadline"):
         check(f"{fn} が含まれる", fn in src)
     try:
         compile(src, "<bundle>", "exec")
@@ -237,6 +238,12 @@ def test_keepalive():
 
     check("kc_conf_mtime は無いファイルで 0",
           keepalive.kc_conf_mtime(str(d / "none")) == 0.0)
+
+    dl = keepalive.kc_keepalive_deadline
+    check("締切: 起動 + minutes", dl(0, 5, None) == 300)
+    check("締切: conf 更新で延長", dl(0, 5, 100) == 400)
+    check("締切: hard_max で頭打ち", dl(0, 999, 500, hard_max_minutes=180) == 10800)
+    check("締切: 古い mtime では縮まない", dl(100, 1, 50) == 160)
     shutil.rmtree(d, ignore_errors=True)
 
 

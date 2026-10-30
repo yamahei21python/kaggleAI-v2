@@ -57,6 +57,12 @@ def kc_conf_mtime(path):
         return 0.0
 
 
+def kc_keepalive_deadline(started, minutes, mtime, hard_max_minutes=180):
+    """停止時刻。最後の活動（起動 or conf 更新）から minutes 分、全体は hard_max で頭打ち。"""
+    last = max(started, mtime or started)
+    return min(last + minutes * 60, started + hard_max_minutes * 60)
+
+
 def kc_stop_via_proxy(port, auth=None, timeout=30):
     headers = {"X-Kc-Stop": "1"}
     if auth:

@@ -12,3 +12,6 @@ select = ["E9", "F"]
 # ノートのセルは前のセルで定義した名前（fail, PORT など）を使う。
 # 中身を変えるとノートが変わるので、未使用 import / 空 f-string もここでは直さない。
 "kaggle/step2/cells/*.py" = ["F821", "F401", "F541"]
+# exl3 の生成物は runtime バンドルを連結するため、各モジュールの import が
+# 重複する（意図どおり。生成コードなので手で直さない）。
+"kaggle/exl3-serve/*/main.py" = ["F811"]

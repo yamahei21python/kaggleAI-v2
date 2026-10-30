@@ -205,6 +205,10 @@ Template）。`runtime/` を真実源にして base64 埋め込みする方式�
    notes 再編、生成物ポリシー（`build/` + gitignore + CI 検証）、
    **README 再構成**（現行 1,255 行は旧パスを直書き。新レイアウトへ移し、手順詳細は
    `notes/` に分割する）。
+   - 進捗: exl3 の単一 Template も runtime へ統合。proxy 起動 / tunnel URL 待ち /
+     keepalive conf / `/stop` / GPU 検出 / 締切計算を `kc_*` 呼び出しへ置換し、
+     `kc_start_proxy` に interpreter 指定（`python=`）を追加。exl3 の
+     `_selftest_build` は埋め込み関数の存在と AST 構文を検証する。
 
 ## CPU 検証（無料・各段の受け入れ条件）
 

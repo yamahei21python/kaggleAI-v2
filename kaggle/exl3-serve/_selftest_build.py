@@ -6,6 +6,7 @@
   - Gist 配布のコードと既定値が埋まっている（P0）
   - 認証有効のプロキシを起動している（--no-quota を渡さない）
 """
+import ast
 import hashlib
 import pathlib
 import sys
@@ -48,6 +49,16 @@ def main():
             check("GIST_ID_DEFAULT" in body, f"{mode}: Gist 既定値が無い")
             check((out / "kernel-metadata.json").is_file(),
                   f"{mode}: metadata が無い")
+
+            # runtime/ の共通層を埋め込んでいる（exl3 側に実装を残さない）
+            for fn in ("kc_detect_gpu", "kc_start_proxy", "kc_wait_url",
+                       "kc_wait_http", "kc_read_conf", "kc_write_conf",
+                       "kc_stop_via_proxy", "kc_keepalive_deadline"):
+                check(f"def {fn}" in body, f"{mode}: runtime の {fn} が無い")
+            check("kc_start_proxy(" in body, f"{mode}: proxy 起動が共通層に寄っていない")
+            check("kc_stop_via_proxy(" in body, f"{mode}: /stop が共通層に寄っていない")
+            check("kc_write_conf(" in body, f"{mode}: conf 書き込みが共通層に寄っていない")
+            ast.parse(body)  # テンプレート置換後の構文を CPU で検証する
 
             again = root / (mode + "-again")
             bk.write(mode, again, meta, minutes)
