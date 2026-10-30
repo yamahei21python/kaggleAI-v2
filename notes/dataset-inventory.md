@@ -96,3 +96,25 @@ CLI 2.x（Python 3.10+）が必要。現行 PATH は 1.7.4.5 で `delete` が無
 削除前に、ローカルの `kaggle-dataset-*` に退避があるかを確認する
 （`kaggle-dataset-orcarouter` 17 GB、`-patch` 1.4 GB、`-cloudflared` 38 MB。
 旧 Ollama 系のローカル実体は無い）。
+
+## cloudflared Dataset（#4）の更新手順
+
+1. 採用する版を決め、`kaggle-dataset-cloudflared/bin/cloudflared` を差し替える。
+2. `runtime/net.py` の `KC_CLOUDFLARED_VERSION` を同じ版にする（ダウンロード
+   フォールバックと Dataset の版を揃える）。
+3. `dataset-metadata.json` の `description` に版と取得 URL を書く。
+   現在の記述は `releases/latest` を指しているので、版固定 URL に直す。
+4. `kaggle datasets version -p kaggle-dataset-cloudflared -m "<版>"` を実行する
+   （**アップロードはユーザーのみ**）。
+5. 差し替え後に `bin/cloudflared --version` と sha256 を控える
+   （現行は 2026.10.4 / 40,247,428 B / sha256 `ae5e8add…d9e42`）。
+
+ライセンス: cloudflared は **Apache-2.0**。再配布物なので、Dataset の
+description か `NOTICE` に帰属とライセンスを明記する。現行 metadata は
+`"licenses": [{"name": "other"}]` のまま（変更はアップロード時にまとめて行う）。
+
+## cloudflared の参照箇所
+
+`runtime/net.py` の `kc_cloudflared_url()` が唯一の URL 生成元。ビルダーは
+文字列を直書きせず、この関数を埋め込んだセルから呼ぶ。
+

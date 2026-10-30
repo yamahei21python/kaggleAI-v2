@@ -54,6 +54,22 @@ id に紐づく）。ここでは「どれが現役で、どのビルダーが�
 5. **`build_step2_direct.py` は既定が ngrok**（`build_step2.py` / vLLM は既定
    cloudflared）。kbuild の spec ではトンネルを必須項目にして既定値の揺れを消す。
 
+## 新しい kernel id を作るときのチェックリスト
+
+1. **id / title / slug を一致させる**。`title` が id の slug に解決できないと
+   push が 409 Conflict になる（`kbuild/metadata.py` が生成）。
+2. **Secrets はカーネル単位**。上の台帳から必要なものだけ UI で登録する。
+   追加したら `kbuild/secrets.py` と `tests/test_secrets.py` も更新する。
+3. **`dataset_sources` を確認**。Dataset を版ごとに入れ替える場合は、
+   参照している全カーネル（`kernels list -m --dataset`）を洗う。
+4. **`kernel_type` と `code_file`**。script カーネルは 1 ファイルのみ。
+   複数ファイルは base64 で埋め込む（`kbuild.embed`）。
+5. **accel / internet**。GPU を使うなら `enable_gpu`、トンネルには
+   `enable_internet` が必須（どちらも `metadata.base` の引数）。
+6. **初回 push は GPU クォータを消費する**。残量を
+   `python3 kaggle-quota.py` で確認し、依頼があるときだけ push する。
+7. 生成物は `check_notebooks.py` / `tests/test_exl3_build.py` の対象に加える。
+
 ## Secrets 台帳
 
 Secrets は**カーネル単位**で UI から登録する（コードからは登録できない）。

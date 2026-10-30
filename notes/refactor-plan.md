@@ -348,8 +348,10 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
     初期版）と `notes/` 内のベンチログ・JSON をアーカイブへ。**完了**
     （notebook は `kaggle/archive/`、ベンチは `notes/archive/`、索引は `notes/index.md`）。
 13. `my-cloudflared-bin` Dataset の更新手順とライセンス表記（再配布物）。
+    **完了**（`notes/dataset-inventory.md`。Apache-2.0、版固定手順）。
 14. 新しい kernel id を作るときのチェックリスト（Secrets はカーネル単位、
-    `dataset_sources`、`title` の slug 一致）。
+    `dataset_sources`、`title` の slug 一致）。**完了**
+    （`notes/kernel-inventory.md`）。
 15. CLI は既定を `build` のみにし、`push` は明示オプション（push は即実行で
     クォータを消費するため）。push 前に残量を表示する。
 
