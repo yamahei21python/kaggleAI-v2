@@ -6,4 +6,5 @@
 
 - 再実行は想定していない。ビルダーはこのディレクトリ基準で出力する（`build_cpu_probe3.py` は `../step2/auth_proxy.py` を参照）。
 - `_v8_cycle.sh` / `_v10_cycle.sh` は作業時の絶対パス（`/Users/...`）を含む。
+- `kaggle-ollama-ngrok.ipynb` は Ollama 版初期の 4 セルノート（現行は `kaggle/step2/`）。
 - ruff / CI の対象外。

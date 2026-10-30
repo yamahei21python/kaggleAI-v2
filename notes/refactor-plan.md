@@ -214,6 +214,9 @@ Template）。`runtime/` を真実源にして base64 埋め込みする方式�
      pkill・atexit を含むため子プロセスで実行する。keepalive の時間予算は
      `kc_keepalive_deadline` / `kc_keepalive_expired` に純関数化し、`now` を
      渡すフェイククロックで検証する。CI と ci-cpu カーネルは `pytest tests` に切替。
+   - 進捗 7c: notes を再編。`notes/index.md` を追加し、ベンチ JSON・ログは
+     `notes/archive/` へ移動（`prompt_sweep.py` の既定出力も archive 配下）。
+     旧 `kaggle-ollama-ngrok.ipynb` は `kaggle/archive/` へ移動。
 
 ## CPU 検証（無料・各段の受け入れ条件）
 
@@ -331,7 +334,8 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 ### P2: 整理・運用
 
 12. ルート直下の旧 notebook `kaggle-ollama-ngrok.ipynb`（4 セル・Ollama 版の
-    初期版）と `notes/` 内のベンチログ・JSON をアーカイブへ。
+    初期版）と `notes/` 内のベンチログ・JSON をアーカイブへ。**完了**
+    （notebook は `kaggle/archive/`、ベンチは `notes/archive/`、索引は `notes/index.md`）。
 13. `my-cloudflared-bin` Dataset の更新手順とライセンス表記（再配布物）。
 14. 新しい kernel id を作るときのチェックリスト（Secrets はカーネル単位、
     `dataset_sources`、`title` の slug 一致）。

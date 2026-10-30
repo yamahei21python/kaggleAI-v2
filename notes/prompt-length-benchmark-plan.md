@@ -42,8 +42,8 @@ caffeinate -ims python3 notes/prompt_sweep.py \
   --cooldown 120 \
   --ctx 16384 \
   --port 18080 \
-  --out notes/prompt-sweep-llama-full.json \
-  --server-log notes/prompt-sweep-llama-full-server.log
+  --out notes/archive/prompt-sweep-llama-full.json \
+  --server-log notes/archive/prompt-sweep-llama-full-server.log
 ```
 
 ### 2. Ollama full isolated sweep
@@ -57,7 +57,7 @@ caffeinate -ims python3 notes/prompt_sweep.py \
   --gen 256 \
   --cooldown 120 \
   --ctx 16384 \
-  --out notes/prompt-sweep-ollama-full.json
+  --out notes/archive/prompt-sweep-ollama-full.json
 ```
 
 ### 3. 任意: output length sweep
@@ -75,8 +75,8 @@ for n in 64 128 256 512; do
     --cooldown 0 \
     --ctx 16384 \
     --port 18080 \
-    --out "notes/prompt-sweep-llama-gen${n}.json" \
-    --server-log "notes/prompt-sweep-llama-gen${n}-server.log"
+    --out "notes/archive/prompt-sweep-llama-gen${n}.json" \
+    --server-log "notes/archive/prompt-sweep-llama-gen${n}-server.log"
 done
 ```
 
@@ -94,8 +94,8 @@ caffeinate -ims python3 notes/prompt_sweep.py \
   --cooldown 120 \
   --ctx 16384 \
   --port 18080 \
-  --out notes/prompt-sweep-llama-repeat.json \
-  --server-log notes/prompt-sweep-llama-repeat-server.log
+  --out notes/archive/prompt-sweep-llama-repeat.json \
+  --server-log notes/archive/prompt-sweep-llama-repeat-server.log
 ```
 
 ## 解析方法

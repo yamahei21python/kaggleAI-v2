@@ -145,8 +145,11 @@ kaggleAI/
     └── exl3-serve/                             # EXL3 配信（GPU）+ dryrun / keepalive（build_kernel.py で生成）
 
 notes/
+├── index.md                                    # メモ・計画・ベンチの索引
+├── refactor-plan.md                            # リポジトリ再編・データセット整理の検討メモ
+├── kernel-inventory.md / dataset-inventory.md  # カーネル・Dataset の台帳
 ├── exllamav3-kaggle-decisions.md               # EXL3 版の決定事項ログ
-└── refactor-plan.md                            # リポジトリ再編・データセット整理の検討メモ
+└── archive/                                    # 過去のベンチ JSON・ログ
 ```
 
 ### vLLM 版（AWQ + MTP / Ollama 版と併存）

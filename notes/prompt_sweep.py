@@ -268,8 +268,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cooldown", type=float, default=30.0, help="seconds between measured prompts")
     parser.add_argument("--ctx", type=int, default=16384)
     parser.add_argument("--port", type=int, default=18080)
-    parser.add_argument("--out", default="notes/prompt-sweep.json")
-    parser.add_argument("--server-log", default="notes/prompt-sweep-server.log")
+    parser.add_argument("--out", default="notes/archive/prompt-sweep.json")
+    parser.add_argument("--server-log", default="notes/archive/prompt-sweep-server.log")
     return parser
 
 
