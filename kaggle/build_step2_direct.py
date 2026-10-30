@@ -17,13 +17,14 @@
   STEP2D_MTP=1|0                    既定 1（MTP 有効）
   STEP2D_CTX=<int>                  既定 32768（テスト用に小さめ）
 """
-import base64
-import json
 import os
 import pathlib
+import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
+sys.path.insert(0, str(ROOT))
+from kbuild import embed, metadata, pack_nb  # noqa: E402
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 DATASET = "my-ollama-orcarouter-qwen38-27b"
@@ -41,12 +42,8 @@ OUT_DIR = HERE / ("step2-direct-ngrok" if IS_NGROK else "step2-direct")
 OUT_DIR.mkdir(exist_ok=True)
 OUT = OUT_DIR / f"step2-direct-{TUNNEL}.ipynb"
 
-PROXY_SRC_B64 = base64.b64encode(
-    (HERE / "step2" / "auth_proxy.py").read_bytes()
-).decode()
-CHAT_SRC_B64 = base64.b64encode(
-    (ROOT / "llama-chat.html").read_bytes()
-).decode()
+PROXY_SRC_B64 = embed.b64_file(HERE / "step2" / "auth_proxy.py")
+CHAT_SRC_B64 = embed.b64_file(ROOT / "llama-chat.html")
 
 cells = []
 
@@ -1055,27 +1052,7 @@ print("📄 cleanup.txt 保存済")
 '''))
 
 # ── 書き出し ────────────────────────────────────────────────
-nb = {
-    "cells": [
-        {
-            "cell_type": t,
-            "metadata": {},
-            "source": src.splitlines(keepends=True),
-            **({"execution_count": None, "outputs": []} if t == "code" else {}),
-        }
-        for t, src in cells
-    ],
-    "metadata": {
-        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
-        "language_info": {"name": "python", "version": "3.10.0"},
-    },
-    "nbformat": 4,
-    "nbformat_minor": 5,
-}
-
-with open(OUT, "w") as f:
-    json.dump(nb, f, ensure_ascii=False, indent=1)
-print(f"wrote {OUT}: {len(cells)} cells")
+pack_nb.write(OUT, cells)
 
 # kernel-metadata.json
 meta = {
@@ -1097,6 +1074,5 @@ meta = {
     "competition_sources": [],
     "model_sources": [],
 }
-with open(OUT_DIR / "kernel-metadata.json", "w") as f:
-    json.dump(meta, f, ensure_ascii=False, indent=2)
+metadata.write(OUT_DIR / "kernel-metadata.json", meta)
 print(f"wrote {OUT_DIR / 'kernel-metadata.json'}")

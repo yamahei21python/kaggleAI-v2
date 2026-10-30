@@ -3,11 +3,15 @@
 No Kaggle Secrets required. No Dataset required (pulls from registry).
 """
 import pathlib
-import json
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from kbuild import pack_nb  # noqa: E402
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 # 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
-OUT = str(pathlib.Path(__file__).resolve().parent / "smoke" / "smoke-orcarouter-qwen38-27b.ipynb")
+OUT = str(HERE / "smoke" / "smoke-orcarouter-qwen38-27b.ipynb")
 
 cells = []
 
@@ -229,25 +233,4 @@ cells.append(("markdown", """---
 （cloudflared の quick tunnel。authtoken 不要）。
 """))
 
-nb = {
-    "cells": [
-        {
-            "cell_type": t,
-            "id": f"cell-{i:02d}",
-            "metadata": {},
-            "source": src.splitlines(keepends=True),
-            **(dict(execution_count=None, outputs=[]) if t == "code" else {}),
-        }
-        for i, (t, src) in enumerate(cells)
-    ],
-    "metadata": {
-        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
-        "language_info": {"name": "python", "version": "3.10.0"},
-    },
-    "nbformat": 4,
-    "nbformat_minor": 5,
-}
-
-with open(OUT, "w") as f:
-    json.dump(nb, f, ensure_ascii=False, indent=1)
-print(f"wrote {OUT}: {len(cells)} cells")
+pack_nb.write(OUT, cells, cell_ids=True)

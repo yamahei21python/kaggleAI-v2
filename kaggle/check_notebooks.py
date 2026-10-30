@@ -45,6 +45,9 @@ def main():
                   "（個人値で再生成したノートは不一致になります）\n")
         shutil.copytree(ROOT / "kaggle", work / "kaggle",
                         ignore=shutil.ignore_patterns("archive", "__pycache__"))
+        # ビルダーは kbuild/ を import する（kaggle/ の外にある共通層）。
+        shutil.copytree(ROOT / "kbuild", work / "kbuild",
+                        ignore=shutil.ignore_patterns("__pycache__"))
         for builder, extra, out in TARGETS:
             env = {k: v for k, v in os.environ.items() if k != "STEP2_TUNNEL"}
             env.update(extra)

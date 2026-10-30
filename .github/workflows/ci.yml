@@ -32,5 +32,7 @@ jobs:
         run: python3 kaggle/exl3-serve/_selftest_server.py
       - name: exl3 build selftest
         run: python3 kaggle/exl3-serve/_selftest_build.py
+      - name: kbuild selftest
+        run: python3 kbuild/_selftest.py
       - name: notebooks match builders
         run: python3 kaggle/check_notebooks.py

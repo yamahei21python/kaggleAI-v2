@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 """keepalive の ON/OFF + 外部受信確認用（GPU 不要・トンネル不要）"""
-import base64
-import json
 import pathlib
+import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from kbuild import embed, pack_nb  # noqa: E402
+
 OUT = str(HERE / "step2" / "step2-keepalive-test.ipynb")
 pathlib.Path(OUT).parent.mkdir(parents=True, exist_ok=True)
 
 # auth_proxy.py 全体を埋め込む
-PROXY_SRC_B64 = base64.b64encode(
-    (HERE / "step2" / "auth_proxy.py").read_bytes()
-).decode()
+PROXY_SRC_B64 = embed.b64_file(HERE / "step2" / "auth_proxy.py")
 
 # llama-chat.html を埋め込む
-CHAT_SRC_B64 = base64.b64encode(
-    (HERE.parent / "llama-chat.html").read_bytes()
-).decode()
+CHAT_SRC_B64 = embed.b64_file(HERE.parent / "llama-chat.html")
 
 
 def _b64_chunks(b64_str, size=1000):
@@ -329,24 +327,4 @@ for fname in ["keepalive_test_result.txt", "public_url.txt", "connection_info.tx
     print()
 """))
 
-nb = {
-    "cells": [
-        {
-            "cell_type": t,
-            "metadata": {},
-            "source": src.splitlines(keepends=True),
-            **({"execution_count": None, "outputs": []} if t == "code" else {}),
-        }
-        for t, src in cells
-    ],
-    "metadata": {
-        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
-        "language_info": {"name": "python", "version": "3.10.0"},
-    },
-    "nbformat": 4,
-    "nbformat_minor": 5,
-}
-
-with open(OUT, "w") as f:
-    json.dump(nb, f, ensure_ascii=False, indent=1)
-print(f"wrote {OUT}: {len(cells)} cells")
+pack_nb.write(OUT, cells)

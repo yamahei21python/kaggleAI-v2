@@ -11,8 +11,6 @@ chat_server.py / auth_proxy.py / llama-chat.html を base64 で埋め込んだ
   kernel/main.py   … GPU 版（enable_gpu true）
   dryrun/main.py   … MockEngine 版（CPU・配管テスト用）
 """
-import base64
-import json
 import pathlib
 import sys
 from string import Template
@@ -21,6 +19,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT))
 import kcconfig  # noqa: E402
+from kbuild import embed, metadata, pack_script  # noqa: E402
 
 CFG = kcconfig.load(ROOT)
 GIST_ID_DEFAULT = CFG.get("GIST_ID", "")
@@ -30,11 +29,9 @@ ALIAS = "qwen38-exl3"
 CACHE_TOKENS = 8192
 RUN_MINUTES = 60
 
-CHAT_B64 = base64.b64encode((HERE / "chat_server.py").read_bytes()).decode()
-PROXY_B64 = base64.b64encode(
-    (ROOT / "kaggle" / "step2" / "auth_proxy.py").read_bytes()
-).decode()
-HTML_B64 = base64.b64encode((ROOT / "llama-chat.html").read_bytes()).decode()
+CHAT_B64 = embed.b64_file(HERE / "chat_server.py")
+PROXY_B64 = embed.b64_file(ROOT / "kaggle" / "step2" / "auth_proxy.py")
+HTML_B64 = embed.b64_file(ROOT / "llama-chat.html")
 
 TEMPLATE = Template(r'''#!/usr/bin/env python3
 # 自動生成: kaggle/exl3-serve/build_kernel.py（直接編集しない）
@@ -610,55 +607,46 @@ if __name__ == "__main__":
 ''')
 
 
-METADATA_REAL = {
-    "id": "yamahei21python/exl3-serve",
-    "title": "EXL3 serve",
-    "code_file": "main.py",
-    "language": "python",
-    "kernel_type": "script",
-    "is_private": True,
-    "enable_gpu": True,
-    "enable_tpu": False,
-    "enable_internet": True,
-    "keywords": [],
-    "dataset_sources": [
-        "yamahei21python/qwen38-27b-uncensored-exl3-4bpw",
-        "yamahei21python/my-cloudflared-bin",
-    ],
-    "kernel_sources": [],
-    "competition_sources": [],
-    "model_sources": [],
-}
+OWNER = "yamahei21python"
+EXL3_DATASET = f"{OWNER}/qwen38-27b-uncensored-exl3-4bpw"
+CLOUDFLARED_DATASET = f"{OWNER}/my-cloudflared-bin"
 
-METADATA_DRYRUN = {
-    **METADATA_REAL,
-    "id": "yamahei21python/exl3-serve-dryrun",
-    "title": "EXL3 serve dryrun",
-    "enable_gpu": False,
-    "dataset_sources": ["yamahei21python/my-cloudflared-bin"],
-}
+METADATA_REAL = metadata.base(
+    id=f"{OWNER}/exl3-serve",
+    title="EXL3 serve",
+    code_file="main.py",
+    kernel_type="script",
+    gpu=True,
+    datasets=[EXL3_DATASET, CLOUDFLARED_DATASET],
+)
 
-METADATA_KEEPALIVE = {
-    **METADATA_REAL,
-    "id": "yamahei21python/exl3-serve-keepalive",
-    "title": "EXL3 serve keepalive",
-    "enable_gpu": False,
-    "dataset_sources": [],
-}
+METADATA_DRYRUN = metadata.base(
+    id=f"{OWNER}/exl3-serve-dryrun",
+    title="EXL3 serve dryrun",
+    code_file="main.py",
+    kernel_type="script",
+    gpu=False,
+    datasets=[CLOUDFLARED_DATASET],
+)
+
+METADATA_KEEPALIVE = metadata.base(
+    id=f"{OWNER}/exl3-serve-keepalive",
+    title="EXL3 serve keepalive",
+    code_file="main.py",
+    kernel_type="script",
+    gpu=False,
+    datasets=[],
+)
 
 
-def write(mode, out_dir, metadata, run_minutes):
-    out_dir.mkdir(parents=True, exist_ok=True)
+def write(mode, out_dir, meta, run_minutes):
     body = TEMPLATE.substitute(
         MODE=mode, ALIAS=ALIAS, CACHE_TOKENS=CACHE_TOKENS,
         RUN_MINUTES=run_minutes, CHAT_B64=CHAT_B64,
         PROXY_B64=PROXY_B64, HTML_B64=HTML_B64,
         GIST_ID=GIST_ID_DEFAULT, GIST_OWNER=GIST_OWNER,
     )
-    (out_dir / "main.py").write_text(body)
-    (out_dir / "kernel-metadata.json").write_text(
-        json.dumps(metadata, indent=2, ensure_ascii=False) + "\n")
-    print(f"wrote {out_dir}/main.py ({len(body):,} B)")
+    pack_script.write(out_dir, body, meta)
 
 
 if __name__ == "__main__":

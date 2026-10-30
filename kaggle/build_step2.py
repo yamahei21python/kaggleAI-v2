@@ -5,14 +5,13 @@
     STEP2_TUNNEL=cloudflared  (既定) → アカウント不要・URL は毎回ランダム
     STEP2_TUNNEL=ngrok                → NGROK_TOKEN 必須・NGROK_DOMAIN で固定URL可
 """
-import base64
-import json
 import os
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import kcconfig  # noqa: E402
+from kbuild import embed, metadata, pack_nb  # noqa: E402
 
 CFG = kcconfig.load()
 
@@ -35,17 +34,13 @@ pathlib.Path(OUT).parent.mkdir(parents=True, exist_ok=True)
 # Basic 認証つきリバースプロキシを notebook に埋め込む（base64）。
 # 単一のソース（kaggle/step2/auth_proxy.py）をそのまま使うので、
 # notebook 側でコードを二重管理しない。
-PROXY_SRC_B64 = base64.b64encode(
-    (HERE / "step2" / "auth_proxy.py").read_bytes()
-).decode()
+PROXY_SRC_B64 = embed.b64_file(HERE / "step2" / "auth_proxy.py")
 
 # チャット UI。proxy が / で配信する。
 # ローカル版（リポジトリ直下の llama-chat.html）をそのまま使う。
 # API の接続先は HTML 側が自動判定する（?api= → ?port= → 同一オリジン）
 # ので、ローカルでも Kaggle 中継でも同じファイルが動く。
-CHAT_SRC_B64 = base64.b64encode(
-    (HERE.parent / "llama-chat.html").read_bytes()
-).decode()
+CHAT_SRC_B64 = embed.b64_file(HERE.parent / "llama-chat.html")
 
 # 定数だけのコードセルは kaggle/step2/cells/*.py に実ファイルとして置く
 # （ruff などで構文チェックできるように）。f-string で値を埋め込むセルはここに残す。
@@ -535,27 +530,7 @@ cat out/verify_result.txt out/connection_info.txt
 cells.append(("code", _cell("08_keepalive.py")))
 
 # ── 書き出し ────────────────────────────────────────────────
-nb = {
-    "cells": [
-        {
-            "cell_type": t,
-            "metadata": {},
-            "source": src.splitlines(keepends=True),
-            **({"execution_count": None, "outputs": []} if t == "code" else {}),
-        }
-        for t, src in cells
-    ],
-    "metadata": {
-        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
-        "language_info": {"name": "python", "version": "3.10.0"},
-    },
-    "nbformat": 4,
-    "nbformat_minor": 5,
-}
-
-with open(OUT, "w") as f:
-    json.dump(nb, f, ensure_ascii=False, indent=1)
-print(f"wrote {OUT}: {len(cells)} cells")
+pack_nb.write(OUT, cells)
 
 # ── kernel-metadata.json（push 用）────────────────────────────
 # トンネルごとに別 kernel として push できるよう、id と sources を切り替える。
@@ -583,6 +558,5 @@ meta = {
     "model_sources": [],
 }
 meta_path = pathlib.Path(OUT).with_name("kernel-metadata.json")
-with open(meta_path, "w") as f:
-    json.dump(meta, f, ensure_ascii=False, indent=2)
+metadata.write(meta_path, meta)
 print(f"wrote {meta_path}")

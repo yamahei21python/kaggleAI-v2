@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Step1 notebook builder: orcarouter/Qwen3.8-27B-Uncensored -> Kaggle Dataset"""
 import pathlib
-import json
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from kbuild import pack_nb  # noqa: E402
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 DATASET_SLUG = "my-ollama-orcarouter-qwen38-27b"
 # 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
-OUT = str(pathlib.Path(__file__).resolve().parent / "step1" / "step1-orcarouter-qwen38-27b-dl.ipynb")
+OUT = str(HERE / "step1" / "step1-orcarouter-qwen38-27b-dl.ipynb")
 
 cells = []
 
@@ -187,24 +191,4 @@ cells.append(("markdown", f"""---
 > `kaggle datasets version -p <dir> -m "message" --dir-mode zip` を使います。
 """))
 
-nb = {
-    "cells": [
-        {
-            "cell_type": t,
-            "metadata": {},
-            "source": src.splitlines(keepends=True),
-            **({"execution_count": None, "outputs": []} if t == "code" else {}),
-        }
-        for t, src in cells
-    ],
-    "metadata": {
-        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
-        "language_info": {"name": "python", "version": "3.10.0"},
-    },
-    "nbformat": 4,
-    "nbformat_minor": 5,
-}
-
-with open(OUT, "w") as f:
-    json.dump(nb, f, ensure_ascii=False, indent=1)
-print(f"wrote {OUT}: {len(cells)} cells")
+pack_nb.write(OUT, cells)

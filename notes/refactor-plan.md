@@ -177,6 +177,9 @@ Template）。`runtime/` を真実源にして base64 埋め込みする方式�
    `build_step2.py` の共通部分から。proxy / トンネル / keepalive / verify を
    `runtime/` の真実源に寄せ、各ビルダーは base64 埋め込みで参照する。まず
    exl3-serve を移行し、生成物が旧ビルダーとバイト一致することを確認。
+   - 進捗: 梱包層 `kbuild/`（`embed` / `metadata` / `pack_nb` / `pack_script`）を
+     抽出。exl3（byte 一致）、step2、direct、step1、smoke、bench、bench_mtp、
+     keepalive を移行済み。vLLM 系（prebuilt cells）と生成コードの一元化は未着手。
 3. **`build_step2.py`**（cells 外部化済みで最も楽）→ **`build_step2_direct.py`**。
    生成物は AST + 正規化一致で比較（byte 一致は exl3 のみ）。
 4. **`build_vllm_dataset.py` → `build_vllm_dryrun.py`**
