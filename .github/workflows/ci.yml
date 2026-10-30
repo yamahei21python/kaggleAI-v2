@@ -26,3 +26,9 @@ jobs:
         run: for f in run-ai.command run-kaggle-chat.command run-llama-server.command run-uzu-server.command lib/launcher-common.zsh; do zsh -n "$f"; done
       - name: pytest (runtime / kbuild / step2 / exl3 / notebooks)
         run: python3 -m pytest tests -q
+      - name: generate exl3 outputs
+        run: python3 kaggle/exl3-serve/build_kernel.py
+      - name: ruff (generated exl3 outputs)
+        run: ruff check --no-respect-gitignore kaggle/exl3-serve/kernel kaggle/exl3-serve/dryrun kaggle/exl3-serve/keepalive
+      - name: compile generated exl3 outputs
+        run: python3 -m compileall -q kaggle/exl3-serve/kernel kaggle/exl3-serve/dryrun kaggle/exl3-serve/keepalive

@@ -326,7 +326,8 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
    コード中の `get_secret("...")` と突き合わせる。
 8. **CI と実行環境の差** — `ruff.toml` は `target-version = "py310"`、
    Kaggle は 3.13。生成物（`main.py`）は untracked で CI の対象外。
-   → 生成物を `compileall` + ruff に掛ける段を追加。
+   → 生成物を `compileall` + ruff に掛ける段を追加。**完了**（GitHub CI と
+   ci-cpu の双方で、生成後に `ruff --no-respect-gitignore` と `compileall`）。
 9. **生成コードのテストが notebook だけ** — `_selftest_builder.py` は
    notebook から AST で関数を抜いて exec するが、script 系（exl3）は
    今回手動で 3 回走らせただけ。Mock で 20 秒の実行テストを追加。

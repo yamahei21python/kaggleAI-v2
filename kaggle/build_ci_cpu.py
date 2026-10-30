@@ -88,6 +88,11 @@ def main():
         steps += [
             ("exl3-generate",
              [sys.executable, "kaggle/exl3-serve/build_kernel.py"]),
+            ("ruff-generated",
+             [sys.executable, "-m", "ruff", "check", "--no-respect-gitignore",
+              "kaggle/exl3-serve/kernel",
+              "kaggle/exl3-serve/dryrun",
+              "kaggle/exl3-serve/keepalive"]),
             ("compileall", [sys.executable, "-m", "compileall", "-q",
                             "kaggle/exl3-serve/kernel",
                             "kaggle/exl3-serve/dryrun",
