@@ -8,6 +8,7 @@
   - runtime の共通層が埋め込まれている
 """
 import ast
+import base64
 import hashlib
 import pathlib
 import sys
@@ -60,6 +61,9 @@ def test_exl3_build():
                 check(f"def {fn}" in body, f"{mode}: runtime の {fn} が無い")
             check("releases/latest" not in body,
                   f"{mode}: cloudflared の URL が latest のまま")
+            proxy_src = base64.b64decode(bk.PROXY_B64).decode()
+            check("def kc_fetch_quota" in proxy_src,
+                  f"{mode}: 埋め込み proxy に quota 実装が無い")
             check("kc_start_proxy(" in body, f"{mode}: proxy 起動が共通層に寄っていない")
             check("kc_stop_via_proxy(" in body, f"{mode}: /stop が共通層に寄っていない")
             check("kc_write_conf(" in body, f"{mode}: conf 書き込みが共通層に寄っていない")

@@ -21,7 +21,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from kbuild import embed, metadata, pack_nb  # noqa: E402
-from runtime import source_bundle  # noqa: E402
+from runtime import proxy_source, source_bundle  # noqa: E402
 
 OWNER = "yamahei21python"
 DATASET_SLUG = "qwen38-27b-uncensored-hauhaucs-awq-mtp"
@@ -33,7 +33,8 @@ OUT_DIR = HERE / "step2-vllm-dryrun"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 OUT = OUT_DIR / f"{SLUG}.ipynb"
 
-PROXY_SRC_B64 = embed.b64_file(HERE / "step2" / "auth_proxy.py")
+PROXY_SRC_B64 = embed.b64_text(
+    proxy_source(HERE / "step2" / "auth_proxy.py"))
 CHAT_SRC_B64 = embed.b64_file(HERE.parent / "llama-chat.html")
 
 cells = []

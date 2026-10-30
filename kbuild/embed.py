@@ -9,3 +9,7 @@ def b64_bytes(data: bytes) -> str:
 
 def b64_file(path) -> str:
     return b64_bytes(pathlib.Path(path).read_bytes())
+
+
+def b64_text(text: str) -> str:
+    return b64_bytes(text.encode("utf-8"))

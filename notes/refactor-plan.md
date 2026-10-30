@@ -311,7 +311,10 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 ### P1: 重複・再現性・検証
 
 5. **クォータ API の実装が 2 つ** — `kaggle-quota.py:21,103` と
-   `auth_proxy.py:61,304`。`runtime/quota.py` に一本化。
+   `auth_proxy.py:61,304`。`runtime/quota.py` に一本化。**完了**
+   （`kc_kaggle_credentials` / `kc_fetch_quota` / `kc_quota_summary`。
+   proxy はカーネル上で単一ファイルのため、ビルダーが `runtime.proxy_source()`
+   で quota ソースを先頭に同梱する。CLI は `runtime.quota` を直接 import）。
 6. **定数の分散** — ポート番号（9931 / 11435 / 19950 / 8899）が 42 箇所、
    cloudflared の `releases/latest` が 9 箇所。後者はバージョン固定しないと
    再現性がない。→ `runtime/constants.py` と `CLOUDFLARED_VERSION`。

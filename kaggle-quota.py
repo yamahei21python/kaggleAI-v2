@@ -10,35 +10,30 @@ Web API の /api/v1/kernels/quota は Basic 認証で読める。
 """
 
 import argparse
-import base64
 import json
-import os
+import pathlib
 import sys
 import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 
-API = "https://www.kaggle.com/api/v1/kernels/quota"
-CRED = os.path.expanduser("~/.kaggle/kaggle.json")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from runtime import quota  # noqa: E402
+
+CRED = quota.KC_CRED_PATH
 
 
-def auth_header():
-    if not os.path.isfile(CRED):
+def credentials():
+    user, key = quota.kc_kaggle_credentials()
+    if not user:
         sys.exit(f"認証情報がありません: {CRED}\n"
                  "Kaggle の Account から kaggle.json を取得してください。")
-    with open(CRED) as f:
-        cfg = json.load(f)
-    token = base64.b64encode(
-        f"{cfg['username']}:{cfg['key']}".encode()
-    ).decode()
-    return "Basic " + token
+    return user, key
 
 
 def fetch():
-    req = urllib.request.Request(API, headers={"Authorization": auth_header()})
+    user, key = credentials()
     try:
-        with urllib.request.urlopen(req, timeout=45) as r:
-            return json.loads(r.read())
+        return quota.kc_fetch_quota(user, key, timeout=45)
     except urllib.error.HTTPError as e:
         sys.exit(f"HTTP {e.code}: {e.reason}")
     except urllib.error.URLError as e:

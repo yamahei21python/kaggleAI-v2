@@ -16,6 +16,7 @@ MODULES = {
     "storage": "storage.py",
     "keepalive": "keepalive.py",
     "proxy": "proxy.py",
+    "quota": "quota.py",
     "ollama": "engines/ollama.py",
 }
 
@@ -35,3 +36,16 @@ def source_bundle(*names):
         parts.append(f"# ── runtime/{rel} " + "─" * max(0, 46 - len(rel)) + "\n")
         parts.append((HERE / rel).read_text(encoding="utf-8").rstrip() + "\n\n")
     return "".join(parts)
+
+
+def proxy_source(path):
+    """auth_proxy.py を単体実行できる形にする。
+
+    proxy はカーネル上で単一ファイルとして走るため import できない。
+    クォータ実装（runtime/quota.py）を先頭に同梱し、proxy 側は
+    kc_* が未定義のときだけローカルの runtime を import する。
+    """
+    quota = (HERE / MODULES["quota"]).read_text(encoding="utf-8").rstrip()
+    body = pathlib.Path(path).read_text(encoding="utf-8")
+    return (f"# ── runtime/{MODULES['quota']}（auth_proxy.py に同梱）\n"
+            f"{quota}\n\n{body}")

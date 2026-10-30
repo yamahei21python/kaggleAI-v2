@@ -1,4 +1,5 @@
 """runtime/ の CPU 単体テスト（Kaggle セッション不要）。"""
+import base64
 import http.server
 import json
 import pathlib
@@ -13,7 +14,7 @@ import urllib.error
 import urllib.request
 
 import runtime
-from runtime import keepalive, net, proc, storage
+from runtime import keepalive, net, proc, quota, storage
 
 
 def check(name, cond, detail=""):
@@ -38,6 +39,16 @@ def test_bundle():
     except SyntaxError as e:
         check("連結セルがコンパイルできる", False, str(e))
     check("未知のモジュール名は KeyError", _raises(lambda: runtime.source_bundle("nope"), KeyError))
+
+    root = pathlib.Path(runtime.__file__).resolve().parent.parent
+    psrc = runtime.proxy_source(root / "kaggle" / "step2" / "auth_proxy.py")
+    check("proxy_source に quota 実装が同梱",
+          "def kc_fetch_quota" in psrc and "def main(" in psrc)
+    try:
+        compile(psrc, "<proxy>", "exec")
+        check("同梱 proxy がコンパイルできる", True)
+    except SyntaxError as e:
+        check("同梱 proxy がコンパイルできる", False, str(e))
 
 
 def _raises(fn, exc):
@@ -174,6 +185,68 @@ def test_net():
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# --------------------------------------------------------------------------
+# quota
+# --------------------------------------------------------------------------
+def test_quota():
+    print("\n=== quota（Kaggle API） ===")
+    d = pathlib.Path(tempfile.mkdtemp(prefix="rt_q_"))
+    cred = d / "kaggle.json"
+    check("資格情報なし → (None, None)",
+          quota.kc_kaggle_credentials(str(d / "none"), {}) == (None, None))
+    cred.write_text(json.dumps({"username": "u", "key": "k"}))
+    check("kaggle.json から読む",
+          quota.kc_kaggle_credentials(str(cred), {}) == ("u", "k"))
+    check("環境変数フォールバック",
+          quota.kc_kaggle_credentials(
+              str(d / "none"),
+              {"KAGGLE_USERNAME": "eu", "KAGGLE_KEY": "ek"}) == ("eu", "ek"))
+    cred.write_text("{}")
+    check("空の kaggle.json は env へ",
+          quota.kc_kaggle_credentials(
+              str(cred),
+              {"KAGGLE_USER": "gu", "KAGGLE_KEY": "gk"}) == ("gu", "gk"))
+
+    seen = {}
+    raw = json.dumps({
+        "gpuQuota": {
+            "timeUsed": {"seconds": 100},
+            "totalTimeAllowed": {"seconds": 1800},
+            "timeReserved": {"seconds": 50},
+        },
+        "quotaRefreshTime": "2026-11-01T00:00:00Z",
+    }).encode()
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return raw
+
+    def _open(req, timeout=0):
+        seen["url"] = req.full_url
+        seen["auth"] = req.get_header("Authorization")
+        seen["timeout"] = timeout
+        return _Resp()
+
+    data = quota.kc_fetch_quota("u", "k", timeout=7, opener=_open)
+    check("API URL / Basic 認証 / timeout",
+          seen["url"] == quota.KC_QUOTA_URL
+          and seen["auth"] == "Basic " + base64.b64encode(b"u:k").decode()
+          and seen["timeout"] == 7, str(seen))
+    s = quota.kc_quota_summary(data)
+    check("要約（残り = 上限 - 使用 - 予約）",
+          s["available"] and s["leftSeconds"] == 1650
+          and s["refreshTime"] == "2026-11-01T00:00:00Z", str(s))
+    check("gpuQuota 無しは available=False",
+          quota.kc_quota_summary({})["available"] is False)
+    shutil.rmtree(d, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------

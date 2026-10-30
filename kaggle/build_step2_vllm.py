@@ -30,7 +30,7 @@ IS_NGROK = TUNNEL == "ngrok"
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from kbuild import embed, metadata, pack_nb  # noqa: E402
-from runtime import source_bundle  # noqa: E402
+from runtime import proxy_source, source_bundle  # noqa: E402
 # prepare-vllm-dataset.ipynb / kernel-metadata.json と同じディレクトリに置くと
 # メタデータが衝突するので、kernel 用は専用ディレクトリへ分ける。
 # トンネルごとにディレクトリを分ける。kernel-metadata.json は push 時の
@@ -40,7 +40,8 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 OUT = OUT_DIR / f"step2-vllm-qwen38-27b-{TUNNEL}.ipynb"
 
 # 単一ソース（kaggle/step2/*）をそのまま埋め込む。notebook 側で二重管理しない。
-PROXY_SRC_B64 = embed.b64_file(HERE / "step2" / "auth_proxy.py")
+PROXY_SRC_B64 = embed.b64_text(
+    proxy_source(HERE / "step2" / "auth_proxy.py"))
 CHAT_SRC_B64 = embed.b64_file(HERE.parent / "llama-chat.html")
 
 cells = []

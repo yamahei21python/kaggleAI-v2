@@ -25,7 +25,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 from kbuild import embed, metadata, pack_nb  # noqa: E402
-from runtime import source_bundle  # noqa: E402
+from runtime import proxy_source, source_bundle  # noqa: E402
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 DATASET = "my-ollama-orcarouter-qwen38-27b"
@@ -43,7 +43,8 @@ OUT_DIR = HERE / ("step2-direct-ngrok" if IS_NGROK else "step2-direct")
 OUT_DIR.mkdir(exist_ok=True)
 OUT = OUT_DIR / f"step2-direct-{TUNNEL}.ipynb"
 
-PROXY_SRC_B64 = embed.b64_file(HERE / "step2" / "auth_proxy.py")
+PROXY_SRC_B64 = embed.b64_text(
+    proxy_source(HERE / "step2" / "auth_proxy.py"))
 CHAT_SRC_B64 = embed.b64_file(ROOT / "llama-chat.html")
 
 cells = []

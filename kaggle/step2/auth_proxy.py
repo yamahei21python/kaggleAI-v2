@@ -17,6 +17,7 @@ import hmac
 import http.server
 import json
 import os
+import pathlib
 import signal
 import socketserver
 import sys
@@ -56,30 +57,14 @@ GENERATION_PATHS = {
     "/v1/responses",
 }
 
-# Kaggle のクォータ API。kaggle CLI には quota サブコマンドが無いが、
-# Web API は Basic 認証で読める（実測 2026-10-28）。
-KAGGLE_QUOTA_URL = "https://www.kaggle.com/api/v1/kernels/quota"
-KAGGLE_CRED = os.path.expanduser("~/.kaggle/kaggle.json")
-
-
-def _kaggle_credentials():
-    """(username, key) を返す。kaggle.json → 環境変数の順。
-
-    Kaggle カーネルには ~/.kaggle/kaggle.json が無いが、
-    KAGGLE_USERNAME / KAGGLE_KEY が環境変数で入っている。
-    """
-    if os.path.isfile(KAGGLE_CRED):
-        try:
-            with open(KAGGLE_CRED) as f:
-                cfg = json.load(f)
-            user, key = cfg.get("username"), cfg.get("key")
-            if user and key:
-                return user, key
-        except Exception:
-            pass
-    user = os.environ.get("KAGGLE_USERNAME") or os.environ.get("KAGGLE_USER")
-    key = os.environ.get("KAGGLE_KEY")
-    return (user, key) if user and key else (None, None)
+# クォータ実装は runtime/quota.py が真実源。カーネルではビルダーが同ソースを
+# 先頭に連結して埋め込むため、kc_* が未定義のローカル実行だけ import する。
+if "kc_fetch_quota" not in globals():
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    from runtime import quota as _kc_quota
+    kc_fetch_quota = _kc_quota.kc_fetch_quota
+    kc_quota_summary = _kc_quota.kc_quota_summary
+    kc_kaggle_credentials = _kc_quota.kc_kaggle_credentials
 
 HOP_BY_HOP = {
     "connection",
@@ -309,27 +294,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         try:
-            user, key = _kaggle_credentials()
+            user, key = kc_kaggle_credentials()
             if user and key:
-                token = base64.b64encode(f"{user}:{key}".encode()).decode()
-                req = urllib.request.Request(
-                    KAGGLE_QUOTA_URL,
-                    headers={"Authorization": "Basic " + token},
-                )
-                with urllib.request.urlopen(req, timeout=15) as r:
-                    d = json.loads(r.read())
-                g = d["gpuQuota"]
-                used = g["timeUsed"]["seconds"]
-                total = g["totalTimeAllowed"]["seconds"]
-                reserved = g.get("timeReserved", {}).get("seconds", 0)
-                payload = {
-                    "available": True,
-                    "usedSeconds": used,
-                    "totalSeconds": total,
-                    "reservedSeconds": reserved,
-                    "leftSeconds": total - used - reserved,
-                    "refreshTime": d.get("quotaRefreshTime", ""),
-                }
+                payload = kc_quota_summary(
+                    kc_fetch_quota(user, key, timeout=15))
         except Exception as e:
             payload = {"available": False, "error": type(e).__name__}
 

@@ -6,13 +6,14 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from kbuild import embed, pack_nb  # noqa: E402
-from runtime import source_bundle  # noqa: E402
+from runtime import proxy_source, source_bundle  # noqa: E402
 
 OUT = str(HERE / "step2" / "step2-keepalive-test.ipynb")
 pathlib.Path(OUT).parent.mkdir(parents=True, exist_ok=True)
 
 # auth_proxy.py 全体を埋め込む
-PROXY_SRC_B64 = embed.b64_file(HERE / "step2" / "auth_proxy.py")
+PROXY_SRC_B64 = embed.b64_text(
+    proxy_source(HERE / "step2" / "auth_proxy.py"))
 
 # llama-chat.html を埋め込む
 CHAT_SRC_B64 = embed.b64_file(HERE.parent / "llama-chat.html")

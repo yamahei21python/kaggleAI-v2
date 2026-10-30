@@ -30,6 +30,9 @@ import urllib.error
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from runtime import proxy_source  # noqa: E402
+
 KAGGLE = ROOT / "kaggle"
 NB = KAGGLE / "step2" / "step2-orcarouter-qwen38-27b-cloudflared.ipynb"
 # vLLM 版（別ビルダー）にも同じ proxy を埋め込む。片方だけ再生成すると
@@ -122,9 +125,12 @@ time.sleep(0.6)
 
 import base64 as _b64
 RESTORED.write_bytes(_b64.b64decode(b64))
-same = RESTORED.read_bytes() == SRC.read_bytes()
-check("notebook埋め込み == auth_proxy.py", same,
+EXPECTED = proxy_source(SRC).encode()
+same = RESTORED.read_bytes() == EXPECTED
+check("notebook埋め込み == auth_proxy.py + runtime/quota.py", same,
       f"{len(RESTORED.read_bytes())} B")
+check("埋め込み proxy にクォータ実装が入っている",
+      b"def kc_fetch_quota" in RESTORED.read_bytes())
 
 # チャット UI も同じく埋め込み。片方だけ更新すると UI が古いまま配信される
 # （proxy は動くので気づきにくい）。
@@ -138,10 +144,10 @@ check("notebook埋め込み == llama-chat.html", chat_ok,
 # vLLM 版も同じ内容でなければならない（再生成漏れの検出）。
 if NB_VLLM.is_file():
     _p2 = _embedded(NB_VLLM, "PROXY_SRC_B64")
-    check("vLLM notebook 埋め込み == auth_proxy.py",
-          bool(_p2) and _b64.b64decode(_p2) == SRC.read_bytes(),
+    check("vLLM notebook 埋め込み == auth_proxy.py + runtime/quota.py",
+          bool(_p2) and _b64.b64decode(_p2) == EXPECTED,
           "embed 無し" if not _p2 else
-          ("一致" if _b64.b64decode(_p2) == SRC.read_bytes()
+          ("一致" if _b64.b64decode(_p2) == EXPECTED
            else f"不一致 {len(_b64.b64decode(_p2))} B → build_step2_vllm.py 再生成"))
     _c2 = _embedded(NB_VLLM, "CHAT_SRC_B64")
     check("vLLM notebook 埋め込み == llama-chat.html",

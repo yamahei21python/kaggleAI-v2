@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import kcconfig  # noqa: E402
 from kbuild import embed, metadata, pack_nb  # noqa: E402
-from runtime import source_bundle  # noqa: E402
+from runtime import proxy_source, source_bundle  # noqa: E402
 
 CFG = kcconfig.load()
 
@@ -35,7 +35,8 @@ pathlib.Path(OUT).parent.mkdir(parents=True, exist_ok=True)
 # Basic 認証つきリバースプロキシを notebook に埋め込む（base64）。
 # 単一のソース（kaggle/step2/auth_proxy.py）をそのまま使うので、
 # notebook 側でコードを二重管理しない。
-PROXY_SRC_B64 = embed.b64_file(HERE / "step2" / "auth_proxy.py")
+PROXY_SRC_B64 = embed.b64_text(
+    proxy_source(HERE / "step2" / "auth_proxy.py"))
 
 # チャット UI。proxy が / で配信する。
 # ローカル版（リポジトリ直下の llama-chat.html）をそのまま使う。

@@ -20,7 +20,7 @@ ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT))
 import kcconfig  # noqa: E402
 from kbuild import embed, metadata, pack_script  # noqa: E402
-from runtime import source_bundle  # noqa: E402
+from runtime import proxy_source, source_bundle  # noqa: E402
 
 CFG = kcconfig.load(ROOT)
 GIST_ID_DEFAULT = CFG.get("GIST_ID", "")
@@ -31,7 +31,8 @@ CACHE_TOKENS = 8192
 RUN_MINUTES = 60
 
 CHAT_B64 = embed.b64_file(HERE / "chat_server.py")
-PROXY_B64 = embed.b64_file(ROOT / "kaggle" / "step2" / "auth_proxy.py")
+PROXY_B64 = embed.b64_text(
+    proxy_source(ROOT / "kaggle" / "step2" / "auth_proxy.py"))
 HTML_B64 = embed.b64_file(ROOT / "llama-chat.html")
 # proxy 起動・tunnel URL 待ち・keepalive conf は runtime/ の真実源を使う。
 RUNTIME = source_bundle("net", "proc", "keepalive", "proxy")
