@@ -10,6 +10,10 @@ kaggle-dataset/
 kaggle-dataset-*/
 .DS_Store
 kaggle/wheelhouse-files/
+# exl3 の生成物（build_kernel.py が出力）
+kaggle/exl3-serve/kernel/
+kaggle/exl3-serve/dryrun/
+kaggle/exl3-serve/keepalive/
 __pycache__/
 config.local.env
 .ruff_cache/
