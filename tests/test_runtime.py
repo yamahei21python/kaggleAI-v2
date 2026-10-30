@@ -1,8 +1,4 @@
-#!/usr/bin/env python3
-"""runtime/ の CPU 単体テスト（Kaggle セッション不要）。
-
-    python3 runtime/_selftest.py
-"""
+"""runtime/ の CPU 単体テスト（Kaggle セッション不要）。"""
 import http.server
 import json
 import pathlib
@@ -16,19 +12,12 @@ import time
 import urllib.error
 import urllib.request
 
-HERE = pathlib.Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))
-
-import runtime  # noqa: E402
-from runtime import keepalive, net, proc, storage  # noqa: E402
-
-FAILS = []
+import runtime
+from runtime import keepalive, net, proc, storage
 
 
 def check(name, cond, detail=""):
-    print(("  ✅ " if cond else "  ❌ ") + name + (f" — {detail}" if detail else ""))
-    if not cond:
-        FAILS.append(name)
+    assert cond, name + (f" — {detail}" if detail else "")
 
 
 # --------------------------------------------------------------------------
@@ -40,7 +29,7 @@ def test_bundle():
     for fn in ("def kc_probe_url", "def kc_proc_state", "def kc_save_output",
                "def kc_read_conf", "def kc_start_proxy", "def kc_unload_model",
                "def kc_detect_gpu", "def kc_wait_gpu_idle", "def kc_ollama_chat",
-               "def kc_keepalive_deadline"):
+               "def kc_keepalive_deadline", "def kc_keepalive_expired"):
         check(f"{fn} が含まれる", fn in src)
     try:
         compile(src, "<bundle>", "exec")
@@ -244,6 +233,13 @@ def test_keepalive():
     check("締切: conf 更新で延長", dl(0, 5, 100) == 400)
     check("締切: hard_max で頭打ち", dl(0, 999, 500, hard_max_minutes=180) == 10800)
     check("締切: 古い mtime では縮まない", dl(100, 1, 50) == 160)
+
+    # フェイククロック: now を明示して予算判定を検証する
+    ex = keepalive.kc_keepalive_expired
+    check("予算: 299 秒は未超過", not ex(299, 0, 5, None))
+    check("予算: 300 秒で超過", ex(300, 0, 5, None))
+    check("予算: conf 更新後は延長", not ex(350, 0, 5, 100) and ex(400, 0, 5, 100))
+    check("予算: hard_max を超えない", ex(10800, 0, 999, 500))
     shutil.rmtree(d, ignore_errors=True)
 
 
@@ -360,20 +356,3 @@ def test_proxy():
     finally:
         srv.shutdown()
         srv.server_close()
-
-
-if __name__ == "__main__":
-    test_bundle()
-    test_net()
-    test_storage()
-    test_keepalive()
-    test_proc()
-    test_ollama()
-    test_proxy()
-    print()
-    if FAILS:
-        print(f"結果: {len(FAILS)} 件失敗")
-        for f in FAILS:
-            print("  -", f)
-        sys.exit(1)
-    print("結果: 全テスト パス")

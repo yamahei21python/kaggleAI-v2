@@ -448,9 +448,8 @@ def loop(procs):
             run, minutes, mtime = read_conf()
             if run == 0:
                 return "stop"
-            deadline = kc_keepalive_deadline(started, minutes, mtime,
-                                             HARD_MAX_MINUTES)
-            if time.time() >= deadline:
+            if kc_keepalive_expired(time.time(), started, minutes, mtime,
+                                    HARD_MAX_MINUTES):
                 return "budget"
         for name, p in procs.items():
             if p.poll() is not None:

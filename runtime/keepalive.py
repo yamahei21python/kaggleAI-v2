@@ -63,6 +63,12 @@ def kc_keepalive_deadline(started, minutes, mtime, hard_max_minutes=180):
     return min(last + minutes * 60, started + hard_max_minutes * 60)
 
 
+def kc_keepalive_expired(now, started, minutes, mtime, hard_max_minutes=180):
+    """now 時点で時間予算を超えたか（now を渡すのでフェイククロックで検証できる）。"""
+    return now >= kc_keepalive_deadline(started, minutes, mtime,
+                                        hard_max_minutes)
+
+
 def kc_stop_via_proxy(port, auth=None, timeout=30):
     headers = {"X-Kc-Stop": "1"}
     if auth:

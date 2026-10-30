@@ -209,6 +209,11 @@ Template）。`runtime/` を真実源にして base64 埋め込みする方式�
      keepalive conf / `/stop` / GPU 検出 / 締切計算を `kc_*` 呼び出しへ置換し、
      `kc_start_proxy` に interpreter 指定（`python=`）を追加。exl3 の
      `_selftest_build` は埋め込み関数の存在と AST 構文を検証する。
+   - 進捗 7b: `_selftest_*.py` を `tests/` の pytest へ移設（runtime / kbuild /
+     step2 builder / exl3 ×2 / notebook 一致）。proxy の統合テストは
+     pkill・atexit を含むため子プロセスで実行する。keepalive の時間予算は
+     `kc_keepalive_deadline` / `kc_keepalive_expired` に純関数化し、`now` を
+     渡すフェイククロックで検証する。CI と ci-cpu カーネルは `pytest tests` に切替。
 
 ## CPU 検証（無料・各段の受け入れ条件）
 
@@ -225,7 +230,7 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 | 3 step2 / direct | 同上 + `check_notebooks.py` 相当 | **AST + 正規化一致**（byte 一致は exl3 のみ） |
 | 4 vllm dataset / dryrun | データセット除外パターン（`.cache/` `*.lock`）のテスト、MANIFEST 生成 | 生成物一致・除外が効く |
 | 5 vllm 本体 | **引数組み立ての純関数テスト**（起動ラダーの各段を表駆動で）、`--help` 出力のパーサ | ラダー分岐が全ケース通る（実起動は GPU で） |
-| 6/7 テスト移設 | pytest 一式 + CI 追加、keepalive はフェイククロック | CI green |
+| 6/7 テスト移設 | pytest 一式 + CI 追加、keepalive はフェイククロック | CI green（完了） |
 
 ### リファクタ後に必ず走らせる CPU テスト（既存資産の拡張）
 

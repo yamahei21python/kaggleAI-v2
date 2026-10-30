@@ -5,6 +5,7 @@
   - API パスワードが result / ログに入らない（P0）
   - Gist 配布のコードと既定値が埋まっている（P0）
   - 認証有効のプロキシを起動している（--no-quota を渡さない）
+  - runtime の共通層が埋め込まれている
 """
 import ast
 import hashlib
@@ -12,7 +13,8 @@ import pathlib
 import sys
 import tempfile
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "kaggle" / "exl3-serve"))
 import build_kernel as bk  # noqa: E402
 
 MODES = [
@@ -31,7 +33,7 @@ def digest(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def main():
+def test_exl3_build():
     with tempfile.TemporaryDirectory(prefix="kc-exl3build-") as tmp:
         root = pathlib.Path(tmp)
         for mode, meta, minutes in MODES:
@@ -53,7 +55,7 @@ def main():
             # runtime/ の共通層を埋め込んでいる（exl3 側に実装を残さない）
             for fn in ("kc_detect_gpu", "kc_start_proxy", "kc_wait_url",
                        "kc_wait_http", "kc_read_conf", "kc_write_conf",
-                       "kc_stop_via_proxy", "kc_keepalive_deadline"):
+                       "kc_stop_via_proxy", "kc_keepalive_expired"):
                 check(f"def {fn}" in body, f"{mode}: runtime の {fn} が無い")
             check("kc_start_proxy(" in body, f"{mode}: proxy 起動が共通層に寄っていない")
             check("kc_stop_via_proxy(" in body, f"{mode}: /stop が共通層に寄っていない")
@@ -64,13 +66,3 @@ def main():
             bk.write(mode, again, meta, minutes)
             check(digest(out / "main.py") == digest(again / "main.py"),
                   f"{mode}: 再生成が決定的でない")
-
-    print("OK: exl3 build selftest")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except AssertionError as e:
-        print(f"FAIL: {e}", file=sys.stderr)
-        sys.exit(1)

@@ -65,7 +65,7 @@ id に紐づく）。ここでは「どれが現役で、どのビルダーが�
 
 対象外（理由）:
 
-- `exl3-serve/*` … script 方式。`_selftest_build.py` がバイト一致を確認。
+- `exl3-serve/*` … script 方式。`tests/test_exl3_build.py` が決定性と埋め込みを確認。
 - ビルダー無しの script 4 本 … 生成物ではなくソースそのもの。
 - 退役 2 本 … 再生成の対象外。
 

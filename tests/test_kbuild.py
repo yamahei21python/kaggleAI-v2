@@ -1,12 +1,9 @@
-#!/usr/bin/env python3
 """kbuild の梱包層の自己テスト（CPU のみ）。"""
 import json
 import pathlib
-import sys
 import tempfile
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from kbuild import embed, metadata, pack_nb, pack_script  # noqa: E402
+from kbuild import embed, metadata, pack_nb, pack_script
 
 
 def check(cond, msg):
@@ -14,7 +11,7 @@ def check(cond, msg):
         raise AssertionError(msg)
 
 
-def main():
+def test_kbuild():
     # title → slug 検査
     check(metadata.slugify("Step2 direct llama-server ngrok")
           == "step2-direct-llama-server-ngrok", "slugify")
@@ -68,9 +65,3 @@ def main():
         import base64
         check(base64.b64decode(embed.b64_file(blob)) == bytes(range(256)),
               "base64 往復")
-
-    print("OK: kbuild selftest")
-
-
-if __name__ == "__main__":
-    main()

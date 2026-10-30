@@ -7,7 +7,7 @@ exllamav3 の Generator を 1 本のロックで直列化し、llama-server と�
 
 exllamav3 と torch は Exl3Engine の生成時にだけ import するので、
 モック Engine を渡せば CPU でもサーバ部分を自己テストできる
-（`_selftest_server.py`）。
+（`tests/test_exl3_server.py`）。
 """
 import json
 import threading

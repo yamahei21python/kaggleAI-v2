@@ -94,6 +94,9 @@ kaggleAI/
 ├── config.env                                  # ngrok ドメイン / Gist / slug / ポートの共通設定
 │                                               # （config.local.env を置くと上書き。gitignore 済み）
 ├── kcconfig.py                                 # config.env を Python から読む
+├── runtime/                                    # 生成コードの真実源（proxy / tunnel / keepalive / proc）
+├── kbuild/                                     # notebook / script の梱包層（embed / metadata / pack）
+├── tests/                                      # pytest（CPU のみ・Kaggle 不要）
 ├── lib/launcher-common.zsh                     # run-kaggle-chat / run-ai の共通処理
 ├── kaggle-dataset-orcarouter/                  # Dataset キャッシュ（モデル本体）
 │   ├── dataset-metadata.json
@@ -115,8 +118,6 @@ kaggleAI/
     ├── step2/                                  # Step2: Ollama + cloudflared 公開
     │   ├── kernel-metadata.json
     │   ├── auth_proxy.py                       # リバースプロキシ + UI配信（base64 埋め込み）
-    │   ├── _selftest_proxy.py                  # プロキシ自己テスト
-    │   ├── _selftest_builder.py                # ノート内関数の自己テスト
     │   ├── cells/                              # build_step2.py のコードセル（定数のもの）
     │   └── step2-orcarouter-qwen38-27b-cloudflared.ipynb
     ├── step2-ngrok/                            # Step2: Ollama + ngrok 固定URL（同じビルダー）
@@ -1246,8 +1247,7 @@ python3 kaggle/build_keepalive_test.py
 ## 開発時のチェック
 
 ```bash
-python3 kaggle/step2/_selftest_proxy.py     # プロキシ
-python3 kaggle/step2/_selftest_builder.py   # ノート内関数
+python3 -m pytest tests -q                  # runtime / ビルダー / proxy / exl3 / ノート一致
 python3 kaggle/check_notebooks.py           # auth_proxy.py / llama-chat.html を直したら再生成漏れが無いか
 ruff check .
 ```

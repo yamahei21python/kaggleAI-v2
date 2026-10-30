@@ -8,8 +8,6 @@ exec するので、**ビルダーではなく生成物そのもの**を検証�
   1. `_stage_model()` / `_stage_draft()` … symlink の取捨（mtp の出し入れ）
   2. `probe_url()` … cloudflared ログからの URL 抽出
   3. `_smoke()` … 起動後スモークの合否判定（200 / 500 / 接続不可 / usage:null）
-
-    python3 kaggle/step2/_selftest_builder.py
 """
 import ast
 import http.server
@@ -18,21 +16,16 @@ import os
 import pathlib
 import shutil
 import socketserver
-import sys
 import tempfile
 import threading
 
-HERE = pathlib.Path(__file__).resolve().parent
-NB = (HERE.parent / "step2-vllm-kernel" / "cloudflared"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+NB = (ROOT / "kaggle" / "step2-vllm-kernel" / "cloudflared"
       / "step2-vllm-qwen38-27b-cloudflared.ipynb")
-
-FAILS = []
 
 
 def check(name, cond, detail=""):
-    print(("  ✅ " if cond else "  ❌ ") + name + (f" — {detail}" if detail else ""))
-    if not cond:
-        FAILS.append(name)
+    assert cond, name + (f" — {detail}" if detail else "")
 
 
 def cell_source(pred):
@@ -43,7 +36,7 @@ def cell_source(pred):
         src = "".join(c["source"])
         if pred(src):
             return src
-    raise SystemExit(f"notebook に該当セルが無い: {NB}")
+    raise AssertionError(f"notebook に該当セルが無い: {NB}")
 
 
 def extract(src, names):
@@ -59,7 +52,7 @@ def extract(src, names):
             if any(t in names for t in tgts):
                 kept.append(node)
     if not kept:
-        raise SystemExit(f"抽出 0 件: {names}")
+        raise AssertionError(f"抽出 0 件: {names}")
     mod = ast.Module(body=kept, type_ignores=[])
     ast.fix_missing_locations(mod)
     return compile(mod, "<nb>", "exec")
@@ -669,22 +662,3 @@ def test_cell_name_order():
         known |= set(o.stores)
     check("定義前使用なし", not problems,
           ", ".join(dict.fromkeys(problems))[:400])
-
-
-if __name__ == "__main__":
-    test_plan()
-    test_open_public()
-    test_save_output()
-    test_keepalive()
-    test_help_complete()
-    test_cell_name_order()
-    test_stage()
-    test_probe_url()
-    test_smoke()
-    print()
-    if FAILS:
-        print(f"結果: {len(FAILS)} 件失敗")
-        for f in FAILS:
-            print("  -", f)
-        sys.exit(1)
-    print("結果: 全テスト パス")

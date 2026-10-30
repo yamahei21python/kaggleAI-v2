@@ -28,13 +28,14 @@ import time
 import urllib.error
 import urllib.request
 
-HERE = pathlib.Path(__file__).parent
-NB = HERE / "step2-orcarouter-qwen38-27b-cloudflared.ipynb"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+KAGGLE = ROOT / "kaggle"
+NB = KAGGLE / "step2" / "step2-orcarouter-qwen38-27b-cloudflared.ipynb"
 # vLLM 版（別ビルダー）にも同じ proxy を埋め込む。片方だけ再生成すると
 # 古い proxy が配信されるので、両方を機械的に突き合わせる。
-NB_VLLM = (HERE.parent / "step2-vllm-kernel" / "cloudflared"
+NB_VLLM = (KAGGLE / "step2-vllm-kernel" / "cloudflared"
            / "step2-vllm-qwen38-27b-cloudflared.ipynb")
-SRC = HERE / "auth_proxy.py"
+SRC = KAGGLE / "step2" / "auth_proxy.py"
 # 展開先はリポジトリ内に置かない（毎回生成されるゴミが残るため）。名前は
 # pkill のパターンに使うので固定。
 RESTORED = pathlib.Path(tempfile.gettempdir()) / "_restored_auth_proxy.py"
@@ -127,7 +128,7 @@ check("notebook埋め込み == auth_proxy.py", same,
 # チャット UI も同じく埋め込み。片方だけ更新すると UI が古いまま配信される
 # （proxy は動くので気づきにくい）。
 # ビルダーはリポジトリ直下の llama-chat.html を埋め込む（ローカル uzu 版と同一）。
-chat_src = HERE.parent.parent / "llama-chat.html"
+chat_src = ROOT / "llama-chat.html"
 chat_b64 = _embedded(NB, "CHAT_SRC_B64")
 chat_ok = bool(chat_b64) and _b64.b64decode(chat_b64) == chat_src.read_bytes()
 check("notebook埋め込み == llama-chat.html", chat_ok,
@@ -226,7 +227,7 @@ plog = open(PROXY_LOG, "w")
 proc = subprocess.Popen(
     [sys.executable, str(RESTORED), "--port", str(PROXY_PORT),
      "--upstream", f"http://127.0.0.1:{UP_PORT}",
-     "--chat-html", str(HERE.parent.parent / "llama-chat.html")],
+     "--chat-html", str(ROOT / "llama-chat.html")],
     env=env, stdout=plog, stderr=plog,
 )
 plog.close()   # 子は fd を dup 済み。親側は即解放（atexit まで開けっ放しにしない）
@@ -696,7 +697,7 @@ try:
     proxy2 = subprocess.Popen(
         [sys.executable, str(RESTORED), "--port", str(PORT2),
          "--upstream", f"http://127.0.0.1:{UP2_PORT}",
-         "--chat-html", str(HERE.parent.parent / "llama-chat.html"),
+         "--chat-html", str(ROOT / "llama-chat.html"),
          "--enforce-sampling"],
         env=env, stdout=plog2, stderr=plog2)
     plog2.close()

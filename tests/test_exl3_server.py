@@ -6,13 +6,14 @@ MockEngine に対して HTTP の形を確認する:
   400（不正リクエスト）, 404（未知パス）。
 """
 import json
-import os
+import pathlib
 import sys
 import threading
 import urllib.error
 import urllib.request
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "kaggle" / "exl3-serve"))
 from chat_server import MockEngine, make_server  # noqa: E402
 
 
@@ -37,7 +38,7 @@ def check(cond, msg):
         raise AssertionError(msg)
 
 
-def main():
+def test_exl3_server():
     srv = make_server(MockEngine(), host="127.0.0.1", port=0)
     port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -86,13 +87,3 @@ def main():
     finally:
         srv.shutdown()
         srv.server_close()
-
-    print("OK: chat_server selftest")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except AssertionError as e:
-        print(f"FAIL: {e}", file=sys.stderr)
-        sys.exit(1)
