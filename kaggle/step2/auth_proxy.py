@@ -61,6 +61,26 @@ GENERATION_PATHS = {
 KAGGLE_QUOTA_URL = "https://www.kaggle.com/api/v1/kernels/quota"
 KAGGLE_CRED = os.path.expanduser("~/.kaggle/kaggle.json")
 
+
+def _kaggle_credentials():
+    """(username, key) を返す。kaggle.json → 環境変数の順。
+
+    Kaggle カーネルには ~/.kaggle/kaggle.json が無いが、
+    KAGGLE_USERNAME / KAGGLE_KEY が環境変数で入っている。
+    """
+    if os.path.isfile(KAGGLE_CRED):
+        try:
+            with open(KAGGLE_CRED) as f:
+                cfg = json.load(f)
+            user, key = cfg.get("username"), cfg.get("key")
+            if user and key:
+                return user, key
+        except Exception:
+            pass
+    user = os.environ.get("KAGGLE_USERNAME") or os.environ.get("KAGGLE_USER")
+    key = os.environ.get("KAGGLE_KEY")
+    return (user, key) if user and key else (None, None)
+
 HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -278,8 +298,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """Kaggle の GPU クォータ残量を返す。
 
         UI のヘッダに「残り 08:59」と出すために使う。
-        kaggle.json が無い、または API が落ちている場合は
-        available=false を返して UI 側で非表示にする。
+        資格情報（kaggle.json または環境変数）が無い、または API が
+        落ちている場合は available=false を返して UI 側で非表示にする。
         """
         payload = {"available": False}
         if ARGS.no_quota:
@@ -289,12 +309,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         try:
-            if os.path.isfile(KAGGLE_CRED):
-                with open(KAGGLE_CRED) as f:
-                    cfg = json.load(f)
-                token = base64.b64encode(
-                    f"{cfg['username']}:{cfg['key']}".encode()
-                ).decode()
+            user, key = _kaggle_credentials()
+            if user and key:
+                token = base64.b64encode(f"{user}:{key}".encode()).decode()
                 req = urllib.request.Request(
                     KAGGLE_QUOTA_URL,
                     headers={"Authorization": "Basic " + token},

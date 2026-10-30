@@ -2139,6 +2139,7 @@ SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}"
 sources = [DATASET_ID]
 if not IS_NGROK:
     sources.append(f"{OWNER}/my-cloudflared-bin")
+sources.append(f"{OWNER}/vllm-wheelhouse")
 meta = {
     "id": f"{OWNER}/{SLUG}",
     # title は slug に解決できる必要がある（不一致だと push が 409）

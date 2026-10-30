@@ -265,6 +265,7 @@
       </select>
     </label>
     <div class="row">
+      <button id="authBtn" class="secondary" title="API 認証（Basic）">🔑</button>
       <button id="infoBtn" class="secondary" title="情報">情報</button>
     </div>
     <div class="row">
@@ -362,6 +363,28 @@
   </form>
 </dialog>
 
+<dialog id="authDialog" class="info-dialog">
+  <form method="dialog" class="info-card">
+    <div class="info-head">
+      <div class="info-title">🔑 API 認証</div>
+      <button class="secondary" value="close" aria-label="Close">✕</button>
+    </div>
+    <div class="info-body">
+      <div class="muted small" style="margin-bottom:.6rem">サーバーが Basic 認証を要求する場合に入力します（sessionStorage に保存・タブを閉じると消えます）。</div>
+      <label class="small" style="display:block; margin-bottom:.35rem">ユーザー</label>
+      <input id="authUser" type="text" autocomplete="username" value="exl3" style="width:100%; margin-bottom:.6rem">
+      <label class="small" style="display:block; margin-bottom:.35rem">パスワード</label>
+      <input id="authPass" type="password" autocomplete="current-password" style="width:100%; margin-bottom:.6rem">
+      <div id="authStatus" class="small"></div>
+    </div>
+    <div class="info-actions">
+      <button id="authSave" type="button">保存</button>
+      <button id="authClear" type="button" class="secondary">解除</button>
+      <button value="close" class="secondary">閉じる</button>
+    </div>
+  </form>
+</dialog>
+
 
 <script>
 (() => {
@@ -434,6 +457,13 @@
     infoVersion: document.getElementById('infoVersion'),
     infoProjectUrl: document.getElementById('infoProjectUrl'),
     infoImprint: document.getElementById('infoImprint'),
+    authBtn: document.getElementById('authBtn'),
+    authDialog: document.getElementById('authDialog'),
+    authUser: document.getElementById('authUser'),
+    authPass: document.getElementById('authPass'),
+    authStatus: document.getElementById('authStatus'),
+    authSave: document.getElementById('authSave'),
+    authClear: document.getElementById('authClear'),
     // NEU:
     top_p: document.getElementById('top_p'),
     min_p: document.getElementById('min_p'),
@@ -444,6 +474,52 @@
   let messages = [];
   let attachments = []; // {id,name,type,size, kind:'text'|'image'|'other', text?, dataUrl?, truncated?}
   let nextAttachId = 1;
+
+  /* ---------- API 認証（Basic） ---------- */
+  // 中継が API_PASS を設定しているときは /v1/* も /stop も 401 になる。
+  // 資格情報は sessionStorage にだけ置く（localStorage には残さない）。
+  const AUTH_KEY = 'kc_basic_auth';
+  const AUTH_USER_KEY = 'kc_basic_user';
+
+  function b64utf8(s){
+    // Python 側は UTF-8 で base64 化しているので、btoa 直呼び（Latin-1）では
+    // 非 ASCII のパスワードで一致しない。
+    const bytes = new TextEncoder().encode(s);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin);
+  }
+  function getAuthHeader(){
+    const v = sessionStorage.getItem(AUTH_KEY);
+    return v ? { 'Authorization': `Basic ${v}` } : {};
+  }
+  function apiHeaders(extra){
+    return { ...BASE_HEADERS, ...getAuthHeader(), ...(extra || {}) };
+  }
+  function setAuthCredentials(user, pass){
+    sessionStorage.setItem(AUTH_KEY, b64utf8(`${user}:${pass}`));
+    sessionStorage.setItem(AUTH_USER_KEY, user);
+  }
+  function clearAuthCredentials(){
+    sessionStorage.removeItem(AUTH_KEY);
+    sessionStorage.removeItem(AUTH_USER_KEY);
+  }
+  function openAuthDialog(msg){
+    if (!els.authDialog) return;
+    if (els.authUser) {
+      els.authUser.value = sessionStorage.getItem(AUTH_USER_KEY) || 'exl3';
+    }
+    if (els.authPass) els.authPass.value = '';
+    if (els.authStatus) els.authStatus.textContent = msg || '';
+    if (typeof els.authDialog.showModal === 'function') els.authDialog.showModal();
+    else els.authDialog.setAttribute('open', '');
+    setTimeout(() => els.authPass?.focus(), 50);
+  }
+  function closeAuthDialog(){
+    if (!els.authDialog) return;
+    if (typeof els.authDialog.close === 'function') els.authDialog.close();
+    else els.authDialog.removeAttribute('open');
+  }
 
   function fmtBytes(n){
     if (!Number.isFinite(n)) return '';
@@ -846,7 +922,7 @@
     try {
       const res = await fetch(`${location.origin}/quota`, {
         method: 'GET',
-        headers: { ...BASE_HEADERS, 'Accept': 'application/json' },
+        headers: apiHeaders({ 'Accept': 'application/json' }),
         cache: 'no-store',
       });
       if (!res.ok) { els.quotaLeft.textContent = ''; return; }
@@ -881,7 +957,7 @@
     if (!els.stopRow) return;
     try {
       const res = await fetch(`${location.origin}/quota`, {
-        method: 'GET', headers: { ...BASE_HEADERS }, cache: 'no-store',
+        method: 'GET', headers: apiHeaders(), cache: 'no-store',
       });
       // /quota が JSON を返す = 中継が立っている = 停止できる。
       // available=false（uzu などクォータ無し）でも中継自体は生きているので
@@ -902,9 +978,19 @@
       els.stopServer.textContent = '停止中…';
     }
     try {
-      await fetch(`${location.origin}/stop`, {
-        method: 'POST', headers: { ...BASE_HEADERS, 'X-Kc-Stop': '1' }, cache: 'no-store',
+      const res = await fetch(`${location.origin}/stop`, {
+        method: 'POST', headers: apiHeaders({ 'X-Kc-Stop': '1' }), cache: 'no-store',
       });
+      if (res.status === 401) {
+        openAuthDialog('停止には認証が必要です（401）');
+        if (els.stopServer) { els.stopServer.disabled = false; els.stopServer.textContent = '■ 停止'; }
+        return;
+      }
+      if (!res.ok) {
+        addMessage('system', `[停止] 失敗しました (HTTP ${res.status})`);
+        if (els.stopServer) { els.stopServer.disabled = false; els.stopServer.textContent = '■ 停止'; }
+        return;
+      }
     } catch (_) { /* 中継が落ちるので通信エラーは想定内 */ }
     setStatus('停止');
     addMessage('system', '[停止] サーバーを停止しました。この画面を閉じてください。');
@@ -941,14 +1027,14 @@
     const base = API_BASE.replace(/\/$/, '');
     const url = `${base}/models`;
 
-    const headers = { ...BASE_HEADERS, 'Accept': 'application/json' };
-    // No API key needed for local server
+    const headers = apiHeaders({ 'Accept': 'application/json' });
 
     if (els.modelStatus) els.modelStatus.textContent = 'Loading…';
     if (els.loadModelsBtn) els.loadModelsBtn.disabled = true;
 
     try {
       const res = await fetch(url, { method: 'GET', headers, mode: 'cors' });
+      if (res.status === 401) openAuthDialog('API 認証が必要です（401）');
       if (!res.ok) {
         const t = await res.text().catch(()=> '');
         throw new Error(`HTTP ${res.status}: ${t || 'Failed to load models'}`);
@@ -1098,8 +1184,7 @@
       else if (_thinking === 'on') extras.reasoning_effort = 'default';
 
       const body = { model: els.model.value.trim(), messages, stream: true, temperature: parseFloat(els.temp.value), ...extras };
-      const headers = { ...BASE_HEADERS, 'Content-Type': 'application/json', 'Accept': 'text/event-stream' };
-      const key = ''; // No API key needed for local server
+      const headers = apiHeaders({ 'Content-Type': 'application/json', 'Accept': 'text/event-stream' });
       const url = `${API_BASE.replace(/\/$/, '')}/chat/completions`;
 
       abortController = new AbortController();
@@ -1111,7 +1196,8 @@
       // --- START ÄNDERUNG: CORS hinzugefügt ---
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: abortController.signal, mode: 'cors' });
       // --- ENDE ÄNDERUNG ---
-      
+
+      if (res.status === 401) openAuthDialog('API 認証が必要です（401）');
       if (!res.ok) { const t = await res.text().catch(()=> ''); throw new Error(`HTTP ${res.status}: ${t || 'Server error'}`); }
       
       const ctype = (res.headers.get('content-type') || '').toLowerCase();
@@ -1441,6 +1527,44 @@
     els.infoDialog.addEventListener('click', (e) => {
       // If click lands on the backdrop (not on the card), close.
       if (e.target === els.infoDialog) els.infoDialog.close();
+    });
+  }
+
+  /* ---------- API 認証ダイアログ ---------- */
+  if (els.authBtn && els.authDialog) {
+    els.authBtn.addEventListener('click', () => openAuthDialog());
+  }
+  if (els.authSave) {
+    els.authSave.addEventListener('click', () => {
+      const user = (els.authUser?.value || '').trim() || 'exl3';
+      const pass = els.authPass?.value || '';
+      if (!pass) {
+        if (els.authStatus) els.authStatus.textContent = 'パスワードを入力してください';
+        return;
+      }
+      setAuthCredentials(user, pass);
+      closeAuthDialog();
+      addMessage('system', `[認証] ${user} で保存しました（このタブのみ）`);
+      loadModels();
+      startQuotaPolling();
+      detectStopSupport();
+    });
+  }
+  if (els.authClear) {
+    els.authClear.addEventListener('click', () => {
+      clearAuthCredentials();
+      closeAuthDialog();
+      addMessage('system', '[認証] 資格情報を解除しました');
+    });
+  }
+  if (els.authPass) {
+    els.authPass.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); els.authSave?.click(); }
+    });
+  }
+  if (els.authDialog) {
+    els.authDialog.addEventListener('click', (e) => {
+      if (e.target === els.authDialog) closeAuthDialog();
     });
   }
 

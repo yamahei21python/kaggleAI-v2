@@ -14,10 +14,17 @@ chat_server.py / auth_proxy.py / llama-chat.html を base64 で埋め込んだ
 import base64
 import json
 import pathlib
+import sys
 from string import Template
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
+sys.path.insert(0, str(ROOT))
+import kcconfig  # noqa: E402
+
+CFG = kcconfig.load(ROOT)
+GIST_ID_DEFAULT = CFG.get("GIST_ID", "")
+GIST_OWNER = CFG.get("GIST_OWNER", "")
 
 ALIAS = "qwen38-exl3"
 CACHE_TOKENS = 8192
@@ -57,8 +64,11 @@ CACHE_TOKENS = $CACHE_TOKENS
 RUN_MINUTES = $RUN_MINUTES
 HARD_MAX_MINUTES = 180
 RESULT = "/kaggle/working/result.json"
+URL_FILE = "/kaggle/working/url.txt"
 WORK = "/tmp/exl3-serve"
 CONF = "/tmp/keepalive.conf"
+GIST_ID_DEFAULT = "$GIST_ID"
+GIST_OWNER = "$GIST_OWNER"
 
 CHAT_B64 = "$CHAT_B64"
 PROXY_B64 = "$PROXY_B64"
@@ -271,19 +281,25 @@ def start_chat():
 
 def start_proxy():
     user = secret("EXL3_API_USER") or "exl3"
-    pass_ = secret("EXL3_API_PASS") or os.urandom(8).hex()
+    pass_secret = secret("EXL3_API_PASS")
+    # パスワードは result.json / ログに出さない（kernels output で誰でも
+    # 取得できてしまうため）。未設定時は乱数で起動するが、値はどこにも残さない。
+    pass_ = pass_secret or os.urandom(8).hex()
     auth = "Basic " + base64.b64encode(
         f"{user}:{pass_}".encode()).decode()
     env = {**os.environ, "API_USER": user, "API_PASS": pass_}
     cmd = [sys.executable, f"{WORK}/auth_proxy.py",
            "--port", str(PROXY_PORT),
            "--upstream", f"http://127.0.0.1:{CHAT_PORT}",
-           "--chat-html", f"{WORK}/llama-chat.html",
-           "--no-quota"]
+           "--chat-html", f"{WORK}/llama-chat.html"]
     log = open("/kaggle/working/auth_proxy.log", "w")
     p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
     wait_http(f"http://127.0.0.1:{PROXY_PORT}/healthz", 60)
-    data.update(api_user=user, api_pass=pass_)
+    data["auth"] = "on"
+    data["auth_user"] = user
+    if not pass_secret:
+        data["auth_warning"] = "EXL3_API_PASS 未設定（乱数。値は非公開）"
+        print("EXL3_API_PASS 未設定: 乱数パスワードで起動（値は残さない）")
     print(f"auth_proxy 起動: 127.0.0.1:{PROXY_PORT}")
     return p, auth
 
@@ -379,6 +395,37 @@ def start_tunnel():
     data["tunnel_seconds"] = round(time.time() - t0, 1)
     print(f"公開 URL: {url}")
     return p, url
+
+
+def publish_url(url):
+    """公開 URL を url.txt と Gist に書く（ask.py が Gist を読む）。
+
+    GIST_ID / GITHUB_TOKEN が無ければスキップ。失敗しても配信は続ける。
+    """
+    with open(URL_FILE, "w") as f:
+        f.write(url + "\n")
+    gist_id = (os.environ.get("GIST_ID") or secret("GIST_ID")
+               or GIST_ID_DEFAULT or "").strip()
+    token = (os.environ.get("GITHUB_TOKEN")
+             or secret("GITHUB_TOKEN") or "").strip()
+    if not gist_id or not token:
+        data["publish"] = "skipped (GIST_ID / GITHUB_TOKEN なし)"
+        print("Gist 公開: スキップ（GIST_ID / GITHUB_TOKEN なし）")
+        return
+    body = json.dumps({"files": {"url.txt": {"content": url + "\n"}}}).encode()
+    req = urllib.request.Request(
+        f"https://api.github.com/gists/{gist_id}", data=body, method="PATCH",
+        headers={"Authorization": "Bearer " + token,
+                 "Accept": "application/vnd.github+json",
+                 "User-Agent": "exl3-serve-kernel"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data["publish"] = f"gist ok ({r.status})"
+        print("Gist 公開: " + "https://gist.githubusercontent.com/"
+              f"{GIST_OWNER}/{gist_id}/raw/url.txt")
+    except Exception as e:
+        data["publish"] = f"gist failed: {type(e).__name__}: {e}"
+        print(f"Gist 公開 失敗（続行）: {e}")
 
 
 def wait_public(url):
@@ -531,6 +578,8 @@ def main():
     tunnel, url = start_tunnel()
     data.update(url=url, stage="serving")
     save()
+    if MODE == "exl3":
+        publish_url(url)   # mock の URL で Gist を上書きしない
     wait_public(url)
     verify_public(auth, url)
 
@@ -604,6 +653,7 @@ def write(mode, out_dir, metadata, run_minutes):
         MODE=mode, ALIAS=ALIAS, CACHE_TOKENS=CACHE_TOKENS,
         RUN_MINUTES=run_minutes, CHAT_B64=CHAT_B64,
         PROXY_B64=PROXY_B64, HTML_B64=HTML_B64,
+        GIST_ID=GIST_ID_DEFAULT, GIST_OWNER=GIST_OWNER,
     )
     (out_dir / "main.py").write_text(body)
     (out_dir / "kernel-metadata.json").write_text(

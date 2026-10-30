@@ -302,6 +302,11 @@ if started:
     check("UI に停止ボタンの器", b'id="stopServer"' in ui, "stopServer")
     check("UI の停止は X-Kc-Stop を送る", b"'X-Kc-Stop': '1'" in ui)
 
+    # 1d) Basic 認証の入力と Authorization 付与（P0）
+    check("UI に認証入力の器", b'id="authDialog"' in ui and b'id="authPass"' in ui)
+    check("UI が Basic 認証ヘッダを付ける", b"function apiHeaders" in ui
+          and b"'Authorization'" in ui and b"sessionStorage" in ui)
+
     # 1c) /quota は管理エンドポイントとして応答する
     #     kaggle.json が無い環境では available=false でも 200 を返す仕様。
     try:
