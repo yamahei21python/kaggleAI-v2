@@ -94,7 +94,7 @@ kaggleAI/
 ├── config.env                                  # ngrok ドメイン / Gist / slug / ポートの共通設定
 │                                               # （config.local.env を置くと上書き。gitignore 済み）
 ├── kcconfig.py                                 # config.env を Python から読む
-├── runtime/                                    # 生成コードの真実源（proxy / tunnel / keepalive / proc）
+├── runtime/                                    # 生成コードの真実源（proxy / tunnel / keepalive / quota / proc）
 ├── kbuild/                                     # notebook / script の梱包層（embed / metadata / pack）
 ├── tests/                                      # pytest（CPU のみ・Kaggle 不要）
 ├── lib/launcher-common.zsh                     # run-kaggle-chat / run-ai の共通処理
@@ -1250,9 +1250,10 @@ python3 kaggle/build_keepalive_test.py
 ## 開発時のチェック
 
 ```bash
-python3 -m pytest tests -q                  # runtime / ビルダー / proxy / exl3 / ノート一致
+python3 -m pytest tests -q                  # runtime / ビルダー / proxy / exl3 / Secrets / ノート一致
 python3 kaggle/check_notebooks.py           # auth_proxy.py / llama-chat.html を直したら再生成漏れが無いか
-ruff check .
+python3 kaggle/exl3-serve/build_kernel.py   # 生成物（kernel / dryrun / keepalive）を作り直す
+ruff check . && python3 -m compileall -q kaggle/exl3-serve/kernel kaggle/exl3-serve/dryrun kaggle/exl3-serve/keepalive
 ```
 
 同じものを GitHub Actions（`.github/workflows/ci.yml`）でも回している。
