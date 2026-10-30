@@ -65,6 +65,18 @@ def extract(src, names):
     return compile(mod, "<nb>", "exec")
 
 
+def runtime_source():
+    """埋め込み runtime バンドル（kc_* 関数群）のセルを返す。"""
+    return cell_source(lambda s: "def kc_probe_url" in s and "def kc_start_proxy" in s)
+
+
+def runtime_ns():
+    """runtime バンドルを exec した名前空間を返す（notebook と同じ実体）。"""
+    ns = {}
+    exec(compile(runtime_source(), "<runtime>", "exec"), ns)
+    return ns
+
+
 # --------------------------------------------------------------------------
 # 1. _stage_model / _stage_draft
 # --------------------------------------------------------------------------
@@ -145,11 +157,12 @@ def test_stage():
 def test_probe_url():
     print("\n=== probe_url（cloudflared ログ） ===")
     src = cell_source(lambda s: "def probe_url" in s)
-    code = extract(src, {"probe_url", "URL_RE"})
+    code = extract(src, {"probe_url"})
 
     tmp = tempfile.mkdtemp(prefix="cf_")
     log = os.path.join(tmp, "cloudflared.log")
-    ns = {"re": __import__("re"), "TUNNEL_LOG": log}
+    ns = runtime_ns()
+    ns["TUNNEL_LOG"] = log
     exec(code, ns)
 
     samples = [
@@ -375,34 +388,30 @@ def test_open_public():
 # --------------------------------------------------------------------------
 def test_save_output():
     print("\n=== save_output / fail ===")
-    src = cell_source(lambda s: "def save_output" in s)
-    code = extract(src, {"save_output", "fail"})
+    ns = runtime_ns()
+    save = ns["kc_save_output"]
+    fail = ns["kc_fail"]
 
     d1 = pathlib.Path(tempfile.mkdtemp(prefix="out1_"))
     d2 = pathlib.Path(tempfile.mkdtemp(prefix="out2_"))
     blocker = pathlib.Path(tempfile.mkdtemp(prefix="blk_")) / "notadir"
     blocker.write_text("x")          # dir として使えないパス
 
-    ns = {"os": os, "OUT_DIRS": (str(d1), str(d2))}
-    exec(code, ns)
-
-    check("両方書ける → True", ns["save_output"]("a.txt", "hi") is True)
+    check("両方書ける → True", save("a.txt", "hi", (str(d1), str(d2))) is True)
     check("両方に書けている", (d1 / "a.txt").read_text() == "hi"
           and (d2 / "a.txt").read_text() == "hi")
 
-    ns["OUT_DIRS"] = (str(d1), str(blocker))
     check("片方失敗でも True（1 つ書ければ OK）",
-          ns["save_output"]("b.txt", "x") is True
+          save("b.txt", "x", (str(d1), str(blocker))) is True
           and (d1 / "b.txt").is_file())
 
-    ns["OUT_DIRS"] = (str(blocker), str(blocker))
-    check("全滅なら False（例外にしない）", ns["save_output"]("c.txt", "x") is False)
+    check("全滅なら False（例外にしない）",
+          save("c.txt", "x", (str(blocker), str(blocker))) is False)
 
-    ns["OUT_DIRS"] = (str(d1),)
     tlog = d1 / "tail.log"
     tlog.write_text("line1\nline2\n")
     try:
-        ns["fail"]("boom", str(tlog))
+        fail("boom", str(tlog), (str(d1),))
         check("fail は RuntimeError", False)
     except RuntimeError as e:
         check("fail は RuntimeError", "boom" in str(e))
@@ -431,9 +440,10 @@ def test_keepalive():
 
     d = pathlib.Path(tempfile.mkdtemp(prefix="ka_"))
     conf = d / "keepalive.conf"
-    ns = {"os": os, "KEEPALIVE_CONF": str(conf),
-          "KEEPALIVE_KEEPALIVE": c["KEEPALIVE_KEEPALIVE"],
-          "MAX_MINUTES": c["MAX_MINUTES"]}
+    ns = runtime_ns()
+    ns.update({"KEEPALIVE_CONF": str(conf),
+               "KEEPALIVE_KEEPALIVE": c["KEEPALIVE_KEEPALIVE"],
+               "MAX_MINUTES": c["MAX_MINUTES"]})
 
     def _fail(msg, *a, **kw):
         raise RuntimeError(msg)

@@ -179,8 +179,15 @@ Template）。`runtime/` を真実源にして base64 埋め込みする方式�
    exl3-serve を移行し、生成物が旧ビルダーとバイト一致することを確認。
    - 進捗: 梱包層 `kbuild/`（`embed` / `metadata` / `pack_nb` / `pack_script`）を
      抽出。exl3（byte 一致）、step2、direct、step1、smoke、bench、bench_mtp、
-     keepalive、vLLM 系 3 本を移行済み（全 12 ノートで生成一致）。残りは
-     生成コード（proxy / tunnel / keepalive / verify）の一元化。
+     keepalive、vLLM 系 3 本を移行済み（全 12 ノートで生成一致）。
+   - 進捗 2b: 生成コードの真実源 `runtime/`（`net` / `proc` / `storage` /
+     `keepalive` / `proxy` / `engines/ollama`）を作り、step2（cf/ngrok）・
+     direct・dryrun・vLLM 本体（cf/ngrok）の proxy / tunnel / keepalive /
+     verify / 後片付けを `kc_*` 呼び出しへ置換済み。差は引数
+     （`on_invalid` / `quiet_clamp` / `match` / `skip_http_errors` /
+     `progress_every` / `env`）で表現し、挙動は変えない。
+     `runtime/_selftest.py` を CI に追加。exl3 の単一 Template は同機能を
+     内包しているため 2b では触らない（段 7 で統合判断）。
 3. **`build_step2.py`**（cells 外部化済みで最も楽）→ **`build_step2_direct.py`**。
    生成物は AST + 正規化一致で比較（byte 一致は exl3 のみ）。
 4. **`build_vllm_dataset.py` → `build_vllm_dryrun.py`**
@@ -373,9 +380,9 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
    バイナリ横に `VERSION.txt`。ビルダーの「latest を取得」は最後の手段に。
 5. **退役の判断はユーザー** — **2026-10-30 決定: `my-ollama-qwen3-6-35b` /
    `my-ollama-qwen2-5-coder-14b` / `my-ollama-gemma3-1b` を削除、他は保持**
-   （詳細と統合候補は `notes/dataset-inventory.md`）。削除は不可逆なので
-   CLI 2.x を用意したうえで実行承認を得てから行う（下記 F-2）。
-   現在の 1.7.4.5 には `datasets delete` が無い。
+   （詳細と統合候補は `notes/dataset-inventory.md`）。**同日に削除実行済み**
+   （依存 0 を確認、一覧 12 → 9 件）。削除は 1.7.4.5 では不可のため
+   CLI 2.2.5 の `~/.venv-kaggle2` を使用した（下記 F-2）。
 6. **ローカル実体は repo 外へ** — `~/models/kaggle-dataset/` 等に移し、
    repo からは `.env` のパス参照だけにする（17 GB を repo 直下に置かない）。
 7. **容量の可視化** — `kbuild datasets` で「slug / サイズ / 参照カーネル数」を
@@ -405,7 +412,7 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 
 - 設定は UI のみ（CLI 不可）。カーネル作成時のチェックリストに含める。
 
-### F-2 データセット削除（CLI 2.x が必要・実測で確認済み）
+### F-2 データセット削除（2026-10-30 実行済み・CLI 2.x が必要）
 
 - PATH の `kaggle` は **1.7.4.5**（Python 3.9）。2.x は Python 3.10+ が必須で、
   3.9 では pip が最新版を選べない（`pip index versions kaggle` が 1.7.4.5 止まり）。
@@ -428,25 +435,24 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
   （grep）/ `kaggle kernels list`（依存カーネル）。必要なら
   `kaggle-dataset-*` のローカル実体に退避してから。
 
-将来の削除候補（repo から未参照。**今は実行しない**）:
+削除済み（2026-10-30 実行、記録用・再実行しない）:
 
 ```bash
-# 実行するときだけコメントを外す
-# K=~/.venv-kaggle2/bin/kaggle
-# $K datasets delete yamahei21python/kawamura-finetune -y
-# $K datasets delete yamahei21python/kawamura-ruri-ft-data -y
+# venv は作成済み（2.2.5）。以下 3 件のみ実行し、一覧 12 → 9 件を確認:
 # $K datasets delete yamahei21python/my-ollama-qwen2-5-coder-14b -y
 # $K datasets delete yamahei21python/my-ollama-qwen3-6-35b -y
 # $K datasets delete yamahei21python/my-ollama-gemma3-1b -y
-# $K datasets delete yamahei21python/qwen3-27b-uncensored-gguf -y
 ```
+
+`kawamura-finetune` / `kawamura-ruri-ft-data` は保持（依存カーネルあり）。
+`qwen3-27b-uncensored-gguf` も保持（EXL3 実機検証後の判断待ち）。
 
 ### F-3 実行順
 
 1. P0 修正（パスワード非出力・UI 認証・URL 配布）
 2. Secrets 登録（`exl3-serve` 系）
 3. GPU 実機確認（gpu-check → serve）
-4. 退役判断 → データセット削除（上の 2.x venv で）
+4. 退役判断 → データセット削除（2026-10-30 完了。#8〜#10 の 3 件のみ）
 5. 生成物（`kernel/` `dryrun/` `keepalive/`）の commit / gitignore 方針を確定
 
 

@@ -14,32 +14,16 @@ KEEPALIVE_RESET_MINUTES = 60             # チャット送信ごとにリセッ�
 
 
 def _read_keepalive_conf():
-    """RUN=1/0 と MINUTES を読み取り（デフォルトは 1 と KEEPALIVE_RESET_MINUTES）。"""
-    try:
-        with open(KEEPALIVE_CONF) as f:
-            lines = [l.strip() for l in f if l.strip() and "=" in l]
-        d = dict(l.split("=", 1) for l in lines)
-        run = int(d.get("RUN", 1))
-        minutes = int(d.get("MINUTES", KEEPALIVE_RESET_MINUTES))
-    except FileNotFoundError:
-        run, minutes = 1, KEEPALIVE_RESET_MINUTES
-    except Exception:
-        run, minutes = 1, KEEPALIVE_RESET_MINUTES
-    if run <= 0:
-        return 0, KEEPALIVE_RESET_MINUTES   # RUN<=0 は「維持しない」
-    if minutes <= 0:
-        fail(f"KEEPALIVE_MINUTES={minutes} は無効（1〜{MAX_MINUTES} で指定）")
-    if minutes > MAX_MINUTES:
-        print(f"⚠ KEEPALIVE_MINUTES={minutes} → {MAX_MINUTES} に制限")
-        minutes = MAX_MINUTES
+    """RUN=1/0 と MINUTES を読み取り（共通ランタイムが上限・既定値を処理）。"""
+    run, minutes, _mtime = kc_read_conf(
+        KEEPALIVE_CONF, KEEPALIVE_RESET_MINUTES, MAX_MINUTES, fail=fail)
     return run, minutes
 
 
 def _reset_keepalive():
     """チャット送信ごとに時間リセット（ON 維持）。"""
     try:
-        with open(KEEPALIVE_CONF, "w") as f:
-            f.write(f"RUN=1\nMINUTES={KEEPALIVE_RESET_MINUTES}\n")
+        kc_write_conf(KEEPALIVE_CONF, 1, KEEPALIVE_RESET_MINUTES)
     except Exception:
         pass
 
@@ -53,26 +37,13 @@ except FileNotFoundError:
 
 def _proc(name):
     """プロセス生死。pid があるだけで生存とは限らないので tunnel 疎通と併用。"""
-    try:
-        # ollama は -f だと子の `llama-server -m ...ollama_models...` まで
-        # 全一致して偽 alive になる。プロセス名完全一致で見る。
-        args = ["pgrep", "-x", name] if name == "ollama" else ["pgrep", "-f", name]
-        out = subprocess.run(args, capture_output=True,
-                             text=True, timeout=5).stdout.strip()
-        return "alive" if out else "DEAD"
-    except Exception:
-        return "unknown"
+    # ollama は -f だと子の `llama-server -m ...ollama_models...` まで
+    # 全一致して偽 alive になる。プロセス名完全一致で見る。
+    return kc_proc_state(name, "exact" if name == "ollama" else "argv")
 
 
 def _gpu():
-    try:
-        return subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip().replace("\n", " | ")
-    except Exception:
-        return "N/A"
+    return kc_gpu_usage()
 
 
 print(f"Public URL: {url}")
@@ -88,10 +59,7 @@ print()
 # ログ API は取れないため、毎分の行も**ここに溜めて** zip に残す
 def _conf_mtime():
     """keepalive.conf の更新時刻。proxy がチャット送信ごとに書き直す。"""
-    try:
-        return os.path.getmtime(KEEPALIVE_CONF)
-    except OSError:
-        return 0.0
+    return kc_conf_mtime(KEEPALIVE_CONF)
 
 
 log = []
@@ -220,67 +188,13 @@ print("🧹 後片付け: GPU / プロセスを解放")
 print("=" * 56)
 
 
-def _sh(cmd, label):
-    """シェルコマンドを実行して成否を 1 行で出す。"""
-    try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
-        ok = r.returncode == 0
-        print(f"  {'✅' if ok else '— '} {label}")
-        return ok
-    except Exception as e:
-        print(f"  ⚠ {label}: {type(e).__name__}")
-        return False
-
-
-def _pids(pattern):
-    """pgrep で該当 PID を返す（無ければ空リスト）。"""
-    try:
-        r = subprocess.run(f"pgrep {pattern}", shell=True,
-                           capture_output=True, text=True, timeout=15)
-        return [p for p in r.stdout.split() if p.strip()]
-    except Exception:
-        return []
-
-
 # --- 1) モデルを明示的にアンロード（keep_alive=0）---
 # これが一番効く。プロセスを殺すより先に、Ollama 自身に VRAM を返させる。
-unloaded = False
-for path, payload in [
-    ("/api/generate", {"model": MODEL_NAME, "keep_alive": 0}),
-    ("/api/chat", {"model": MODEL_NAME, "messages": [], "keep_alive": 0}),
-]:
-    try:
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{PORT}{path}",
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=60) as r:
-            if r.status == 200:
-                unloaded = True
-                print(f"  ✅ アンロード要求 OK ({path})")
-                break
-    except Exception as e:
-        print(f"  —  {path}: {type(e).__name__}")
+# 実装は共通ランタイム（runtime/engines/ollama.py）。
+unloaded = kc_unload_model(PORT, MODEL_NAME)
 
 # --- 2) VRAM が実際に空いたか確認 ---
-for attempt in range(10):
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/ps", timeout=10) as r:
-            models = json.loads(r.read())
-        loaded = models.get("models") or []
-        if not loaded:
-            print("  ✅ VRAM 解放確認（常駐モデル 0）")
-            break
-        vram = sum(m.get("size_vram", 0) for m in loaded)
-        print(f"  ⏳ まだ常駐: {vram:,} B（{attempt + 1}/10）")
-    except Exception as e:
-        print(f"  —  /api/ps 確認失敗: {type(e).__name__}")
-        break
-    time.sleep(3)
-else:
-    print("  ⚠ アンロードを確認できず（プロセス kill へ進む）")
+kc_wait_vram_free(PORT)
 
 # --- 3) プロセスを落とす（SIGTERM → 待機 → SIGKILL）---
 # 順序: 外側（トンネル）→ 内側（プロキシ）→ 本体（ollama）
@@ -292,22 +206,11 @@ TARGETS = [
     ("-f llama-server", "llama-server"),
 ]
 
-for pattern, label in TARGETS:
-    if _pids(pattern):
-        subprocess.run(f"pkill -TERM {pattern}", shell=True, capture_output=True)
-        print(f"  TERM → {label}")
-time.sleep(3)
-
 # 残存分は SIGKILL（llama-server は ollama の子で別名なので個別に落とす）
-for pattern, label in TARGETS:
-    if _pids(pattern):
-        subprocess.run(f"pkill -KILL {pattern}", shell=True, capture_output=True)
-        print(f"  KILL → {label}（残存していた）")
+left = kc_stop_processes(TARGETS)
 
 # --- 4) 最終確認 ---
 print()
-time.sleep(2)
-left = [label for pattern, label in TARGETS if _pids(pattern)]
 
 if left:
     print(f"  ⚠ 残存: {', '.join(left)}")

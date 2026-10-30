@@ -21,6 +21,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from kbuild import embed, metadata, pack_nb  # noqa: E402
+from runtime import source_bundle  # noqa: E402
 
 OWNER = "yamahei21python"
 DATASET_SLUG = "qwen38-27b-uncensored-hauhaucs-awq-mtp"
@@ -73,6 +74,13 @@ _add("markdown", _tpl("""# 🧪 vLLM Step2 ドライラン（GPU 不要）
 """, HF=("twolven/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-AWQ-MTP"),
             DATASET=DATASET_ID))
 
+# ── 0.5: 共通ランタイム ─────────────────────────────────────
+# proxy 起動・トンネル URL 取得・keepalive conf・HTTP 待ちを runtime/ に
+# 一本化する。手で編集しない（真実源はリポジトリ直下の runtime/*.py）。
+_add("markdown", "---\n### 🧩 共通ランタイム（proxy / tunnel / keepalive / verify）\n\n"
+                 "`runtime/` の真実源をビルダーが連結して埋め込んでいます。\n")
+_add("code", source_bundle("net", "proc", "storage", "keepalive", "proxy"))
+
 # ── 1: 設定 ─────────────────────────────────────────────────
 _add("code", _tpl('''# 設定（GPU 不要）
 import glob as _glob
@@ -118,32 +126,8 @@ def _find_input(slug):
 MODEL_SRC = _find_input("__DATASET_SLUG__")
 
 
-def save_output(name, text):
-    saved = []
-    for d in OUT_DIRS:
-        try:
-            os.makedirs(d, exist_ok=True)
-            with open(os.path.join(d, name), "w") as f:
-                f.write(text)
-            saved.append(d)
-        except Exception as e:
-            print(f"  ⚠ {d} 書き出し失敗 ({e})")
-    if saved:
-        print(f"  📄 {name} 保存済: {', '.join(saved)}")
-        return True
-    print(f"  ⚠ 保存できませんでした: {name}")
-    return False
-
-
-def fail(msg, tail_path=None):
-    tail = ""
-    try:
-        if tail_path and os.path.isfile(tail_path):
-            tail = open(tail_path, errors="replace").read()[-3000:]
-    except Exception:
-        pass
-    save_output("FAILED.txt", f"{msg}\\n\\n{tail}")
-    raise RuntimeError(msg)
+save_output = kc_save_output
+fail = kc_fail
 
 
 _files = sorted(os.listdir(MODEL_SRC)) if os.path.isdir(MODEL_SRC) else []
@@ -489,10 +473,6 @@ _add("markdown", "---\n### 4️⃣ プロキシ起動（`--enforce-sampling`）\
 _add("code", '''# プロキシ + UI を配置して起動（本番と同じ引数）
 import base64
 import os
-import subprocess
-import time
-import urllib.error
-import urllib.request
 
 with open(PROXY_PATH, "wb") as f:
     f.write(base64.b64decode(PROXY_SRC_B64))
@@ -501,30 +481,9 @@ with open(CHAT_PATH, "wb") as f:
 print(f"auth_proxy.py {os.path.getsize(PROXY_PATH):,} B / "
       f"llama-chat.html {os.path.getsize(CHAT_PATH):,} B")
 
-subprocess.run(["pkill", "-f", "auth_proxy.py"], capture_output=True)
-time.sleep(1)
-
-with open("/tmp/auth_proxy.log", "w") as log:
-    proxy_proc = subprocess.Popen(
-        ["python3", PROXY_PATH, "--port", str(PROXY_PORT),
-         "--upstream", f"http://127.0.0.1:{VLLM_PORT}",
-         "--chat-html", CHAT_PATH, "--enforce-sampling"],
-        stdout=log, stderr=log)
-print(f"🔄 proxy PID: {proxy_proc.pid}")
-
-for i in range(30):
-    try:
-        with urllib.request.urlopen(
-                f"http://127.0.0.1:{PROXY_PORT}/healthz", timeout=3) as r:
-            if r.status == 200:
-                print(f"✅ プロキシ起動（{i+1}s）")
-                break
-    except Exception:
-        pass
-    time.sleep(1)
-else:
-    print(open("/tmp/auth_proxy.log").read()[-2000:])
-    fail("プロキシ起動失敗", "/tmp/auth_proxy.log")
+proxy_proc = kc_start_proxy(
+    PROXY_PORT, f"http://127.0.0.1:{VLLM_PORT}", CHAT_PATH, PROXY_PATH,
+    extra_args=("--enforce-sampling",), fail=fail)
 ''')
 
 # ── 6: トンネル ─────────────────────────────────────────────
@@ -532,10 +491,10 @@ _add("markdown", "---\n### 5️⃣ cloudflared quick tunnel\n")
 
 _add("code", '''# cloudflared 起動（Dataset 優先 / 無ければ DL）
 import os
-import re
 import shutil
 import subprocess
 import time
+import urllib.request
 
 CF_BIN = "/usr/local/bin/cloudflared"
 
@@ -587,29 +546,13 @@ TUNNEL_NAME = "cloudflared"
 TUNNEL_LOG = "/tmp/cloudflared.log"
 RESTART_CMD = [CF_BIN, "tunnel", "--url", f"http://127.0.0.1:{PROXY_PORT}",
                "--no-autoupdate"]
-URL_RE = re.compile(r"https://[a-z0-9-]+\\.trycloudflare\\.com")
-
-
-def probe_url():
-    try:
-        with open(TUNNEL_LOG) as f:
-            m = URL_RE.search(f.read())
-        return m.group(0) if m else ""
-    except FileNotFoundError:
-        return ""
-
 
 subprocess.run(["pkill", "-x", "cloudflared"], capture_output=True)
 time.sleep(1)
 with open(TUNNEL_LOG, "w") as log:
     subprocess.Popen(RESTART_CMD, stdout=log, stderr=log)
 
-public_url = ""
-for i in range(90):
-    public_url = probe_url()
-    if public_url:
-        break
-    time.sleep(1)
+public_url = kc_wait_url("cloudflared", TUNNEL_LOG)
 if not public_url:
     print(open(TUNNEL_LOG).read()[-3000:])
     fail("公開URL取得失敗", TUNNEL_LOG)
@@ -619,16 +562,12 @@ with open("/tmp/public_url.txt", "w") as f:
     f.write(public_url)
 save_output("public_url.txt", public_url + "\\n")
 
-import urllib.request
-for i in range(20):
-    try:
-        with _open_public(f"{public_url}/healthz", timeout=10) as r:
-            if r.status == 200:
-                print(f"✅ トンネル確立（{(i+1)*3}s）")
-                break
-    except Exception:
-        pass
-    time.sleep(3)
+elapsed = kc_wait_http(f"{public_url}/healthz", attempts=20, interval=3,
+                       opener=_open_public)
+if elapsed is None:
+    print("⚠ 公開URLへの疎通が 60s 以内に取れませんでした（次の検証で再試行）")
+else:
+    print(f"✅ トンネル確立（{elapsed}s）")
 ''')
 
 # ── 7: verify ───────────────────────────────────────────────
@@ -655,10 +594,7 @@ def _judge(idx, label, ok, detail):
 
 
 def _post(url, payload, timeout=120, stream=False):
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
-    return urllib.request.urlopen(req, timeout=timeout)
+    return kc_post_json(url, payload, timeout=timeout)
 
 
 def _with_retry(fn, tries=3, delay=3):
@@ -666,18 +602,7 @@ def _with_retry(fn, tries=3, delay=3):
     実測: v5 で UI と /v1/models だけ落ち、localhost 系は全部通った。
     一過性なので数回だけ粘る（本番で 20 分消費した後に誤 fail しないため）。
     """
-    last = None
-    for i in range(tries):
-        try:
-            return fn()
-        except Exception as e:
-            last = e
-            if i + 1 < tries:
-                wait = delay * (i + 1)
-                print(f"  ⚠ 一時的な通信エラー（{i+1}/{tries}）: {e} "
-                      f"→ {wait}s 待って再試行")
-                _time.sleep(wait)
-    raise last
+    return kc_retry(fn, tries=tries, delay=delay, skip_http_errors=False)
 
 
 CHAT = {"model": SERVED_NAME,
@@ -797,7 +722,6 @@ print("✅ 6/6 パス（モック上流）— 推論以外は本番同一")
 _add("markdown", "---\n### 7️⃣ キープアライブ（2分・CPU）\n")
 
 _add("code", '''# keepalive 2分（本番は 480 分）。プロキシ/トンネルの死活だけ見る
-import subprocess
 import time
 import urllib.request
 
@@ -806,23 +730,13 @@ KEEPALIVE_CONF = "/tmp/keepalive.conf"
 
 
 def _proc(name):
-    try:
-        args = ["pgrep", "-x", name] if name == "cloudflared" \\
-            else ["pgrep", "-f", name]
-        return "alive" if subprocess.run(args, capture_output=True,
-                                         text=True).stdout.strip() else "DEAD"
-    except Exception:
-        return "unknown"
+    return kc_proc_state(name, "exact" if name == "cloudflared" else "argv")
 
 
 def _read_conf():
-    try:
-        with open(KEEPALIVE_CONF) as f:
-            d = dict(l.strip().split("=", 1) for l in f
-                     if l.strip() and "=" in l)
-        return int(d.get("RUN", 1)), int(d.get("MINUTES", KEEPALIVE_MINUTES))
-    except Exception:
-        return 1, KEEPALIVE_MINUTES
+    run, minutes, _mtime = kc_read_conf(KEEPALIVE_CONF, KEEPALIVE_MINUTES,
+                                        KEEPALIVE_MINUTES, on_invalid="zero")
+    return run, minutes
 
 
 print(f"Public URL: {public_url}")
@@ -847,11 +761,13 @@ for i in range(1, KEEPALIVE_MINUTES + 1):
 save_output("keepalive.txt", "\\n".join(log) + "\\n")
 
 # 後片付け
-subprocess.run(["pkill", "-x", "cloudflared"], capture_output=True)
-subprocess.run(["pkill", "-f", "auth_proxy.py"], capture_output=True)
+left = kc_stop_processes([("-x cloudflared", "cloudflared"),
+                          ("-f auth_proxy.py", "auth_proxy")])
 if "_server" in globals():
     _server.shutdown()
 print("🧹 停止済（proxy / cloudflared / mock）")
+if left:
+    print(f"⚠ 残存: {left}")
 ''')
 
 # ── 書き出し ────────────────────────────────────────────────

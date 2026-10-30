@@ -25,6 +25,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 from kbuild import embed, metadata, pack_nb  # noqa: E402
+from runtime import source_bundle  # noqa: E402
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 DATASET = "my-ollama-orcarouter-qwen38-27b"
@@ -88,6 +89,14 @@ llama-server を直に叩けば `--spec-type draft-mtp` が使えます。
 
 > ⚠ **テスト用にコンテキストを {CTX:,} に抑えています。** 本番は 131,072。
 """))
+
+# ── 0.5: 共通ランタイム ─────────────────────────────────────
+# proxy 起動・トンネル URL 取得・keepalive conf・HTTP 待ちを runtime/ に
+# 一本化する。手で編集しない（真実源はリポジトリ直下の runtime/*.py）。
+cells.append(("markdown", "---\n### 🧩 共通ランタイム（proxy / tunnel / keepalive / verify）\n\n"
+              "`runtime/` の真実源をビルダーが連結して埋め込んでいます。\n"))
+cells.append(("code", source_bundle(
+    "net", "proc", "storage", "keepalive", "proxy")))
 
 # ── 1: 設定 ─────────────────────────────────────────────────
 cells.append(("markdown", "---\n### ⚙️ 設定（GPU検出 → コンテキスト決定）\n"))
@@ -207,6 +216,9 @@ kv_used = KV_KIB_PER_TOK_Q8 * CONTEXT_LENGTH / 1024 / 1024
 print(f"コンテキスト: {{CONTEXT_LENGTH:,}} tokens")
 print(f"  モデル {{MODEL_GIB}} GiB + KV(q8_0) {{kv_used:.2f}} GiB = {{MODEL_GIB + kv_used:.2f}} GiB")
 print(f"MTP        : {{'有効' if USE_MTP else '無効'}}")
+
+# 失敗時の証跡（FAILED.txt）は共通ランタイム（runtime/storage.py）へ
+fail = kc_fail
 '''))
 
 # ── 2: バイナリ復元 ─────────────────────────────────────────
@@ -587,46 +599,17 @@ for line in log_txt.splitlines():
 cells.append(("markdown", "---\n### 🌐 リバースプロキシ起動（UI 配信 + 同一オリジン化）\n"))
 
 cells.append(("code", '''# プロキシを起動。UI を / で配り、API を llama-server へ中継する。
-import os, subprocess, time, urllib.request, urllib.error
-
-subprocess.run(["pkill", "-f", "auth_proxy.py"], capture_output=True)
-time.sleep(1)
+# 起動・待機・認証なし検査の実装は共通ランタイム（runtime/proxy.py）。
+import os
 
 proxy_env = {**os.environ, "API_USER": "", "API_PASS": ""}
-with open("/tmp/auth_proxy.log", "w") as log:
-    proxy_proc = subprocess.Popen(
-        ["python3", PROXY_PATH,
-         "--port", str(PROXY_PORT),
-         "--upstream", f"http://127.0.0.1:{PORT}",
-         "--chat-html", CHAT_PATH],
-        env=proxy_env, stdout=log, stderr=log,
-    )
-print(f"🔄 proxy PID: {proxy_proc.pid}")
-
-for i in range(30):
-    try:
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{PROXY_PORT}/healthz", timeout=3
-        ) as r:
-            if r.status == 200:
-                print(f"✅ プロキシ起動完了（{i+1}s）")
-                break
-    except Exception:
-        pass
-    time.sleep(1)
-else:
-    print(open("/tmp/auth_proxy.log").read()[-2000:])
-    raise RuntimeError("プロキシの起動に失敗しました")
+proxy_proc = kc_start_proxy(
+    PROXY_PORT, f"http://127.0.0.1:{PORT}", CHAT_PATH, PROXY_PATH,
+    env=proxy_env, fail=fail,
+)
 
 # 認証は付けない設計。401 が返るなら設定ミス。
-req = urllib.request.Request(f"http://127.0.0.1:{PROXY_PORT}/api/tags")
-try:
-    with urllib.request.urlopen(req, timeout=10) as r:
-        print(f"  ✅ 認証なし → HTTP {r.status}")
-except urllib.error.HTTPError as e:
-    if e.code in (401, 403):
-        raise RuntimeError(f"認証なしで HTTP {e.code} — 認証が有効になっています")
-    print(f"  ✅ 認証なし → HTTP {e.code}（401 でない）")
+kc_assert_no_auth(PROXY_PORT, fail=fail)
 '''))
 
 # ── 6: 疎通確認（MTP の効果測定込み）────────────────────────
@@ -719,7 +702,6 @@ if IS_NGROK:
 import json, os, subprocess, time, urllib.request
 
 NGROK_BIN = "/usr/local/bin/ngrok"
-NGROK_API = "http://127.0.0.1:4040/api/tunnels"
 NGROK_DOMAIN_DEFAULT = "rebalance-cornflake-sagging.ngrok-free.dev"
 
 if not os.path.isfile(NGROK_BIN):
@@ -766,28 +748,7 @@ with open(TUNNEL_LOG, "w") as _log:
     ng_proc = subprocess.Popen(RESTART_CMD, stdout=_log, stderr=_log)
 print("🔄 ngrok PID: " + str(ng_proc.pid))
 
-
-def probe_url():
-    try:
-        with urllib.request.urlopen(NGROK_API, timeout=3) as r:
-            d = json.loads(r.read().decode())
-        for t in d.get("tunnels", []):
-            u = t.get("public_url", "")
-            if u.startswith("https://"):
-                return u
-    except Exception:
-        pass
-    return ""
-
-
-public_url = ""
-for i in range(60):
-    public_url = probe_url()
-    if public_url:
-        break
-    if i % 10 == 9:
-        print(f"⏳ URL 待ち ({i+1}/60)...")
-    time.sleep(1)
+public_url = kc_wait_url("ngrok", TUNNEL_LOG, progress_every=0)
 
 if not public_url:
     print(open(TUNNEL_LOG).read()[-3000:])
@@ -831,20 +792,7 @@ with open(TUNNEL_LOG, "w") as _log:
     cf_proc = subprocess.Popen(RESTART_CMD, stdout=_log, stderr=_log)
 print("🔄 cloudflared PID: " + str(cf_proc.pid))
 
-URL_RE = re.compile(r"https://[a-z0-9-]+\\.trycloudflare\\.com")
-public_url = ""
-for i in range(90):
-    try:
-        with open(TUNNEL_LOG) as f:
-            m = URL_RE.search(f.read())
-        if m:
-            public_url = m.group(0)
-            break
-    except FileNotFoundError:
-        pass
-    if i % 10 == 9:
-        print(f"⏳ URL 待ち ({i+1}/90)...")
-    time.sleep(1)
+public_url = kc_wait_url("cloudflared", TUNNEL_LOG, progress_every=0)
 
 if not public_url:
     print(open(TUNNEL_LOG).read()[-3000:])
@@ -929,27 +877,15 @@ MAX_MINUTES = 480
 
 
 def _read_conf():
-    """RUN=1/0 と MINUTES を読む。ファイルが無ければ既定値。"""
-    try:
-        with open(KEEPALIVE_CONF) as f:
-            txt = f.read()
-        d = {}
-        for line in txt.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                d[k.strip()] = v.strip()
-        run = int(d.get("RUN", 1))
-        mins = int(d.get("MINUTES", KEEPALIVE_MINUTES))
-        if mins <= 0:
-            return 0, KEEPALIVE_MINUTES
-        return run, min(mins, MAX_MINUTES)
-    except Exception:
-        return 1, KEEPALIVE_MINUTES
+    """RUN=1/0 と MINUTES を読む（既定値・上限は共通ランタイム）。"""
+    run, mins, _mtime = kc_read_conf(
+        KEEPALIVE_CONF, KEEPALIVE_MINUTES, MAX_MINUTES,
+        on_invalid="zero", quiet_clamp=True)
+    return run, mins
 
 
 # 初期値を書く（プロキシが送信時に上書きする）
-with open(KEEPALIVE_CONF, "w") as f:
-    f.write(f"RUN=1\\nMINUTES={KEEPALIVE_MINUTES}\\n")
+kc_write_conf(KEEPALIVE_CONF, 1, KEEPALIVE_MINUTES)
 
 try:
     with open("/tmp/public_url.txt") as f:
@@ -974,22 +910,14 @@ for i in range(1, mins + 1):
 
     # プロセスの死活
     def _alive(pattern):
-        r = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True)
-        return "alive" if r.stdout.strip() else "DEAD"
+        return kc_proc_state(pattern, "argv")
 
     ls = _alive("llama-server")
     px = _alive("auth_proxy.py")
     tn = _alive("ngrok" if "ngrok" in url else "cloudflared")
 
     # GPU 使用量
-    try:
-        gpu = subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip().replace("\\n", " | ")
-    except Exception:
-        gpu = "N/A"
+    gpu = kc_gpu_usage()
 
     line = f"[{time.strftime('%H:%M:%S')}] llama={ls} proxy={px} tunnel={tn} | GPU: {gpu}"
     log.append(line)
@@ -1021,25 +949,7 @@ TARGETS = [
     ("-f llama-server", "llama-server"),
 ]
 
-for pattern, label in TARGETS:
-    r = subprocess.run(f"pgrep {pattern}", shell=True, capture_output=True, text=True)
-    if r.stdout.strip():
-        subprocess.run(f"pkill -TERM {pattern}", shell=True, capture_output=True)
-        print(f"  TERM → {label}")
-time.sleep(3)
-
-for pattern, label in TARGETS:
-    r = subprocess.run(f"pgrep {pattern}", shell=True, capture_output=True, text=True)
-    if r.stdout.strip():
-        subprocess.run(f"pkill -KILL {pattern}", shell=True, capture_output=True)
-        print(f"  KILL → {label}（残存していた）")
-
-time.sleep(2)
-left = []
-for pattern, label in TARGETS:
-    r = subprocess.run(f"pgrep {pattern}", shell=True, capture_output=True, text=True)
-    if r.stdout.strip():
-        left.append(label)
+left = kc_stop_processes(TARGETS)
 
 if left:
     print(f"  ⚠ 残存: {', '.join(left)}")

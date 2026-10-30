@@ -30,6 +30,7 @@ IS_NGROK = TUNNEL == "ngrok"
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from kbuild import embed, metadata, pack_nb  # noqa: E402
+from runtime import source_bundle  # noqa: E402
 # prepare-vllm-dataset.ipynb / kernel-metadata.json と同じディレクトリに置くと
 # メタデータが衝突するので、kernel 用は専用ディレクトリへ分ける。
 # トンネルごとにディレクトリを分ける。kernel-metadata.json は push 時の
@@ -115,6 +116,13 @@ __SECRET__
 > AWQ は Triton 実装にフォールバックします。
 """, TUNNEL=TUNNEL, HFMODEL=HF_MODEL, DATASET=DATASET_ID,
             CFBULLET=cf_bullet, SECRET=secret_note))
+
+# ── 0.5: 共通ランタイム ─────────────────────────────────────
+# proxy 起動・トンネル URL 取得・keepalive conf・後片付けを runtime/ に
+# 一本化する。手で編集しない（真実源はリポジトリ直下の runtime/*.py）。
+_add("markdown", "---\n### 🧩 共通ランタイム（proxy / tunnel / keepalive / verify）\n\n"
+                 "`runtime/` の真実源をビルダーが連結して埋め込んでいます。\n")
+_add("code", source_bundle("net", "proc", "storage", "keepalive", "proxy"))
 
 # ── 1: 設定 ─────────────────────────────────────────────────
 _add("markdown", "---\n### ⚙️ 設定（Dataset 検出 → VRAM 計測 → 起動条件決定）\n")
@@ -240,37 +248,9 @@ API_PASS = os.environ.get("API_PASS", "")
 
 # ---- 永続化ヘルパー ----
 # `kaggle kernels output` が zip 化するのは /kaggle/working のみ。
-OUT_DIRS = ("/kaggle/working", "/output")
-
-
-def save_output(name, text):
-    """検証成果物を永続領域へ。1 つでも書ければ True（成功条件に使う）。"""
-    saved = []
-    for d in OUT_DIRS:
-        try:
-            os.makedirs(d, exist_ok=True)
-            with open(os.path.join(d, name), "w") as f:
-                f.write(text)
-            saved.append(d)
-        except Exception as e:
-            print(f"  ⚠ {d} 書き出し失敗 ({e})")
-    if saved:
-        print(f"  📄 {name} 保存済: {', '.join(saved)}")
-        return True
-    print(f"  ⚠ 成果物を1つも保存できませんでした: {name}")
-    return False
-
-
-def fail(msg, tail_path=None):
-    """失敗原因を永続領域に残してから raise（ログ API は当てにできない）。"""
-    tail = ""
-    try:
-        if tail_path and os.path.isfile(tail_path):
-            tail = open(tail_path, errors="replace").read()[-3000:]
-    except Exception:
-        pass
-    save_output("FAILED.txt", f"{msg}\\n\\n{tail}")
-    raise RuntimeError(msg)
+OUT_DIRS = KC_OUT_DIRS
+save_output = kc_save_output
+fail = kc_fail
 
 
 print()
@@ -515,13 +495,6 @@ _add("markdown", "---\n### 🌐 リバースプロキシ起動（UI 配信 + 同
 
 _add("code", '''# リバースプロキシを起動（UI を / で配信し、API を同一オリジンにする）
 import os
-import subprocess
-import time
-import urllib.error
-import urllib.request
-
-subprocess.run(["pkill", "-f", "auth_proxy.py"], capture_output=True)
-time.sleep(1)
 
 proxy_env = {
     **os.environ,
@@ -529,45 +502,14 @@ proxy_env = {
     "API_USER": API_USER,
     "API_PASS": API_PASS,
 }
-with open("/tmp/auth_proxy.log", "w") as log:
-    proxy_proc = subprocess.Popen(
-        ["python3", PROXY_PATH,
-         "--port", str(PROXY_PORT),
-         "--upstream", f"http://127.0.0.1:{VLLM_PORT}",
-         "--chat-html", CHAT_PATH,
-         # クライアントが temperature=0 / repetition_penalty 未指定で送っても
-         # 崩壊しないよう、サーバ側で下限を矯正する（RP>=1.05 / temp>0）。
-         "--enforce-sampling"],
-        env=proxy_env, stdout=log, stderr=log,
-    )
-print(f"🔄 proxy PID: {proxy_proc.pid}")
-
-for i in range(30):
-    try:
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{PROXY_PORT}/healthz", timeout=3
-        ) as r:
-            if r.status == 200:
-                print(f"✅ プロキシ起動完了（{i+1}s）")
-                break
-    except Exception:
-        pass
-    time.sleep(1)
-else:
-    print(open("/tmp/auth_proxy.log").read()[-2000:])
-    fail("認証プロキシの起動に失敗しました", "/tmp/auth_proxy.log")
+# クライアントが temperature=0 / repetition_penalty 未指定で送っても
+# 崩壊しないよう、サーバ側で下限を矯正する（RP>=1.05 / temp>0）。
+proxy_proc = kc_start_proxy(
+    PROXY_PORT, f"http://127.0.0.1:{VLLM_PORT}", CHAT_PATH, PROXY_PATH,
+    extra_args=("--enforce-sampling",), env=proxy_env, fail=fail)
 
 # vLLM はまだ起動していないので 502 で正常（401 なら設定ミス）
-req = urllib.request.Request(f"http://127.0.0.1:{PROXY_PORT}/v1/models")
-try:
-    with urllib.request.urlopen(req, timeout=10) as r:
-        print(f"  ✅ 認証なし → HTTP {r.status}")
-except urllib.error.HTTPError as e:
-    if e.code in (401, 403):
-        fail(f"認証なしで HTTP {e.code} — 認証が有効になっています")
-    print(f"  ✅ 認証なし → HTTP {e.code}（上流未起動。401 でない）")
-except Exception as e:
-    fail(f"プロキシ検査に失敗: {type(e).__name__}: {e}")
+kc_assert_no_auth(PROXY_PORT, path="/v1/models", fail=fail)
 ''')
 
 # ── 4: vllm serve ───────────────────────────────────────────
@@ -1273,10 +1215,9 @@ if IS_NGROK:
          "Secrets の `NGROK_TOKEN` を使います。`NGROK_DOMAIN` を設定すると\n"
          "**毎回同じ URL** になります（未設定ならランダム）。\n")
     _add("code", '''# ngrok 起動 → 公開URL取得（authtoken は Secrets の NGROK_TOKEN）
-import json, os, subprocess, time, urllib.request
+import os, subprocess, time
 
 NGROK_BIN = "/usr/local/bin/ngrok"
-NGROK_API = "http://127.0.0.1:4040/api/tunnels"
 
 # patch Dataset には入れていないので取得する（約 30 MB / 数秒）
 if not os.path.isfile(NGROK_BIN):
@@ -1325,16 +1266,7 @@ if NGROK_DOMAIN:
 
 def probe_url():
     """ngrok のローカル管理APIから公開URLを取る（ログ解析より確実）。"""
-    try:
-        with urllib.request.urlopen(NGROK_API, timeout=3) as r:
-            d = json.loads(r.read().decode())
-        for t in d.get("tunnels", []):
-            u = t.get("public_url", "")
-            if u.startswith("https://"):
-                return u
-    except Exception:
-        pass
-    return ""
+    return kc_probe_url("ngrok")
 
 
 subprocess.run(["pkill", "-x", "ngrok"], capture_output=True)
@@ -1344,36 +1276,19 @@ with open(TUNNEL_LOG, "w") as _log:
     ng_proc = subprocess.Popen(RESTART_CMD, stdout=_log, stderr=_log)
 print("🔄 ngrok PID: " + str(ng_proc.pid))
 
-public_url = ""
-for i in range(60):
-    public_url = probe_url()
-    if public_url:
-        break
-    if i % 10 == 9:
-        print("⏳ URL 待ち (" + str(i + 1) + "/60)...")
-    time.sleep(1)
-
+public_url = kc_wait_url("ngrok", TUNNEL_LOG)
 if not public_url:
     print(open(TUNNEL_LOG).read()[-3000:])
     fail("ngrok の公開URL取得に失敗しました", TUNNEL_LOG)
 
 print("🌍 URL: " + public_url)
 print("⏳ トンネル確立待ち（最大 60s）...")
-import urllib.error
-ready = False
-for i in range(20):
-    try:
-        with _open_public(public_url + "/healthz", timeout=10) as r:
-            if r.status == 200:
-                print("✅ トンネル確立（" + str((i + 1) * 3) + "s）")
-                ready = True
-                break
-    except Exception:
-        pass
-    time.sleep(3)
-
-if not ready:
+_elapsed = kc_wait_http(public_url + "/healthz", attempts=20, interval=3,
+                        opener=_open_public)
+if _elapsed is None:
     print("⚠ 確立を確認できませんでした。verify セルで再確認します。")
+else:
+    print("✅ トンネル確立（" + str(_elapsed) + "s）")
 
 with open("/tmp/public_url.txt", "w") as f:
     f.write(public_url)
@@ -1387,24 +1302,18 @@ else:
     _add("markdown", "---\n### 🔗 cloudflared トンネル → 公開URL\n")
     _add("code", '''# cloudflared quick tunnel 起動 → 公開URL取得
 # アカウント不要。authtoken も Secrets も要らない。
-import os, re, subprocess, time
+import os, subprocess, time
 
 CF_BIN = "/usr/local/bin/cloudflared"
 TUNNEL_NAME = "cloudflared"
 TUNNEL_LOG = "/tmp/cloudflared.log"
 RESTART_CMD = [CF_BIN, "tunnel", "--url", f"http://127.0.0.1:{PROXY_PORT}",
                "--no-autoupdate"]
-URL_RE = re.compile(r"https://[a-z0-9-]+\\.trycloudflare\\.com")
 
 
 def probe_url():
     """cloudflared のログから公開URLを取る。"""
-    try:
-        with open(TUNNEL_LOG) as f:
-            m = URL_RE.search(f.read())
-        return m.group(0) if m else ""
-    except FileNotFoundError:
-        return ""
+    return kc_probe_url("cloudflared", TUNNEL_LOG)
 
 
 # 前回のトンネルを確実に落とす（多重起動すると URL が混ざる）
@@ -1416,15 +1325,7 @@ with open(TUNNEL_LOG, "w") as log:
 print(f"🔄 cloudflared PID: {cf_proc.pid}")
 
 # ---- 公開URL取得（ログに URL が出るまで待つ）----
-public_url = ""
-for i in range(90):
-    public_url = probe_url()
-    if public_url:
-        break
-    if i % 10 == 9:
-        print(f"⏳ URL 待ち ({i+1}/90)...")
-    time.sleep(1)
-
+public_url = kc_wait_url("cloudflared", TUNNEL_LOG)
 if not public_url:
     print("⚠ 公開URLを取得できませんでした")
     print(open(TUNNEL_LOG).read()[-3000:])
@@ -1433,21 +1334,12 @@ if not public_url:
 # ---- トンネル確立まで待つ ----
 print(f"🌍 URL: {public_url}")
 print("⏳ トンネル確立待ち（最大 60s）...")
-import urllib.request, urllib.error
-ready = False
-for i in range(20):
-    try:
-        with _open_public(f"{public_url}/healthz", timeout=10) as r:
-            if r.status == 200:
-                print(f"✅ トンネル確立（{(i+1)*3}s）")
-                ready = True
-                break
-    except Exception:
-        pass
-    time.sleep(3)
-
-if not ready:
+_elapsed = kc_wait_http(f"{public_url}/healthz", attempts=20, interval=3,
+                        opener=_open_public)
+if _elapsed is None:
     print("⚠ 確立を確認できませんでした。verify セルで再確認します。")
+else:
+    print(f"✅ トンネル確立（{_elapsed}s）")
 
 with open("/tmp/public_url.txt", "w") as f:
     f.write(public_url)
@@ -1570,31 +1462,11 @@ def _judge(idx, label, ok, detail):
 
 def _with_retry(fn, tries=6, delay=5):
     """一過性の DNS/経路瞬断を吸収する（HTTP エラーは答えなので再試行しない）。"""
-    last = None
-    for i in range(max(1, tries)):
-        try:
-            return fn()
-        except urllib.error.HTTPError:
-            raise
-        except Exception as e:
-            last = e
-            if i + 1 < tries:
-                wait = delay * (i + 1)
-                print(f"  ⚠ 一時的な通信エラー（{i+1}/{tries}）: {e} "
-                      f"→ {wait}s 待って再試行")
-                _time.sleep(wait)
-    raise last
+    return kc_retry(fn, tries=tries, delay=delay)
 
 
 def _post(url, payload, timeout=600, stream=False):
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json",
-                 "ngrok-skip-browser-warning": "true"},
-        method="POST",
-    )
-    return urllib.request.urlopen(req, timeout=timeout)
+    return kc_post_json(url, payload, timeout=timeout)
 
 
 CHAT_BODY = {
@@ -1850,26 +1722,9 @@ KEEPALIVE_KEEPALIVE = 60      # チャット送信ごとにリセットする時
 
 def _read_keepalive_conf():
     """RUN=1/0 と MINUTES を読む（既定は 1 と KEEPALIVE_KEEPALIVE）。"""
-    try:
-        with open(KEEPALIVE_CONF) as f:
-            lines = [l.strip() for l in f if l.strip() and "=" in l]
-        d = dict(l.split("=", 1) for l in lines)
-        run = int(d.get("RUN", 1))
-        minutes = int(d.get("MINUTES", KEEPALIVE_KEEPALIVE))
-    except FileNotFoundError:
-        run, minutes = 1, KEEPALIVE_KEEPALIVE
-    except Exception:
-        run, minutes = 1, KEEPALIVE_KEEPALIVE
-    if run <= 0:
-        return 0, KEEPALIVE_KEEPALIVE
-    if minutes <= 0:
-        fail(f"KEEPALIVE_MINUTES={minutes} は無効（1〜{MAX_MINUTES} で指定）")
-    if minutes > MAX_MINUTES:
-        # proxy は毎回 MINUTES=60 を書く。上限に張り付くのは正常なので、
-        # 既定値のときは黙る（毎分 1 行のログ埋め尽くしを避ける）。
-        if minutes != KEEPALIVE_KEEPALIVE:
-            print(f"⚠ KEEPALIVE_MINUTES={minutes} → {MAX_MINUTES} に制限")
-        minutes = MAX_MINUTES
+    run, minutes, _mtime = kc_read_conf(
+        KEEPALIVE_CONF, KEEPALIVE_KEEPALIVE, MAX_MINUTES, fail=fail,
+        quiet_clamp=True)
     return run, minutes
 
 
@@ -1882,27 +1737,11 @@ except FileNotFoundError:
 
 def _proc(name):
     """プロセス生死。vLLM は "vllm serve" の argv で照合する。"""
-    try:
-        if name == "vllm serve":
-            args = ["pgrep", "-f", name]
-        else:
-            args = ["pgrep", "-x", name]
-        out = subprocess.run(args, capture_output=True, text=True,
-                             timeout=5).stdout.strip()
-        return "alive" if out else "DEAD"
-    except Exception:
-        return "unknown"
+    return kc_proc_state(name, "argv" if name == "vllm serve" else "exact")
 
 
 def _gpu():
-    try:
-        return subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip().replace("\\n", " | ")
-    except Exception:
-        return "N/A"
+    return kc_gpu_usage()
 
 
 print(f"Public URL: {url}")
@@ -1917,10 +1756,7 @@ print()
 
 def _conf_mtime():
     """keepalive.conf の更新時刻。proxy がチャット送信ごとに書き直す。"""
-    try:
-        return os.path.getmtime(KEEPALIVE_CONF)
-    except OSError:
-        return 0.0
+    return kc_conf_mtime(KEEPALIVE_CONF)
 
 
 log = []
@@ -2059,44 +1895,18 @@ print("🧹 後片付け: GPU / プロセスを解放")
 print("=" * 56)
 
 
-def _pids(args):
-    """pgrep の引数リストで PID を取る（pattern を必ず 1 要素で渡す）。
-
-    shell 文字列で "pgrep -f vllm serve" と書くと、pgrep は positional を
-    1 つしか取らないため "serve" が余計な引数になり失敗する（実測）。
-    """
-    try:
-        r = subprocess.run(["pgrep"] + args, capture_output=True,
-                           text=True, timeout=15)
-        return [p for p in r.stdout.split() if p.strip()]
-    except Exception:
-        return []
-
-
 # 順序: 外側（トンネル）→ 中継 → 推論本体（vLLM + EngineCore 子プロセス）
 TARGETS = [
-    (["-x", "ngrok"], "ngrok"),
-    (["-x", "cloudflared"], "cloudflared"),
-    (["-f", "auth_proxy.py"], "auth_proxy"),
-    (["-f", "vllm serve"], "vllm"),
-    (["-f", "VLLM::EngineCore"], "engine-core"),
+    ("-x ngrok", "ngrok"),
+    ("-x cloudflared", "cloudflared"),
+    ("-f auth_proxy.py", "auth_proxy"),
+    ("-f vllm serve", "vllm"),
+    ("-f VLLM::EngineCore", "engine-core"),
 ]
 
-for args, label in TARGETS:
-    if _pids(args):
-        subprocess.run(["pkill", "-TERM"] + args, capture_output=True)
-        print(f"  TERM → {label}")
-time.sleep(5)
-
-for args, label in TARGETS:
-    if _pids(args):
-        subprocess.run(["pkill", "-KILL"] + args, capture_output=True)
-        print(f"  KILL → {label}（残存していた）")
+left = kc_stop_processes(TARGETS, term_wait=5, final_wait=2)
 
 print()
-time.sleep(2)
-left = [label for args, label in TARGETS if _pids(args)]
-
 if left:
     print(f"  ⚠ 残存: {', '.join(left)}")
 else:

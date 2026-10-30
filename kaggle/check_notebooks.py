@@ -56,6 +56,9 @@ def main():
         # ビルダーは kbuild/ を import する（kaggle/ の外にある共通層）。
         shutil.copytree(ROOT / "kbuild", work / "kbuild",
                         ignore=shutil.ignore_patterns("__pycache__"))
+        # 生成コードの真実源。ビルダーが runtime/ を読んで埋め込む。
+        shutil.copytree(ROOT / "runtime", work / "runtime",
+                        ignore=shutil.ignore_patterns("__pycache__", "_selftest.py"))
         for builder, extra, out in TARGETS:
             env = {k: v for k, v in os.environ.items()
                    if not k.startswith("STEP2")}

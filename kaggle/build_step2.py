@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import kcconfig  # noqa: E402
 from kbuild import embed, metadata, pack_nb  # noqa: E402
+from runtime import source_bundle  # noqa: E402
 
 CFG = kcconfig.load()
 
@@ -107,6 +108,15 @@ cells.append(("markdown", f"""# 🚀 Step 2: Ollama + {TUNNEL} 公開APIサー�
 Abliterlitics の Qwen3.8-27B 12変体比較で総合1位（judge ASR 82.2%、capability 劣化なし）。
 手元の `Qwen3.8-27B-Uncensored-Q4_K_M.gguf` とは sha256 完全一致。
 """))
+
+# ── 0.5: 共通ランタイム ─────────────────────────────────────
+# proxy 起動・トンネル URL 取得・keepalive conf・HTTP 待ちを runtime/ に
+# 一本化する。手で編集しない（真実源はリポジトリ直下の runtime/*.py）。
+cells.append(("markdown", "---\n### 🧩 共通ランタイム（proxy / tunnel / keepalive / verify）\n\n"
+              "`runtime/` の真実源をビルダーが連結して埋め込んでいます。\n"
+              "セルを直接編集しても次のビルドで上書きされます。\n"))
+cells.append(("code", source_bundle(
+    "net", "proc", "storage", "keepalive", "proxy", "ollama")))
 
 # ── 1: 設定 ─────────────────────────────────────────────────
 cells.append(("markdown", "---\n### ⚙️ 設定（GPU検出 → モデル・コンテキスト決定）\n"))
@@ -238,42 +248,11 @@ print("  Secrets の設定は不要です（cloudflared はアカウント不要
 # `kaggle kernels output` が zip 化するのは **/kaggle/working** のだけ。
 # /output は公式の永続先ではなく、作れても zip に載らないことがある
 #（= 保存したつもりで証跡ゼロ）。だから両方へ書く。
-OUT_DIRS = ("/kaggle/working", "/output")
+# 実装は共通ランタイム（runtime/storage.py）にある。
+OUT_DIRS = KC_OUT_DIRS
 PROXY_PATH = "/usr/local/bin/auth_proxy.py"
-
-
-def save_output(name, text):
-    """検証成果物を永続領域へ。1 つでも書ければ True（成功条件に使う）。"""
-    saved = []
-    for d in OUT_DIRS:
-        try:
-            os.makedirs(d, exist_ok=True)
-            with open(os.path.join(d, name), "w") as f:
-                f.write(text)
-            saved.append(d)
-        except Exception as e:
-            print(f"  ⚠ {{d}} 書き出し失敗 ({{e}})")
-    if saved:
-        print(f"  📄 {{name}} 保存済: {{', '.join(saved)}}")
-        return True
-    print(f"  ⚠ 成果物を1つも保存できませんでした: {{name}}")
-    return False
-
-
-def fail(msg, tail_path=None):
-    """失敗原因を永続領域に残してから raise。
-
-    ログ API は実行中も空・完了後も非公開なので、**証跡が唯一の手掛かり**。
-    raise だけだと原因が分からず、COMPLETE と ERROR を突き合わせられない。
-    """
-    tail = ""
-    try:
-        if tail_path and os.path.isfile(tail_path):
-            tail = open(tail_path).read()[-3000:]
-    except Exception:
-        pass
-    save_output("FAILED.txt", f"{{msg}}\\n\\n{{tail}}")
-    raise RuntimeError(msg)
+save_output = kc_save_output
+fail = kc_fail
 '''))
 
 # ── 2: install ──────────────────────────────────────────────
@@ -311,7 +290,6 @@ if IS_NGROK:
 import json, os, subprocess, time, urllib.request
 
 NGROK_BIN = "/usr/local/bin/ngrok"
-NGROK_API = "http://127.0.0.1:4040/api/tunnels"
 
 # patch Dataset には入れていないので取得する（約 30 MB / 数秒）
 if not os.path.isfile(NGROK_BIN):
@@ -362,17 +340,8 @@ if NGROK_DOMAIN:
 
 
 def probe_url():
-    """ngrok のローカル管理APIから公開URLを取る（ログ解析より確実）。"""
-    try:
-        with urllib.request.urlopen(NGROK_API, timeout=3) as r:
-            d = json.loads(r.read().decode())
-        for t in d.get("tunnels", []):
-            u = t.get("public_url", "")
-            if u.startswith("https://"):
-                return u
-    except Exception:
-        pass
-    return ""
+    """ngrok のローカル管理APIから公開URLを取る（共通ランタイム）。"""
+    return kc_probe_url("ngrok")
 
 
 # 前回のトンネルを確実に落とす（多重起動すると URL が混ざる）
@@ -383,14 +352,7 @@ with open(TUNNEL_LOG, "w") as _log:
     ng_proc = subprocess.Popen(RESTART_CMD, stdout=_log, stderr=_log)
 print("🔄 ngrok PID: " + str(ng_proc.pid))
 
-public_url = ""
-for i in range(60):
-    public_url = probe_url()
-    if public_url:
-        break
-    if i % 10 == 9:
-        print("⏳ URL 待ち (" + str(i + 1) + "/60)...")
-    time.sleep(1)
+public_url = kc_wait_url("ngrok", TUNNEL_LOG)
 
 if not public_url:
     print(open(TUNNEL_LOG).read()[-3000:])
@@ -398,20 +360,10 @@ if not public_url:
 
 print("🌍 URL: " + public_url)
 print("⏳ トンネル確立待ち（最大 60s）...")
-import urllib.error
-ready = False
-for i in range(20):
-    try:
-        with urllib.request.urlopen(public_url + "/healthz", timeout=10) as r:
-            if r.status == 200:
-                print("✅ トンネル確立（" + str((i + 1) * 3) + "s）")
-                ready = True
-                break
-    except Exception:
-        pass
-    time.sleep(3)
-
-if not ready:
+elapsed = kc_wait_http(public_url + "/healthz", attempts=20, interval=3)
+if elapsed is not None:
+    print("✅ トンネル確立（" + str(elapsed) + "s）")
+else:
     print("⚠ 確立を確認できませんでした。verify セルで再確認します。")
 
 with open("/tmp/public_url.txt", "w") as f:

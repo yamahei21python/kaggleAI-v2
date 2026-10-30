@@ -12,16 +12,10 @@ except FileNotFoundError:
 # ---- トンネル確立の取り直し ----
 # tunnel セルでエッジ伝播待ちが終わっていなくても、ここで吸収する。
 # 届かなければ [1] がそのまま FAIL になる（握り潰さない）。
-for i in range(10):
-    try:
-        with urllib.request.urlopen(f"{public_url}/healthz", timeout=10) as r:
-            if r.status == 200:
-                if i:
-                    print(f"✅ トンネル確立をここで確認（{(i+1)*3}s）")
-                break
-    except Exception:
-        pass
-    _time.sleep(3)
+_elapsed = kc_wait_http(f"{public_url}/healthz", attempts=10, interval=3)
+if _elapsed is not None:
+    if _elapsed > 3:
+        print(f"✅ トンネル確立をここで確認（{_elapsed}s）")
 else:
     print("⚠ /healthz に届きません。トンネル未確立の可能性（[1] で判定）")
 lines = [
@@ -65,20 +59,7 @@ def _with_retry(fn, tries=6, delay=5):
     # 3回/4秒（~8秒）では吸収できないので、待ちを 5,10,15,20,25 秒と
     # 伸ばして合計 75 秒の窓を持つ。HTTP 応答（401/500 等）は「答え」
     # なので再試行せず、そのまま判定に渡す。
-    last = None
-    for i in range(max(1, tries)):
-        try:
-            return fn()
-        except urllib.error.HTTPError:
-            raise
-        except Exception as e:
-            last = e
-            if i + 1 < tries:
-                wait = delay * (i + 1)
-                print(f"  ⚠ 一時的な通信エラー（{i+1}/{tries}）: {e} "
-                      f"→ {wait}s 待って再試行")
-                _time.sleep(wait)
-    raise last
+    return kc_retry(fn, tries=tries, delay=delay)
 
 
 # [1] 認証なしでチャット UI が取れる（/ は 200 で HTML）
