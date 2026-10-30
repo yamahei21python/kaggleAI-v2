@@ -333,7 +333,9 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
    今回手動で 3 回走らせただけ。Mock で 20 秒の実行テストを追加。
 10. **認証ありのプロキシテストが無い** — `_selftest_proxy.py` は
     「認証なし」で起動して検証している（docstring 明記）。401・
-    `/stop` ヘッダ必須・チャンク本文の各経路を認証 ON でも回す。
+    `/stop` ヘッダ必須・チャンク本文の各経路を認証 ON でも回す。**完了**
+    （別ポートで認証 ON を起動し、誤パスワード 401 / UI 公開 / ストリーミング /
+    chunked / 非 ASCII Authorization を検証。68 チェック）。
 11. **クライアント設定の二重管理** — `opencode.json` と
     `opencode-llama-local.json`、`ask.py` の Gist 依存、UI の `/quota` 依存。
 

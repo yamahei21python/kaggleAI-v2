@@ -12,6 +12,7 @@
   8. 非 ASCII Authorization でも 500 にならない
   9. API_PASS を設定したときだけ 401 に戻る（任意機能の退行検知）
  10. /stop は POST + X-Kc-Stop 必須、API_PASS 設定時は認証も必須
+ 11. 認証 ON でも UI / ストリーミング / chunked が通る（別ポートで起動）
   + ノート埋め込み == auth_proxy.py / llama-chat.html
   + UI が認証なしで 200・秘密を含まない
 """
@@ -435,7 +436,8 @@ if started:
     env2 = {**__import__("os").environ, "API_USER": USER, "API_PASS": PASS_}
     p2 = subprocess.Popen(
         [sys.executable, str(RESTORED), "--port", str(P2),
-         "--upstream", f"http://127.0.0.1:{UP_PORT}"],
+         "--upstream", f"http://127.0.0.1:{UP_PORT}",
+         "--chat-html", str(ROOT / "llama-chat.html")],
         env=env2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
@@ -455,8 +457,73 @@ if started:
         req = urllib.request.Request(f"http://127.0.0.1:{P2}/api/tags",
                                      headers=AUTH)
         r = urllib.request.urlopen(req, timeout=5)
-        check("API_PASS 設定時→認証ありで200", r.status == 200,
+        d = json.loads(r.read())
+        check("API_PASS 設定時→認証ありで200（上流に漏れない）",
+              r.status == 200 and d.get("auth") is False,
+              f"HTTP {r.status} upstream_auth={d.get('auth')}")
+
+        # 9b) 誤パスワードは 401（正しいユーザー名でも通さない）
+        _bad = {"Authorization": "Basic " + base64.b64encode(
+            f"{USER}:wrong".encode()).decode()}
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{P2}/api/tags", headers=_bad), timeout=5)
+            check("誤パスワード→401", False, "200 が返った")
+        except urllib.error.HTTPError as e:
+            check("誤パスワード→401", e.code == 401, f"HTTP {e.code}")
+
+        # 9c) UI は認証 ON でも公開（静的 HTML のみ）
+        r = urllib.request.urlopen(f"http://127.0.0.1:{P2}/", timeout=5)
+        check("認証ON: UI は認証なしで200",
+              r.status == 200
+              and r.headers.get("Content-Type", "").startswith("text/html"),
               f"HTTP {r.status}")
+
+        # 9d) ストリーミングは認証 ON でも逐次届く
+        req = urllib.request.Request(f"http://127.0.0.1:{P2}/stream",
+                                     headers=AUTH)
+        _t0, _times = time.time(), []
+        with urllib.request.urlopen(req, timeout=30) as r:
+            for raw in r:
+                if raw.strip():
+                    _times.append(round(time.time() - _t0, 2))
+        _spread = (_times[-1] - _times[0]) if len(_times) >= 2 else 0
+        check("認証ON: ストリーミング逐次受信",
+              len(_times) == 5 and _spread > 0.8,
+              f"chunks={len(_times)} spread={_spread}")
+
+        # 9e) chunked リクエストボディも認証 ON で欠落しない
+        import http.client as _hc2
+        _payload = json.dumps({"big": "z" * 5000}).encode()
+        _conn = _hc2.HTTPConnection("127.0.0.1", P2, timeout=10)
+        _conn.putrequest("POST", "/api/chat", skip_accept_encoding=True)
+        _conn.putheader("Transfer-Encoding", "chunked")
+        _conn.putheader("Content-Type", "application/json")
+        for k, v in AUTH.items():
+            _conn.putheader(k, v)
+        _conn.endheaders()
+        for i in range(0, len(_payload), 1000):
+            piece = _payload[i:i + 1000]
+            _conn.send(b"%x\r\n" % len(piece) + piece + b"\r\n")
+        _conn.send(b"0\r\n\r\n")
+        _r = _conn.getresponse()
+        _d = json.loads(_r.read())
+        _conn.close()
+        _got = Upstream.got_body or b""
+        check("認証ON: chunked リクエストボディ到達",
+              _r.status == 200 and _got == _payload
+              and _d.get("echo") == _payload.decode(),
+              f"recv={len(_got)}/{len(_payload)}B match={_got == _payload}")
+
+        # 9f) 非 ASCII Authorization は 401（500 にしない）
+        _c = _hc2.HTTPConnection("127.0.0.1", P2, timeout=5)
+        _c.request("GET", "/api/tags",
+                   headers={"Authorization": "Basic \xff\xfe"})
+        _rr = _c.getresponse()
+        _rr.read()
+        _c.close()
+        check("認証ON: 非ASCII Authorization は401",
+              _rr.status == 401, f"HTTP {_rr.status}")
 
         # 10) /stop は認証より前に処理されていた（誰でも Kaggle セッションを
         #     止められた）退行の検知。成功系は最後に 1 回だけ叩く（proxy が落ちる）。
