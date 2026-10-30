@@ -54,6 +54,24 @@ id に紐づく）。ここでは「どれが現役で、どのビルダーが�
 5. **`build_step2_direct.py` は既定が ngrok**（`build_step2.py` / vLLM は既定
    cloudflared）。kbuild の spec ではトンネルを必須項目にして既定値の揺れを消す。
 
+## Secrets 台帳
+
+Secrets は**カーネル単位**で UI から登録する（コードからは登録できない）。
+コード中の参照は `kbuild/secrets.py` に台帳化し、`tests/test_secrets.py` が
+`get_secret("...")` / `secret("...")` のリテラルと突き合わせる。
+
+| カーネル | 必須 Secret |
+|---|---|
+| `step1-orcarouter-qwen38-27b-dl` | `KAGGLE_USERNAME`, `KAGGLE_KEY` |
+| `step2-…-cloudflared` / `step2-vllm-…-cloudflared` | `GIST_ID`, `GITHUB_TOKEN` |
+| `step2-…-ngrok-fixed` / `step2-vllm-…-ngrok` / `step2-direct-…-ngrok` | 上記 + `NGROK_TOKEN`, `NGROK_DOMAIN` |
+| `prepare-vllm-dataset` | `HF_TOKEN` |
+| `exl3-serve` / `-dryrun` / `-keepalive` | `EXL3_API_USER`, `EXL3_API_PASS`, `GIST_ID`, `GITHUB_TOKEN` |
+| `exl3-dataset-upload` | `KAGGLE_USERNAME`, `KAGGLE_KEY` |
+| `keepalive-test` / `ci-cpu` / その他の CPU 検証 | なし |
+
+`EXL3_API_PASS` が未設定でも乱数で起動するが、`result.json` には値を残さない。
+
 ## 生成一致チェックの現状
 
 `kaggle/check_notebooks.py` が再生成して比較しているのは 12 冊:
