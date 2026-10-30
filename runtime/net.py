@@ -20,6 +20,16 @@ TUNNEL_HOSTS = {
 }
 
 
+# Dataset 同梱バイナリと同じ版に固定する（latest は再現性がない）。
+KC_CLOUDFLARED_VERSION = "2026.10.4"
+
+
+def kc_cloudflared_url(version=KC_CLOUDFLARED_VERSION):
+    """cloudflared (linux amd64) のダウンロード URL。"""
+    return ("https://github.com/cloudflare/cloudflared/releases/download/"
+            f"{version}/cloudflared-linux-amd64")
+
+
 def kc_probe_url(host, log_path=None):
     """現在の公開URLを返す（無ければ ""）。host は cloudflared / ngrok。"""
     spec = TUNNEL_HOSTS[host]

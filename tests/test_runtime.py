@@ -29,7 +29,8 @@ def test_bundle():
     for fn in ("def kc_probe_url", "def kc_proc_state", "def kc_save_output",
                "def kc_read_conf", "def kc_start_proxy", "def kc_unload_model",
                "def kc_detect_gpu", "def kc_wait_gpu_idle", "def kc_ollama_chat",
-               "def kc_keepalive_deadline", "def kc_keepalive_expired"):
+               "def kc_keepalive_deadline", "def kc_keepalive_expired",
+               "def kc_cloudflared_url"):
         check(f"{fn} が含まれる", fn in src)
     try:
         compile(src, "<bundle>", "exec")
@@ -73,6 +74,12 @@ class _H(http.server.BaseHTTPRequestHandler):
 
 def test_net():
     print("\n=== net（トンネル URL / HTTP 待ち） ===")
+    check("cloudflared URL は版を固定",
+          net.kc_cloudflared_url()
+          == ("https://github.com/cloudflare/cloudflared/releases/download/"
+              f"{net.KC_CLOUDFLARED_VERSION}/cloudflared-linux-amd64"))
+    check("cloudflared URL は latest を使わない",
+          "releases/latest" not in net.kc_cloudflared_url())
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="rt_net_"))
     log = tmp / "cloudflared.log"
     log.write_text("INF |  https://brave-tiger-xyz.trycloudflare.com  |\n")

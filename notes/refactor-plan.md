@@ -315,6 +315,11 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 6. **定数の分散** — ポート番号（9931 / 11435 / 19950 / 8899）が 42 箇所、
    cloudflared の `releases/latest` が 9 箇所。後者はバージョン固定しないと
    再現性がない。→ `runtime/constants.py` と `CLOUDFLARED_VERSION`。
+   - cloudflared は **2026.10.4 に固定**（Dataset 同梱バイナリと同一版、
+     サイズ 40,247,428 B も一致）。`runtime/net.py` の `KC_CLOUDFLARED_VERSION`
+     / `kc_cloudflared_url()` に集約し、6 ビルダー + 生成物の `latest` を排除。
+     ポート番号の集約は未着手（builder ごとに意味が異なるため spec 化と同時に行う）。
+- 進捗: 上記のうち cloudflared のバージョン固定は完了。
 7. **シークレットの台帳が無い** — `NGROK_TOKEN` / `GITHUB_TOKEN` / `GIST_ID` /
    `KAGGLE_USERNAME` / `KAGGLE_KEY` / `HF_TOKEN` / `EXL3_API_USER` /
    `EXL3_API_PASS` が散在。spec に `required_secrets` を宣言し、CI で

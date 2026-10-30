@@ -123,7 +123,7 @@ if missing:
         print("⬇️  cloudflared をダウンロード中...")
         procs.append(subprocess.Popen(
             "curl -fsSL --connect-timeout 15 -o /usr/local/bin/cloudflared "
-            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && "
+            f"{kc_cloudflared_url()} && "
             "chmod +x /usr/local/bin/cloudflared",
             shell=True,
         ))

@@ -55,8 +55,11 @@ def test_exl3_build():
             # runtime/ の共通層を埋め込んでいる（exl3 側に実装を残さない）
             for fn in ("kc_detect_gpu", "kc_start_proxy", "kc_wait_url",
                        "kc_wait_http", "kc_read_conf", "kc_write_conf",
-                       "kc_stop_via_proxy", "kc_keepalive_expired"):
+                       "kc_stop_via_proxy", "kc_keepalive_expired",
+                       "kc_cloudflared_url"):
                 check(f"def {fn}" in body, f"{mode}: runtime の {fn} が無い")
+            check("releases/latest" not in body,
+                  f"{mode}: cloudflared の URL が latest のまま")
             check("kc_start_proxy(" in body, f"{mode}: proxy 起動が共通層に寄っていない")
             check("kc_stop_via_proxy(" in body, f"{mode}: /stop が共通層に寄っていない")
             check("kc_write_conf(" in body, f"{mode}: conf 書き込みが共通層に寄っていない")

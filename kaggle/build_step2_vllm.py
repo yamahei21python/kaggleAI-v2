@@ -282,8 +282,8 @@ if TUNNEL_KIND != "ngrok":
         print("⬇️  cloudflared をダウンロード中...")
         subprocess.run(
             "curl -fsSL --connect-timeout 15 -o /usr/local/bin/cloudflared "
-            "https://github.com/cloudflare/cloudflared/releases/latest/download/"
-            "cloudflared-linux-amd64 && chmod +x /usr/local/bin/cloudflared",
+            f"{kc_cloudflared_url()}"
+            " && chmod +x /usr/local/bin/cloudflared",
             shell=True, check=False, timeout=300,
         )
     if not os.path.isfile(dst):

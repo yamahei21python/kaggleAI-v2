@@ -755,7 +755,7 @@ if CF_PATH is None:
     subprocess.run(
         ["bash", "-c",
          "curl -fsSL -o /usr/local/bin/cloudflared "
-         "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+         f"{kc_cloudflared_url()}"
          " && chmod +x /usr/local/bin/cloudflared"],
         check=True)
     CF_PATH = "/usr/local/bin/cloudflared"

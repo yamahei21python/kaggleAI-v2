@@ -143,7 +143,7 @@ __CHAT_B64__
 CF_BIN = "/usr/local/bin/cloudflared"
 if not os.path.exists(CF_BIN):
     print("cloudflared をダウンロード中...")
-    url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+    url = kc_cloudflared_url()
     urllib.request.urlretrieve(url, CF_BIN)
     os.chmod(CF_BIN, 0o755)
     print(f"✅ {CF_BIN} ダウンロード完了")

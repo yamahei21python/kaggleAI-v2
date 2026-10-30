@@ -538,8 +538,8 @@ if src:
 elif not os.path.isfile(CF_BIN):
     subprocess.run(
         "curl -fsSL -o /usr/local/bin/cloudflared "
-        "https://github.com/cloudflare/cloudflared/releases/latest/download/"
-        "cloudflared-linux-amd64 && chmod +x /usr/local/bin/cloudflared",
+        f"{kc_cloudflared_url()}"
+        " && chmod +x /usr/local/bin/cloudflared",
         shell=True, check=True, timeout=300)
 
 TUNNEL_NAME = "cloudflared"

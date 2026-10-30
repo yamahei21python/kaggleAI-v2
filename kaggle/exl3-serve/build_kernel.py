@@ -363,8 +363,7 @@ def start_tunnel():
         data["cloudflared_source"] = f"{src} (copied)"
     else:
         cf = f"{WORK}/cloudflared"
-        url = ("https://github.com/cloudflare/cloudflared/releases/latest/"
-               "download/cloudflared-linux-amd64")
+        url = kc_cloudflared_url()
         urllib.request.urlretrieve(url, cf)
         os.chmod(cf, 0o755)
         data["cloudflared_source"] = "download"
