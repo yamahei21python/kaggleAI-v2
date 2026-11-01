@@ -27,8 +27,10 @@ jobs:
       - name: pytest (runtime / kbuild / step2 / exl3 / notebooks)
         run: python3 -m pytest tests -q
       - name: generate exl3 outputs
-        run: python3 kaggle/exl3-serve/build_kernel.py
-      - name: ruff (generated exl3 outputs)
-        run: ruff check --no-respect-gitignore kaggle/exl3-serve/kernel kaggle/exl3-serve/dryrun kaggle/exl3-serve/keepalive
-      - name: compile generated exl3 outputs
-        run: python3 -m compileall -q kaggle/exl3-serve/kernel kaggle/exl3-serve/dryrun kaggle/exl3-serve/keepalive
+        run: python3 kaggle/build_exl3_serve.py
+      - name: generate engine outputs (lmdeploy / sglang)
+        run: python3 kaggle/build_engine_serve.py
+      - name: ruff (generated outputs)
+        run: ruff check --no-respect-gitignore kaggle/exl3-serve-kernel kaggle/lmdeploy-serve kaggle/sglang-serve
+      - name: compile generated outputs
+        run: python3 -m compileall -q kaggle/exl3-serve-kernel kaggle/lmdeploy-serve kaggle/sglang-serve kaggle/ci-cpu

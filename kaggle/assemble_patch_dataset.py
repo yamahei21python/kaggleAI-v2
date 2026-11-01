@@ -3,7 +3,7 @@
 
 入力: /tmp/cap2/ollama_patch.tar.gz  (bin/ollama, lib/ollama/**, VERSION.txt)
 既存: /tmp/patchold/blobs/sha256-cbe6ad4...  (config blob 214B, model dataset に無い)
-出力: <repo>/kaggle-dataset-orcarouter-patch/{bin,lib,blobs,dataset-metadata.json}
+出力: <repo>/datasets/orcarouter-patch/{bin,lib,blobs,dataset-metadata.json}
 
 安全策: /tmp に組み立てて成功後に置換（失敗で旧資産を消さない）。
 """
@@ -16,7 +16,7 @@ import sys
 import tarfile
 
 REPO = "/Users/kohei/Myproject/kaggleAI"
-DST = os.path.join(REPO, "kaggle-dataset-orcarouter-patch")
+DST = os.path.join(REPO, "datasets", "orcarouter-patch")
 TAR = "/tmp/cap2/ollama_patch.tar.gz"
 OLD = "/tmp/patchold"
 BUILD = "/tmp/patch_build"

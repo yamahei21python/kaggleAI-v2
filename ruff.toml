@@ -13,6 +13,23 @@ select = ["E9", "F"]
 # ノートのセルは前のセルで定義した名前（fail, PORT など）を使う。
 # 中身を変えるとノートが変わるので、未使用 import / 空 f-string もここでは直さない。
 "kaggle/step2/cells/*.py" = ["F821", "F401", "F541"]
-# exl3 の生成物は runtime バンドルを連結するため、各モジュールの import が
-# 重複する（意図どおり。生成コードなので手で直さない）。
-"kaggle/exl3-serve/*/main.py" = ["F811"]
+# 各エンジンのセル断片も同じ（settings セルが定義する名前を読む）。
+"kaggle/llama-server/cells/*.py" = ["F821", "F401", "F541"]
+"kaggle/step2-vllm/cells/*.py" = ["F821", "F401", "F541"]
+# 共有セル（serve-cells）は settings セルが定義する名前（PROXY_* / ENGINE_* など）
+# を読む「セル断片」なので、単体では未定義名になる。契約は serve_notebook.py が持つ。
+"kaggle/serve-cells/*.py" = ["F821", "F401", "F541"]
+# script カーネルの生成物は runtime バンドルを連結するため、各モジュールの
+# import が重複する（意図どおり。生成コードなので手で直さない）。
+# F821 はあえて除外しない（KNOBS に JSON の true を書いた事故を検出させる）。
+"kaggle/exl3-serve-kernel/*/main.py" = ["F811"]
+"kaggle/lmdeploy-serve/main.py" = ["F811"]
+"kaggle/sglang-serve/main.py" = ["F811"]
+# Ollama の script 版。セルを関数へ包み、骨組みの engine_checks を
+# エンジン固有の実装で上書きするため、F811（再定義）が意図的に出る。
+"kaggle/step2-script/*/main.py" = ["F811"]
+"kaggle/step2-vllm-script/*/main.py" = ["F811"]
+"kaggle/llama-server-script/*/main.py" = ["F811"]
+# 配信しないカーネルの script 版は、セル列をそのまま連結するので
+# 各セルの import が重複する（意図どおり。生成コードなので手で直さない）。
+"kaggle/*/script/main.py" = ["F811", "F401"]

@@ -2,7 +2,7 @@
 """Kaggle CPU（GPUなし）で llama-server 直起動が成立するかの検証。
 
 流用元:
-  kaggle/build_step2_direct.py
+  kaggle/build_llama_server.py
     - _find_input()            Dataset 2系統のマウント先探索
     - バイナリ復元              llama-server + lib/ollama/*.so のサイズ検証付きコピー
     - manifest からの blob 解決
@@ -54,7 +54,7 @@ def _sh(cmd, timeout=60):
 
 
 def _find_input(slug):
-    """Dataset のマウント先を探す（build_step2_direct.py から流用）。
+    """Dataset のマウント先を探す（build_llama_server.py から流用）。
 
     Kaggle は /kaggle/input/<slug>（旧）と
     /kaggle/input/datasets/<owner>/<slug>（新）が混在する。
