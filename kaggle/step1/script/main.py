@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""step1 orcarouter qwen38 27b dl script（自動生成。直接編集しない）。
+
+生成: kaggle/build_batch_script.py ← kaggle/build_step1.py のセル列
+"""
+
+
+# ── 🚀 Step 1: モデルDL → Kaggle Dataset 保存 ─────────
+
+
+# ── ⚙️ 設定 ───────────────────────────────────────
+
+
+# ============================================================
+# Step 1: モデルDL → Kaggle Dataset 保存
+# ============================================================
+import os, subprocess, time
+
+MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
+DATASET_SLUG = "my-ollama-orcarouter-qwen38-27b"
+OLLAMA_MODELS_DIR = "/kaggle/tmp/ollama_models"
+
+os.makedirs(OLLAMA_MODELS_DIR, exist_ok=True)
+os.environ["OLLAMA_MODELS"] = OLLAMA_MODELS_DIR
+
+# Kaggle Secrets から認証情報を取得
+from kaggle_secrets import UserSecretsClient
+_sec = UserSecretsClient()
+os.environ["KAGGLE_USERNAME"] = _sec.get_secret("KAGGLE_USERNAME")
+os.environ["KAGGLE_KEY"] = _sec.get_secret("KAGGLE_KEY")
+
+print(f"📦 Model      : {MODEL}")
+print(f"📁 Save to    : {OLLAMA_MODELS_DIR}")
+print(f"🗂  Dataset    : {DATASET_SLUG}")
+print(f"👤 Owner      : {os.environ['KAGGLE_USERNAME']}")
+
+
+# ── 📦 Ollama インストール ─────────────────────────────
+
+
+# Ollama インストール（zstd を先に入れる: 最新版は .tar.zst）
+import subprocess
+
+subprocess.run("apt-get update -qq && apt-get install -y -qq zstd",
+               shell=True, check=False)
+subprocess.run("curl -fsSL https://ollama.com/install.sh | sh",
+               shell=True, check=True, timeout=600)
+
+# インストール結果の確認
+for p in ["/usr/local/bin/ollama", "/usr/local/lib/ollama/llama-server"]:
+    ok = os.path.isfile(p)
+    size = os.path.getsize(p) if ok else 0
+    print(f"{'✅' if ok else '❌'} {p}  ({size:,} B)")
+
+print(subprocess.run(["/usr/local/bin/ollama", "--version"],
+                     capture_output=True, text=True).stdout.strip())
+
+
+# ── ⬇️ モデルダウンロード（16.5 GiB / 10〜30分） ─────────────
+
+
+# Ollama サーバー起動 → モデル pull
+import subprocess, os, time
+
+OLLAMA_BIN = "/usr/local/bin/ollama"
+env = {**os.environ, "OLLAMA_MODELS": OLLAMA_MODELS_DIR}
+
+with open("/tmp/ollama_serve.log", "w") as log:
+    proc = subprocess.Popen([OLLAMA_BIN, "serve"], env=env,
+                            stdout=log, stderr=log)
+
+# 起動待機（最大60秒）
+for i in range(60):
+    r = subprocess.run([OLLAMA_BIN, "list"], env=env,
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        print(f"✅ Ollama サーバー起動（{i+1}s）")
+        break
+    time.sleep(1)
+else:
+    print(open("/tmp/ollama_serve.log").read()[-2000:])
+    raise RuntimeError("Ollama サーバー起動失敗")
+
+print(f"⏳ pull: {MODEL}  （16.5 GiB / 10〜30分）")
+t0 = time.time()
+subprocess.run([OLLAMA_BIN, "pull", MODEL], env=env, check=True, timeout=7200)
+print(f"✅ ダウンロード完了（{(time.time()-t0)/60:.1f} 分）")
+
+print(subprocess.run([OLLAMA_BIN, "list"], env=env,
+                     capture_output=True, text=True).stdout)
+
+
+# ── 💾 バイナリ + モデルを Dataset へ ─────────────────────
+
+
+# バイナリをキャッシュ（次回起動を高速化）
+import os, shutil, subprocess
+
+BIN_CACHE = os.path.join(OLLAMA_MODELS_DIR, "bin")
+os.makedirs(BIN_CACHE, exist_ok=True)
+
+# ollama 本体 / llama-server / ngrok を全部キャッシュする
+# （llama-server を忘れると Step2 で毎回 install.sh を走らせることになる）
+CANDIDATES = [
+    "/usr/local/bin/ollama",
+    "/usr/local/lib/ollama/llama-server",
+    "/usr/local/bin/ngrok",
+]
+for src in CANDIDATES:
+    if os.path.isfile(src):
+        dst = os.path.join(BIN_CACHE, os.path.basename(src))
+        shutil.copy2(src, dst)
+        print(f"✅ cache: {os.path.basename(src)}  ({os.path.getsize(dst):,} B)")
+    else:
+        print(f"—  skip : {src}（未インストール）")
+
+subprocess.run(f"du -sh {OLLAMA_MODELS_DIR}", shell=True)
+subprocess.run("df -h /kaggle/tmp", shell=True)
+
+
+# Dataset としてアップロード
+import json, os, subprocess
+
+DATASET = "my-ollama-orcarouter-qwen38-27b"
+OWNER = os.environ["KAGGLE_USERNAME"]
+
+meta = {
+    "title": DATASET,
+    "id": f"{OWNER}/{DATASET}",
+    "licenses": [{"name": "CC0-1.0"}],
+    "subtitle": "Ollama model: orcarouter/Qwen3.8-27B-Uncensored (Q4_K_M)",
+    "description": (
+        "orcarouter/Qwen3.8-27B-Uncensored:latest — Qwen3.8 27B abliterated, "
+        "Q4_K_M, vision + thinking + tools, 262K context. "
+        "Includes ollama/llama-server binary cache for fast Kaggle startup."
+    ),
+}
+with open(f"{OLLAMA_MODELS_DIR}/dataset-metadata.json", "w") as f:
+    json.dump(meta, f, indent=2)
+
+print("📤 kaggle datasets create（--dir-mode zip）...")
+r = subprocess.run(
+    ["kaggle", "datasets", "create", "-p", OLLAMA_MODELS_DIR, "--dir-mode", "zip"],
+    capture_output=True, text=True, timeout=7200,
+)
+out = r.stdout + r.stderr
+clean = [l for l in out.split("\n") if "%|" not in l and "[" not in l]
+print("\n".join(clean[-25:]))
+print(f"exit: {r.returncode}")
+if r.returncode != 0:
+    raise RuntimeError("Dataset 作成失敗（既存の場合は datasets version を使ってください）")
+print("✅ Dataset アップロード完了")
+
+
+# ── ✅ 次の手順 ──────────────────────────────────────

@@ -1,0 +1,21 @@
+{
+  "id": "yamahei21python/step2-vllm-qwen38-27b-cloudflared-script",
+  "title": "step2 vllm qwen38 27b cloudflared script",
+  "code_file": "main.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [
+    "yamahei21python/qwen38-27b-uncensored-hauhaucs-awq-mtp",
+    "yamahei21python/my-cloudflared-bin",
+    "yamahei21python/vllm-wheelhouse",
+    "yamahei21python/vllm-wheelhouse-patch"
+  ],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}

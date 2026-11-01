@@ -1,0 +1,16 @@
+{
+  "id": "yamahei21python/prepare-vllm-dataset-script",
+  "title": "prepare vllm dataset script",
+  "code_file": "main.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}
