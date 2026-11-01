@@ -1193,6 +1193,9 @@ prefetch は **rank ごとにファイルを分担**する。TP=2 でも総読�
 **`03_vllm_serve.py` の PLAN にフラグを足す必要がある**ので、セル変更になる
 （＝playground の「env だけ変える」原則から外れる。だから今は実装しない）。
 
+→ 2026-11-02 02:16 に実装して投入した。結果は **§23**（重みロード 2,877 →
+1,186 秒、全体 3,820 → 2,011 秒）。
+
 ### 実行結果（2026-11-02 01:58 終了・**成功**）
 
 `ok=true` / `elapsed_seconds=3820.5` / **30.7 t/s** / VRAM 13,343 MiB ×2 / 65,536 ctx。
@@ -1235,3 +1238,90 @@ prefetch は **rank ごとにファイルを分担**する。TP=2 でも総読�
 
 **推奨は `prefetch1`。** キャッシュは上限 260 秒しかないが、重みロードは
 2,802 秒あり、そこが 74%。
+
+## 23. `prefetch1`（2026-11-02 02:16）— 重みロードが 2,877 → 1,186 秒
+
+§22 の 2 ノブ（`--safetensors-load-strategy prefetch` /
+`--safetensors-prefetch-num-threads 1`）だけを `baseline_long` に足した回。
+構成は `KC_PREWARM=0` / `KC_WARM_CACHE=0` / 予算 7,000 秒で **`baseline_long` と
+同一**。違うのは 2 つの env だけ。
+
+| 項目 | 値 |
+|---|---|
+| 実験名 | `prefetch1` |
+| 投入 | version 9（2026-11-02 02:16 JST 開始 → 02:50 完了） |
+| 実測 | `ok=true` / **2,010.8 秒** / **31.3 t/s** / VRAM 13,343 MiB ×2 / 65,536 ctx |
+
+### `baseline_long` との差（同じ予算・同じ構成）
+
+| マーク | `baseline_long` | `prefetch1` | 差 |
+|---|---|---|---|
+| `Loading weights took` | 2,877 | **1,186** | **−1,691** |
+| `Model loading took` | 3,046 | 1,242 | −1,804 |
+| `Starting torch.compile` | 3,051 | 1,248 | −1,803 |
+| `torch.compile took` | 3,113 | 1,309 | −1,804 |
+| `Graph capturing finished` | 3,502 | 1,690 | −1,812 |
+| `init engine` | 3,537 | 1,725 | −1,812 |
+| **`elapsed_seconds`** | 3,820.5 | **2,010.8** | **−1,809.7（−47%）** |
+| `speed_tps` | 30.7 | 31.3 | +0.6（誤差） |
+
+差分が**重みロードの後ろで一定**（−1,804〜−1,812 秒）なのが要点。install
+（230.9 → 230.6）、`torch.compile`（62 → 61）は動いていない。つまり速くなった
+のは 1 区間だけで、他は同じ速度のノードだった。
+
+### ログに残った形（`vllm_1.log`）
+
+```
+17:22:07 (TP0) Prefetching checkpoint files into page cache started
+              (in background, num_threads=1, block_size=16777216 bytes)
+17:22:07 (TP1) 同上
+17:22:14 (TP0) Prefetching ... finished in 7.89s      ← 1/1 ファイル
+17:29:16 (TP1) Prefetching ... finished in 429.42s    ← 1/1 ファイル
+17:40:08 (TP0) Loading weights took 1081.05 seconds
+17:40:10 (TP1) Prefetching ... finished in 0.00s      ← 2 周目（MTP 側）
+17:41:01 (TP0) Loading weights took 51.44 seconds
+17:41:04 (TP0) Model loading took 8.88 GiB memory and 1141.345533 seconds
+```
+
+読み取れること:
+
+1. **rank 分担は設計どおり効いている。** TP0 と TP1 が別のファイルを読み、
+   終了時刻が 7 分ずれた。prefetch が「全ワーカーが同じ 1 本を読む」形なら
+   この差は出ない。
+2. **prefetch は無料ではない。** TP1 は 429 秒かけて読み、その後に本体の
+   ロードが走る。合計の重み区間は 1,141 秒（`Model loading took`）で、
+   これは 2,877 秒の 40%。「1 回読む」設計にしたぶん、**2 回読むはずだった
+   ものが 1 回になった**という説明と合う。
+3. 2 周目（17:40:10）があるのは、チェックポイントが 2 本
+   （`model.safetensors` と `model-mtp.safetensors`）で、`load_model` が
+   2 回呼ばれるため。2 周目は page cache に載っているので 0.00 秒。
+
+### 判断できないこと（正直に）
+
+**1 回ずつなので、ノード差と切り分けられていない。** 同じコードの重みロードは
+1,304（v4）/ 2,640（v3）/ 2,877（`baseline_long`）/ 4,000 超（`cache`）と
+3 倍以上振れる。今回は 1,186 秒で、**prefetch 無しの最速観測（1,304 秒）より
+速い**が、n=1 では「prefetch のおかげ」と断定できない。
+
+断定に近づける材料は 3 つ:
+
+- 機構がログに設計どおり出ている（`num_threads=1` / 16 MiB block / rank 分担）
+- 総読みが 2 パス → 1 パスになるのは**構造**（`sorted_files[rank::world_size]`）
+- 差が重み区間だけに閉じている（他区間は同一）
+
+逆に、切り分けを潰す材料は「ノードが速かっただけ」の可能性で、これは
+**もう 1 回回すまで消えない**。
+
+### 次の一手
+
+| 案 | 根拠 | コスト |
+|---|---|---|
+| `prefetch1` をもう 1 回 | ノード差の切り分け。33 分で終わる見込み | 1 往復（約 34 分） |
+| **本番の既定にする** | 次の本番投入がそのまま確認になる。無駄な往復が 0 | 0（本番は元々回す） |
+| `num-threads 8`（既定）と比べる | 1 本が最良かの確認。ただし差は 2 ノブ目 | 1 往復 |
+
+**推奨は「本番の既定にする」。** 本番（`step2-vllm-qwen38-27b-cloudflared-script`）
+は元々回すので、そこで 1,200 秒前後が出れば確認が済む。落ちた場合の戻しは
+env 2 つを消すだけで、コードは変わらない（`03_vllm_serve.py` は
+`VLLM_SAFETENSORS_*` が空なら 1 バイトも足さない）。
+
