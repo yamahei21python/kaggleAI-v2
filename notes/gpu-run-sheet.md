@@ -203,18 +203,24 @@ python3 -m cli push vllm-playground --no-run --yes
 | 5 | keepalive / `/stop` | **✅ 検証済み（CPU・GPU 0 秒）** | 約 2 分 | `reset_done=True` / `stop_done=True` / 12s で 60分00秒 に戻る / 30s で `RUN=0` 終了 |
 | 6 | LMDeploy | **❌ 不可（形式非対応）＝ 判定済み** | 125s | `ValueError: Unsupported compressed-tensors group_size: expected 32, got 128` |
 | 7 | SGLang | **❌ 不可（sm75 非対応）＝ 判定済み** | 297s → 610.6s | `Quantization scheme is not supported for the current GPU. Min capability: 80. Current capability: 75.` |
-| 4 | ExLlamaV3 | **⚠→ エンジンは起動した（判定は次）** | 263.6s | `loaded in 229s; serving qwen38-exl3 on 127.0.0.1:9931 (ctx 8192)`。落ちたのは骨格の `engine_checks` の引数不一致（`5 were given`）で、エンジンではない。梱包ミスは解消済み |
+| 4 | ExLlamaV3 | **⚠ 起動はしたが再現しない** | 263.6s / **1834.7s** | v2: `loaded in 229s; serving qwen38-exl3 on 127.0.0.1:9931 (ctx 8192)`。落ちたのは骨格の `engine_checks` の引数不一致（`5 were given`）で、エンジンではない。**v3: 同じ構成で 1800 秒待っても `/health` が繋がらず**（`chat_server.log` は 0 バイト） |
 
 `[1] ui` は 3 本とも **SKIP**（smoke は proxy を立てないため。下記 (a)）。
 
 **「ERROR」は 3 種類が混ざっている。** ここまで来て、LMDeploy と SGLang は
-**判定済みの不可**、ExLlamaV3 だけが**まだ一度もエンジンを起動していない**:
+**判定済みの不可**、ExLlamaV3 だけが**「動く」とも「動かない」とも言えない**:
 
 | 種類 | 意味 | 該当 |
 |---|---|---|
 | 判定（＝結果） | エンジンまで到達して、能力不足が確定した | **LMDeploy**（形式）/ **SGLang**（sm80 必須） |
-| 途中で落ちた | install / 梱包で死に、エンジンは起動していない | **ExLlamaV3**（`.py` を notebook として push） |
+| 途中で落ちた | install / 梱包で死に、エンジンは起動していない | 解消済み（`.py` を notebook として push した件） |
+| **再現しない** | 1 回は起動したが、次の回で起動しない | **ExLlamaV3**（v2 成功 229s → v3 失敗 1800s） |
 | 未実行 | push していない・scaffold だけ | 台帳の未着手分 |
+
+**1 回の成功を「動く」と読まない。** ExLlamaV3 は同じモデル・同じ wheel・
+同じ T4 x2 で 229 秒と 1800 秒超に割れた。原因が判るまでは「T4 で動くのは
+確実、安定性は未確定」と書く。v3 で計器（`load_watch`）を入れたので、
+v4 は「どこで止まったか」を持ち帰れる。
 
 **SGLang の install 原因（2026-11-01 に PyPI メタデータで特定・GPU 0 秒）**:
 `sglang==0.5.22` → `outlines==0.1.11` → **`outlines_core==0.1.26`（完全固定）**。

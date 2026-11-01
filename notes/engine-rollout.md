@@ -326,11 +326,13 @@ def verify_extra(base_url: str, auth: str | None) -> dict: ...
 |---|---|---|
 | LMDeploy が「次に導入」で最有力 | `group_size=128` を読めず `ValueError`（125s） | **不可が確定**（推定は外れ） |
 | SGLang は「T4 は博打」 | install は Rust で通った（513s）。しかし **WNA16 が sm80 必須**で起動時に停止 | **博打ではなく非対応が確定** |
-| ExLlamaV3 は「既存を維持」 | **エンジンは起動した**（v2）。`loaded in 229s; serving qwen38-exl3 on 127.0.0.1:9931 (ctx 8192)`。落ちたのはこちらの `engine_checks()` の引数不一致 | **T4 で動く（初の実証）** |
+| ExLlamaV3 は「既存を維持」 | **エンジンは起動した**（v2）。`loaded in 229s; serving qwen38-exl3 on 127.0.0.1:9931 (ctx 8192)`。落ちたのはこちらの `engine_checks()` の引数不一致。ただし **v3 は 1800 秒待っても起動しなかった** | **T4 で動くのは確実。安定性は未確定** |
 | vLLM が「現行の基準」 | 31.7 t/s / 929s（v10 は 31.0 t/s / 978s） | **維持**（ただし起動に 373 秒の JIT を含む） |
 
 → **「ERROR」を「不可」と読まない。** 判定に到達したのは LMDeploy だけで、
 SGLang と ExLlamaV3 はどちらも**エンジンが起動する前**に落ちている。
+逆も同じで、**1 回の成功を「動く」と読まない**（ExLlamaV3 は v2 が成功、
+v3 が起動失敗。同じ構成で 230 秒 → 1800 秒超）。
 
 ### ExLlamaV3 の実測（2026-11-01 / `exl3-serve` v2）
 
@@ -363,6 +365,45 @@ error          : TypeError: engine_checks() takes from 3 to 4 positional
    （`tests/test_smoke_checks.py`）。
 4. 速度（t/s）は**まだ測れていない**。`stage: "load"` で止まっており、生成まで
    到達していない。単発レイテンシという別軸の比較は次回。
+
+### ExLlamaV3 v3（2026-11-01）: 起動すらしなかった
+
+`engine_checks` を直して再投入したら、**今度は起動しなかった**。
+
+```
+pip_seconds    : 11.6         （wheel は同じ。導入は問題ない）
+chat_server.log: 0 バイト      ← 1800 秒間、1 文字も出ていない
+elapsed_seconds: 1834.7
+error          : RuntimeError: 待機タイムアウト
+                 http://127.0.0.1:9931/health（Connection refused）
+```
+
+v2 と v3 で同じモデル・同じ wheel・同じ GPU（T4 x2）なのに、**230 秒で終わる
+工程が 1800 秒に収まらなかった**。8 倍以上のばらつき。
+
+**手がかりがゼロだったのが問題。** `chat_server.log` が空なのは異常ではなく、
+そういう作りになっている:
+
+- 起動時に `--no-progress` を渡しているので exllamav3 の読み込み進捗が出ない
+- `chat_server.py` の `print` は「loaded in Ns」と「warmup failed」の 2 つだけ
+
+つまり読み込みが 99% まで進んでいたのか、最初の 1 バイトで固まっていたのか
+**区別できない**。次の手は「もう 1 回回す」しかなく、1 往復 30 分を捨てる。
+vLLM の 360 秒無音区間の正体を掴むのに 4 往復使ったのと同じ構造なので、
+計器を先に入れた（`runtime/proc.py` の `kc_sample` / `kc_watch`）。
+
+次回の v4 で見るべきもの:
+
+| 指標 | 読み方 |
+|---|---|
+| `read_mib` の増分 | 15.9 GiB に対して何 MiB/s か。v2 の 229 秒は約 70 MiB/s |
+| `read_mib` が動かない | 固まっている（読み込みではなく別の工程で停止） |
+| `char_mib` だけ増える | ページキャッシュから読んでいる（ディスクは触っていない） |
+| `rss_mib` が増えない | mmap で読んでいる（anonymous に載っていない） |
+| `vram_mib` が増えない | 重みがまだ GPU に載っていない |
+
+**この 2 回で「ExLlamaV3 は T4 で動く」は確定、「安定して起動する」は未確定。**
+v2 の成功を「再現性のある事実」として扱ってはいけない。
 
 ## 参考
 
