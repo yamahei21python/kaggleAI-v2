@@ -1,6 +1,7 @@
 """トンネル URL 取得と HTTP 疎通の共通処理（生成コードへ埋め込む）。"""
 import json
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -66,6 +67,32 @@ def kc_wait_url(host, log_path=None, seconds=None, interval=1, progress_every=10
             print(f"⏳ URL 待ち ({i + 1}/{seconds})...")
         time.sleep(interval)
     return ""
+
+
+def kc_urlopen_v4(url, timeout=15):
+    """公開 URL を開く。失敗したら IPv4 優先で名前解決して 1 回だけ再試行。
+
+    Kaggle の VM は AAAA（IPv6）を返すのに IPv6 経路が無いことがあり、
+    `urlopen` が "Network is unreachable" で落ちる（dryrun で実測）。
+    自分の URL に届かないだけでトンネルは生きているので、ここで諦めると
+    keepalive が**生きているトンネルを再起動して URL が変わってしまう**。
+    """
+    try:
+        return urllib.request.urlopen(url, timeout=timeout)
+    except Exception as first:
+        err = first
+    orig = socket.getaddrinfo
+
+    def _v4(host, port, family=0, type=0, proto=0, flags=0):
+        return orig(host, port, socket.AF_INET, type, proto, flags)
+
+    socket.getaddrinfo = _v4
+    try:
+        return urllib.request.urlopen(url, timeout=timeout)
+    except Exception:
+        raise err
+    finally:
+        socket.getaddrinfo = orig
 
 
 def kc_wait_http(url, attempts=20, interval=3, timeout=10, opener=None):

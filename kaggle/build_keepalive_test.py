@@ -306,4 +306,5 @@ for fname in ["keepalive_test_result.txt", "public_url.txt", "connection_info.tx
     print()
 """))
 
-pack_nb.write(OUT, cells)
+if __name__ == "__main__":
+    pack_nb.write(OUT, cells)

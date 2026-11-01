@@ -37,7 +37,7 @@ try:
     # GPU 常駐検査。CPU フォールバックでも HTTP 200 は返るので、
     # 通信だけ見ていると 3/3 PASS のまま静かに劣化する。
     import subprocess as _sp
-    _ps = _sp.run([OLLAMA_BIN, "ps"], env=env,
+    _ps = _sp.run([OLLAMA_BIN, "ps"], env=OLLAMA_ENV,
                   capture_output=True, text=True).stdout.strip().splitlines()
     print("   ps :", " | ".join(l.strip() for l in _ps[1:] if l.strip()) or "(空)")
     _psrow = " ".join(l for l in _ps[1:] if "%" in l)
@@ -47,7 +47,7 @@ try:
     if _psrow and str(CONTEXT_LENGTH) not in _psrow.replace(",", ""):
         print(f"   ⚠ コンテキストが {CONTEXT_LENGTH:,} と異なる（ps 表示: {_psrow}）")
 except Exception as e:
-    print(f"⚠ ウォームアップ失敗: {e}（LOAD_TIMEOUT={env.get('OLLAMA_LOAD_TIMEOUT')}s）")
-    print(open("/tmp/ollama.log").read()[-3000:])
+    print(f"⚠ ウォームアップ失敗: {e}（LOAD_TIMEOUT={OLLAMA_ENV.get('OLLAMA_LOAD_TIMEOUT')}s）")
+    print(open(ENGINE_LOG).read()[-3000:])
     # 握り潰すと verify が「原因不明の FAIL」になるだけなので、ここで止める
     fail(f"ウォームアップ失敗: {type(e).__name__}: {e}", "/tmp/ollama.log")

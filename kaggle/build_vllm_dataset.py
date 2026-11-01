@@ -58,7 +58,10 @@ HuggingFace から `{MODEL_ID}` をダウンロードし、Kaggle Dataset 化す
 """))
 
 cells.append(_cell("code", """# 必要なパッケージ
-!pip install -q huggingface_hub kaggle"""))
+# `!pip` ではなく subprocess で呼ぶ（script 化しても同じコードで動く）
+import subprocess as _sp, sys as _sys
+_sp.run([_sys.executable, "-m", "pip", "install", "-q",
+         "huggingface_hub", "kaggle"], check=False)"""))
 
 cells.append(_cell("code", f"""import os, json, subprocess, time
 from huggingface_hub import snapshot_download
@@ -66,9 +69,14 @@ from huggingface_hub import snapshot_download
 MODEL_ID = "{MODEL_ID}"
 DATASET_ID = "{DATASET_ID}"
 DATASET_SLUG = "{DATASET_SLUG}"
-OUT_DIR = "/kaggle/working/{DATASET_SLUG}"
 
-# Kaggle Secrets から HF_TOKEN を取得
+# 置き場所は /kaggle/tmp（作業用の大きいディスク）。
+# `/kaggle/working` は **19.5 GB 上限**で、このモデルは 19.57 GB あるため
+# 途中で disk full になり、`.cache/huggingface/download/*.lock` だけが残る
+# （実測: 2026-10-30 の Dataset がまさにその状態だった）。
+OUT_DIR = "/kaggle/tmp/{DATASET_SLUG}"
+
+# Kaggle Secrets から HF_TOKEN を取得（このモデルは public なので無くても落ちる）
 try:
     from kaggle_secrets import UserSecretsClient
     HF_TOKEN = UserSecretsClient().get_secret("HF_TOKEN")
@@ -76,31 +84,39 @@ except Exception:
     HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 if not HF_TOKEN:
-    print("⚠ HF_TOKEN が未設定。 gated モデルはダウンロードできません。")
+    print("ℹ HF_TOKEN 未設定。public リポジトリなのでこのまま続行する")
     HF_TOKEN = None
 else:
     print("✅ HF_TOKEN を取得しました")
 
 print(f"ダウンロード先: {{OUT_DIR}}")
 print(f"モデル: {{MODEL_ID}}")
+_sp.run(["df", "-h", OUT_DIR if os.path.isdir(OUT_DIR) else "/kaggle"], check=False)
 """))
 
 cells.append(_cell("code", """# モデルダウンロード
-# サイズ約 19GB。進捗が表示されるまで数分かかる場合あり。
+# 合計 19.57 GB（model.safetensors 18.70 + model-mtp 0.85）。数分かかる。
+# `local_dir_use_symlinks` / `resume_download` は新しい huggingface_hub で
+# 非推奨・削除済みなので渡さない（渡すと TypeError で落ちる版がある）。
 start = time.time()
 snapshot_download(
     repo_id=MODEL_ID,
     local_dir=OUT_DIR,
-    local_dir_use_symlinks=False,
     token=HF_TOKEN,
-    resume_download=True,
 )
 elapsed = time.time() - start
 print(f"✅ ダウンロード完了: {elapsed/60:.1f}分")
 
 # サイズ確認
-!du -sh {OUT_DIR}
-!ls -la {OUT_DIR}
+_sp.run(["du", "-sh", OUT_DIR], check=False)
+_sp.run(["ls", "-la", OUT_DIR], check=False)
+
+# 重みの実在確認。ここが空のまま進むと「.cache だけの Dataset」ができる
+# （2026-10-30 に実際に起きた）。無ければ後続を走らせずに止める。
+weights = [f for f in os.listdir(OUT_DIR) if f.endswith(".safetensors")]
+total = sum(os.path.getsize(os.path.join(OUT_DIR, f)) for f in weights)
+print(f"重み: {len(weights)} 本 / {total/1e9:.2f} GB {weights}")
+assert total > 10e9, f"重みが足りません（{total/1e9:.2f} GB）。disk full を疑う"
 """))
 
 cells.append(_cell("code", f"""# Kaggle Dataset メタデータ作成
@@ -156,23 +172,24 @@ Dataset URL: `https://www.kaggle.com/datasets/{DATASET_ID}`
 この URL を `build_step2_vllm.py` の `DATASET_ID` に設定して Step2 notebook を生成する。
 """))
 
-pack_nb.write_cells(NB_PATH, cells)
-kernel_meta = {
-    "id": f"{OWNER}/prepare-vllm-dataset",
-    "title": "Prepare vLLM Dataset",
-    "code_file": "prepare-vllm-dataset.ipynb",
-    "language": "python",
-    "kernel_type": "notebook",
-    "is_private": True,
-    "enable_gpu": False,
-    "enable_tpu": False,
-    "enable_internet": True,
-    "keywords": [],
-    "dataset_sources": [],
-    "kernel_sources": [],
-    "competition_sources": [],
-    "model_sources": [],
-}
+if __name__ == "__main__":
+    pack_nb.write_cells(NB_PATH, cells)
+    kernel_meta = {
+        "id": f"{OWNER}/prepare-vllm-dataset",
+        "title": "Prepare vLLM Dataset",
+        "code_file": "prepare-vllm-dataset.ipynb",
+        "language": "python",
+        "kernel_type": "notebook",
+        "is_private": True,
+        "enable_gpu": False,
+        "enable_tpu": False,
+        "enable_internet": True,
+        "keywords": [],
+        "dataset_sources": [],
+        "kernel_sources": [],
+        "competition_sources": [],
+        "model_sources": [],
+    }
 
-metadata.write(META_PATH, kernel_meta)
-print(f"wrote {META_PATH}")
+    metadata.write(META_PATH, kernel_meta)
+    print(f"wrote {META_PATH}")

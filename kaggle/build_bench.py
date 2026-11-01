@@ -231,4 +231,5 @@ cells.append(("markdown", """---
   - 16.52 GiB は T4 1枚（15 GiB）に載らないため、分割は避けられません
 """))
 
-pack_nb.write(OUT, cells, cell_ids=True)
+if __name__ == "__main__":
+    pack_nb.write(OUT, cells, cell_ids=True)

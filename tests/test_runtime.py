@@ -31,7 +31,8 @@ def test_bundle():
                "def kc_read_conf", "def kc_start_proxy", "def kc_unload_model",
                "def kc_detect_gpu", "def kc_wait_gpu_idle", "def kc_ollama_chat",
                "def kc_keepalive_deadline", "def kc_keepalive_expired",
-               "def kc_cloudflared_url"):
+               "def kc_cloudflared_url", "def kc_find_dataset",
+               "def kc_context_budget", "def kc_urlopen_v4"):
         check(f"{fn} が含まれる", fn in src)
     try:
         compile(src, "<bundle>", "exec")
@@ -153,6 +154,9 @@ def test_net():
         check("kc_wait_http 200 → 経過秒", net.kc_wait_http(url, attempts=1, interval=2) == 2)
         _H.mode = "503"
         check("kc_wait_http 非200 → None", net.kc_wait_http(url, attempts=1, interval=1) is None)
+        _H.mode = "ok"
+        with net.kc_urlopen_v4(url, timeout=5) as r:
+            check("kc_urlopen_v4 通常経路", r.status == 200)
 
         # retry
         n = {"c": 0}
@@ -278,7 +282,71 @@ def test_storage():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def test_keepalive():
+def test_find_dataset():
+    print("\n=== storage.kc_find_dataset（マウント探索） ===")
+    root = pathlib.Path(tempfile.mkdtemp(prefix="rt_ds_"))
+    try:
+        # 旧レイアウト: /kaggle/input/<slug>
+        old = root / "old-slug"
+        (old).mkdir()
+        (old / "config.json").write_text("{}")
+        check("旧レイアウトを見つける",
+              storage.kc_find_dataset("old-slug", root=str(root)) == str(old))
+
+        # 新レイアウト: /kaggle/input/datasets/<owner>/<slug>
+        new = root / "datasets" / "owner" / "new-slug"
+        new.mkdir(parents=True)
+        (new / "config.json").write_text("{}")
+        check("新レイアウト（datasets/<owner>/<slug>）も見つける",
+              storage.kc_find_dataset("new-slug", root=str(root)) == str(new))
+
+        # 空マウントは避け、中身のある方を選ぶ
+        empty = root / "datasets" / "owner" / "both"
+        empty.mkdir(parents=True)
+        full = root / "both"
+        full.mkdir()
+        (full / "x").write_text("x")
+        check("空でないディレクトリを優先",
+              storage.kc_find_dataset("both", root=str(root)) == str(full))
+
+        # 見つからないときは既定パスを返す（呼び出し側が isdir で判定する）
+        check("見つからなければ既定パス",
+              storage.kc_find_dataset("nope", root=str(root))
+              == f"{root}/nope")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_context_budget():
+    print("\n=== proc.kc_context_budget（VRAM 予算） ===")
+    cands = [131072, 65536, 32768, 16384, 8192]
+    # T4 x2 = 30720 MiB → 予算 26.4 GiB。モデル 16.52 GiB。
+    ctx, budget = proc.kc_context_budget(30720, 16.52, 34.0, cands)
+    check("予算は実効 VRAM の 88%", abs(budget - 30720 / 1024 * 0.88) < 1e-9,
+          str(budget))
+    check("収まる最大の候補を選ぶ", ctx == 131072, str(ctx))
+
+    ctx2, _ = proc.kc_context_budget(15360, 16.52, 34.0, cands)
+    check("VRAM が小さいほど候補が下がる", ctx2 < 131072, str(ctx2))
+
+    # どれも収まらない → 最小候補（起動は試す）
+    ctx3, _ = proc.kc_context_budget(15360, 30.0, 34.0, cands)
+    check("全部収まらなければ最小候補", ctx3 == 8192, str(ctx3))
+
+    # requested が収まるなら優先（direct の CTX_REQUESTED）
+    ctx4, _ = proc.kc_context_budget(30720, 16.52, 34.0, cands,
+                                     requested=32768)
+    check("requested が収まるならそれを優先", ctx4 == 32768, str(ctx4))
+    ctx5, _ = proc.kc_context_budget(30720, 16.52, 34.0, cands,
+                                     requested=524288)
+    check("requested が超過なら候補へ落とす", ctx5 == 131072, str(ctx5))
+
+    check("kc_context_gib はモデル + KV",
+          abs(proc.kc_context_gib(16.52, 34.0, 131072)
+              - (16.52 + 34.0 * 131072 / 1024 / 1024)) < 1e-9)
+
+
+def test_keepalive_module():
     print("\n=== keepalive（RUN/MINUTES の読み取り） ===")
     d = pathlib.Path(tempfile.mkdtemp(prefix="rt_ka_"))
     conf = d / "keepalive.conf"

@@ -9,6 +9,16 @@ RESTART_CMD = [CF_BIN, "tunnel", "--url", f"http://127.0.0.1:{PROXY_PORT}",
                "--no-autoupdate"]
 
 
+def probe_url():
+    """公開URLを取り直す（keepalive の再起動用）。
+
+    ngrok 版と同じインターフェース（TUNNEL_NAME / TUNNEL_LOG / RESTART_CMD /
+    probe_url）を揃える。揃っていないと keepalive セルが NameError になり、
+    トンネル再起動の経路だけ無言で死ぬ（cloudflared 版で実測）。
+    """
+    return kc_probe_url("cloudflared", TUNNEL_LOG)
+
+
 # 前回のトンネルを確実に落とす（多重起動すると URL が混ざる）
 subprocess.run(["pkill", "-x", "cloudflared"], capture_output=True)
 time.sleep(1)
@@ -32,7 +42,8 @@ if not public_url:
 # ここで待たないと次のセルの疎通確認が誤って失敗する。
 print(f"🌍 URL: {public_url}")
 print("⏳ トンネル確立待ち（最大 60s）...")
-elapsed = kc_wait_http(f"{public_url}/healthz", attempts=20, interval=3)
+elapsed = kc_wait_http(f"{public_url}/healthz", attempts=20, interval=3,
+                       opener=kc_urlopen_v4)
 if elapsed is not None:
     print(f"✅ トンネル確立（{elapsed}s）")
 else:

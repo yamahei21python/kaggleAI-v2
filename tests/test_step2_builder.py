@@ -314,9 +314,18 @@ def test_plan():
 # 5. _open_public（IPv6 経路なし対策）
 # --------------------------------------------------------------------------
 def test_open_public():
-    print("\n=== _open_public（IPv4 フォールバック） ===")
-    src = cell_source(lambda s: "def _open_public" in s)
-    code = extract(src, {"_open_public"})
+    print("\n=== kc_urlopen_v4（IPv4 フォールバック） ===")
+    # 実体は runtime/net.py。notebook 側は共有セルから kc_urlopen_v4 を直接呼ぶ。
+    # セルごとに別名（_open_public）を定義すると、定義漏れが NameError として
+    # 後段で初めて死ぬ（cloudflared の keepalive で実測）。
+    nb = json.load(open(NB))
+    code = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
+    check("共有セルが kc_urlopen_v4 を直接使う",
+          any("kc_urlopen_v4(" in s for s in code))
+    check("セル側で別名を再定義しない",
+          not any("_open_public =" in s for s in code))
+    ns = runtime_ns()
+    fn = ns["kc_urlopen_v4"]
     import socket
     import urllib.error
     import urllib.request
@@ -327,9 +336,7 @@ def test_open_public():
     _H.mode = "ok"
     url = f"http://127.0.0.1:{port}/healthz"
 
-    ns = {"socket": socket, "urllib": urllib}
-    exec(code, ns)
-    with ns["_open_public"](url, timeout=10) as r:
+    with fn(url, timeout=10) as r:
         check("通常経路で開ける", r.status == 200)
 
     # 1 回目だけ URLError → IPv4 強制で再試行し、解決 family を検証する
@@ -347,7 +354,7 @@ def test_open_public():
 
     urllib.request.urlopen = flaky
     try:
-        ns["_open_public"](url, timeout=10).read()
+        fn(url, timeout=10).read()
         check("1 回目失敗 → 2 回目で成功", seen["n"] == 2, f"calls={seen['n']}")
         check("再試行中は getaddrinfo を差し替え", seen["family"] == "_v4",
               str(seen["family"]))
@@ -364,7 +371,7 @@ def test_open_public():
     urllib.request.urlopen = always
     try:
         try:
-            ns["_open_public"](url, timeout=5)
+            fn(url, timeout=5)
             check("両方失敗なら例外", False)
         except urllib.error.URLError:
             check("両方失敗なら例外", True)
@@ -419,15 +426,18 @@ def test_save_output():
 # --------------------------------------------------------------------------
 # 7. keepalive（RUN/MINUTES の読み取り・mtime 検出・延長の算術）
 # --------------------------------------------------------------------------
-def test_keepalive():
+def test_keepalive_cell():
     print("\n=== keepalive 設定の読み取り ===")
     src = cell_source(lambda s: "def _read_keepalive_conf" in s)
     code = extract(src, {"_read_keepalive_conf", "_conf_mtime"})
-    const = extract(src, {"KEEPALIVE_KEEPALIVE", "MAX_MINUTES"})
+    # 定数は設定セル（settings）が持つ。keepalive セルは共有セルなので
+    # 値を持たない（エンジン差は settings の能力表だけ、という契約）。
+    const = extract(cell_source(lambda s: "KEEPALIVE_RESET_MINUTES =" in s),
+                    {"KEEPALIVE_RESET_MINUTES", "MAX_MINUTES"})
     c = {}
     exec(const, c)
-    check("KEEPALIVE_KEEPALIVE == 60", c["KEEPALIVE_KEEPALIVE"] == 60,
-          str(c["KEEPALIVE_KEEPALIVE"]))
+    check("KEEPALIVE_RESET_MINUTES == 60", c["KEEPALIVE_RESET_MINUTES"] == 60,
+          str(c["KEEPALIVE_RESET_MINUTES"]))
     check("MAX_MINUTES がクォータ内（<=35）", c["MAX_MINUTES"] <= 35,
           str(c["MAX_MINUTES"]))
 
@@ -435,7 +445,7 @@ def test_keepalive():
     conf = d / "keepalive.conf"
     ns = runtime_ns()
     ns.update({"KEEPALIVE_CONF": str(conf),
-               "KEEPALIVE_KEEPALIVE": c["KEEPALIVE_KEEPALIVE"],
+               "KEEPALIVE_RESET_MINUTES": c["KEEPALIVE_RESET_MINUTES"],
                "MAX_MINUTES": c["MAX_MINUTES"]})
 
     def _fail(msg, *a, **kw):
@@ -446,7 +456,7 @@ def test_keepalive():
     rd = ns["_read_keepalive_conf"]
     mt = ns["_conf_mtime"]
 
-    capped = min(c["KEEPALIVE_KEEPALIVE"], c["MAX_MINUTES"])
+    capped = min(c["KEEPALIVE_RESET_MINUTES"], c["MAX_MINUTES"])
     check("ファイル無し → (1, min(60, MAX))", rd() == (1, capped), str(rd()))
     check("_conf_mtime ファイル無し → 0", mt() == 0, str(mt()))
 
@@ -640,25 +650,32 @@ class _Order(ast.NodeVisitor):
             self.stores.setdefault(node.id, node.lineno)
 
 
+def _py_only(src):
+    """IPython マジック（行頭の `!cmd` / `%time`）を落として Python だけにする。"""
+    return "\n".join("" if ln.lstrip().startswith(("!", "%")) else ln
+                     for ln in src.splitlines())
+
+
 def test_cell_name_order():
     print("\n=== セル順の定義前使用（NameError 予防） ===")
     import builtins
-    known = set(dir(builtins)) | {"__name__", "__file__"}
+    nbs = sorted(p for p in (ROOT / "kaggle").glob("**/*.ipynb")
+                 if "archive" not in p.parts)
     problems = []
-    nb = json.load(open(NB))
-    for ci, c in enumerate(nb["cells"]):
-        if c["cell_type"] != "code":
-            continue
-        o = _Order()
-        o.visit(ast.parse("".join(c["source"])))
-        for name, line in sorted(o.loads.items(), key=lambda kv: kv[1]):
-            if name in known:
+    for nb_path in nbs:
+        known = set(dir(builtins)) | {"__name__", "__file__"}
+        nb = json.load(open(nb_path))
+        for ci, c in enumerate(nb["cells"]):
+            if c["cell_type"] != "code":
                 continue
-            if name in o.stores and o.stores[name] < line:
-                continue
-            if name in o.stores and o.stores[name] == line:
-                continue
-            problems.append(f"cell{ci}:L{line}:{name}")
-        known |= set(o.stores)
+            o = _Order()
+            o.visit(ast.parse(_py_only("".join(c["source"]))))
+            for name, line in sorted(o.loads.items(), key=lambda kv: kv[1]):
+                if name in known:
+                    continue
+                if name in o.stores and o.stores[name] <= line:
+                    continue
+                problems.append(f"{nb_path.name}:cell{ci}:L{line}:{name}")
+            known |= set(o.stores)
     check("定義前使用なし", not problems,
           ", ".join(dict.fromkeys(problems))[:400])

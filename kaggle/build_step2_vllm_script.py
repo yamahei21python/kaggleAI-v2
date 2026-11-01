@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""vLLM 配信カーネルを **script 形式**（main.py 1 ファイル）で生成する。
+
+    python3 kaggle/build_step2_vllm_script.py              # cloudflared
+    STEP2_TUNNEL=ngrok python3 kaggle/build_step2_vllm_script.py
+    python3 kaggle/build_step2_vllm_script.py --smoke      # 起動＋会話だけ
+
+notebook 版（`build_step2_vllm.py`）はそのまま残す。こちらは同じセル列
+（`kaggle/step2-vllm/cells/*.py`）を `kbuild/serve_script.py` の骨組みに載せた
+**追加の生成物**で、notebook を置き換えない。
+
+骨組み（proxy / tunnel / Gist / keepalive / verify / 後片付け）は書かない。
+ここが持つのは vLLM 固有の install / launch / checks / warmup だけ。
+"""
+import os
+import pathlib
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent          # kaggle/
+ROOT = HERE.parent
+sys.path.insert(0, str(ROOT))
+import kcconfig  # noqa: E402
+from kbuild import embed, metadata, pack_script, serve_script  # noqa: E402
+from kbuild.settings_cell import render as render_settings  # noqa: E402
+from runtime import proxy_source, source_bundle  # noqa: E402
+from runtime.constants import PROXY_PORT, VLLM_PORT  # noqa: E402
+
+CFG = kcconfig.load(ROOT)
+OWNER = "yamahei21python"
+DATASET_SLUG = "qwen38-27b-uncensored-hauhaucs-awq-mtp"
+SERVED_NAME = "qwen3.8-27b-awq"
+
+TUNNEL = os.environ.get("STEP2_TUNNEL", "cloudflared").strip().lower()
+if TUNNEL not in ("cloudflared", "ngrok"):
+    raise SystemExit(f"STEP2_TUNNEL={TUNNEL!r} は未対応（cloudflared / ngrok）")
+
+# smoke 版は通常版と別ディレクトリへ書く（`cli push --smoke` が通常版を
+# 上書きしないため。notebook 版の `smoke_out` と同じ考え方）。
+SMOKE = "--smoke" in sys.argv or os.environ.get("KC_SMOKE") == "1"
+
+CELLS = HERE / "step2-vllm" / "cells"
+OUT = HERE / "step2-vllm-script" / (f"smoke-{TUNNEL}" if SMOKE else TUNNEL)
+
+PROXY_SRC_B64 = embed.b64_text(proxy_source(HERE / "step2" / "auth_proxy.py"))
+CHAT_SRC_B64 = embed.b64_file(ROOT / "llama-chat.html")
+
+SETTINGS = render_settings(CELLS / "00_settings.py", {
+    "__DATASET_SLUG__": DATASET_SLUG,
+    "__SERVED__": SERVED_NAME,
+    "__TUNNEL__": TUNNEL,
+    "__PROXY_B64__": PROXY_SRC_B64,
+    "__CHAT_B64__": CHAT_SRC_B64,
+    "__GIST_ID__": CFG.get("GIST_ID", ""),
+    "__GIST_OWNER__": CFG.get("GIST_OWNER", ""),
+    "__NGROK_DOMAIN__": CFG.get("NGROK_DOMAIN", ""),
+})
+
+ENGINE_CODE = (
+    pack_script.wrap_cell(CELLS / "01_install_vllm.py", "def stage_install():\n")
+    + "\n\n"
+    + pack_script.wrap_cell(
+        CELLS / "03_vllm_serve.py", "def launch(model_dir):\n",
+        # 起動セルは実測した max_model_len で CONTEXT_LENGTH を上書きする。
+        # 関数化するとローカル変数になるため、モジュール側を更新させる。
+        tail="\n    return proc\n",
+        globals_=("CONTEXT_LENGTH",))
+)
+
+ENGINE = {
+    "name": "vllm",
+    "version": "0.32.0",
+    "alias": SERVED_NAME,
+    "pattern": "-f vllm",
+    "settings": SETTINGS,
+    "engine_code": ENGINE_CODE,
+    "checks_code": (CELLS / "06_checks.py").read_text(encoding="utf-8"),
+    "warmup": pack_script.wrap_cell(CELLS / "04_warmup.py", "def warmup():\n"),
+    "work": "/tmp/vllm-serve",
+    "flow": {
+        # モデルは設定セルの MODEL_SRC（Dataset 直下）を使う。
+        # find_model() の config.json 探索は使わない。
+        "model": False,
+        "tp": True,
+        "install": True,
+        "publish": True,
+        "verify_public": True,
+        "keepalive": False,
+        "conf": True,
+    },
+    "data_init": ('{"engine": ENGINE, "stage": "init", "tunnel": TUNNEL_KIND, '
+                  '"model": MODEL_NAME, "context_length": CONTEXT_LENGTH, '
+                  '"smoke": SMOKE}'),
+}
+
+SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}-script"
+META = metadata.base(
+    id=f"{OWNER}/{SLUG}",
+    title=SLUG.replace("-", " "),
+    code_file="main.py",
+    kernel_type="script",
+    gpu=True,
+    # wheelhouse 2 点（本体 + cublas patch）。patch は cuda-toolkit 13.0.3 が
+    # `nvidia-cublas==13.1.1.3.*` を固定するため必要（CPU 実測 2026-10-31）。
+    # 解決に失敗しても install 側が PyPI へフォールバックする。
+    datasets=[f"{OWNER}/{DATASET_SLUG}"]
+    + ([] if TUNNEL == "ngrok" else [f"{OWNER}/my-cloudflared-bin"])
+    + [f"{OWNER}/vllm-wheelhouse", f"{OWNER}/vllm-wheelhouse-patch"],
+)
+
+if __name__ == "__main__":
+    serve_script.write(
+        OUT,
+        ENGINE,
+        META,
+        run_minutes=60,
+        runtime=source_bundle("net", "proc", "storage", "keepalive", "proxy"),
+        proxy_b64=PROXY_SRC_B64,
+        html_b64=CHAT_SRC_B64,
+        gist_id=CFG.get("GIST_ID", ""),
+        gist_owner=CFG.get("GIST_OWNER", ""),
+        port=VLLM_PORT,
+        proxy_port=PROXY_PORT,
+        hard_max_minutes=180,
+        smoke=SMOKE,
+        tunnel=TUNNEL,
+        ngrok_domain=CFG.get("NGROK_DOMAIN", ""),
+        builder="kaggle/build_step2_vllm_script.py",
+    )

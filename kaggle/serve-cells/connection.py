@@ -8,14 +8,17 @@ try:
 except FileNotFoundError:
     fail("公開URLがありません。トンネルセルを実行してください。")
 
+# コンテキスト長はエンジンが決める（未定義ならエンジン既定と表示）
+_ctx = f"{CONTEXT_LENGTH:,}" if "CONTEXT_LENGTH" in globals() else "エンジン既定"
+
 opencode_cfg = {
     "$schema": "https://opencode.ai/config.json",
     "provider": {
         "kaggle": {
             "npm": "@ai-sdk/openai-compatible",
-            "name": "Kaggle Ollama",
+            "name": f"Kaggle {ENGINE_DISPLAY}",
             "options": {"baseURL": f"{url}/v1"},
-            "models": {MODEL_NAME: {"name": "Qwen3.8-27B-Uncensored"}},
+            "models": {MODEL_NAME: {"name": MODEL_DISPLAY}},
         }
     },
     "model": f"kaggle/{MODEL_NAME}",
@@ -26,12 +29,12 @@ buf = [
     f"  🌍 Public URL : {url}",
     f"  💬 チャット UI : {url}/",
     f"  🤖 Model      : {MODEL_NAME}",
-    f"  📏 Context    : {CONTEXT_LENGTH:,}",
+    f"  📏 Context    : {_ctx}",
     "  🔓 認証        : なし（URL を知れば誰でも使える）",
     "=" * 64,
     "",
     "📋 curl:",
-    f"  curl {url}/api/tags",
+    f"  curl {url}/v1/models",
     "",
     "📋 Python（OpenAI 互換クライアント）:",
     "  import httpx",
@@ -45,7 +48,7 @@ buf = [
     "📋 opencode.json:",
     json.dumps(opencode_cfg, indent=2, ensure_ascii=False),
     "",
-    "⚠ cloudflared quick tunnel: 稼働保証なし。切れたらトンネルセルを再実行",
+    "⚠ quick tunnel: 稼働保証なし。切れたらトンネルセルを再実行",
     "⚠ 公開URLは実行のたびに変わる。再実行後は接続情報を取り直す",
     "⚠ Kaggle: 9時間でカーネルが停止します",
 ]

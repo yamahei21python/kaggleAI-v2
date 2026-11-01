@@ -191,4 +191,5 @@ cells.append(("markdown", f"""---
 > `kaggle datasets version -p <dir> -m "message" --dir-mode zip` を使います。
 """))
 
-pack_nb.write(OUT, cells)
+if __name__ == "__main__":
+    pack_nb.write(OUT, cells)

@@ -18,6 +18,8 @@ MODULES = {
     "proxy": "proxy.py",
     "quota": "quota.py",
     "ollama": "engines/ollama.py",
+    "lmdeploy": "engines/lmdeploy.py",
+    "sglang": "engines/sglang.py",
 }
 
 HEADER = (

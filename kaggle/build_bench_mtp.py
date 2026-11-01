@@ -344,4 +344,5 @@ cells.append(("markdown", """---
 - 純粋な MTP の効果は **同一バイナリ内の none ↔ draft-mtp の差**で見てください
 """))
 
-pack_nb.write(OUT, cells, cell_ids=True)
+if __name__ == "__main__":
+    pack_nb.write(OUT, cells, cell_ids=True)

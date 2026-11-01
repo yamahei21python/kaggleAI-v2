@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""build_kernel.py の生成物チェック（CPU のみ・Kaggle 不要）。
+"""build_exl3_serve.py の生成物チェック（CPU のみ・Kaggle 不要）。
 
   - 3 モードが生成でき、再生成が決定的（sha256 一致）
   - API パスワードが result / ログに入らない（P0）
@@ -15,8 +15,8 @@ import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "kaggle" / "exl3-serve"))
-import build_kernel as bk  # noqa: E402
+sys.path.insert(0, str(ROOT / "kaggle"))
+import build_exl3_serve as bk  # noqa: E402
 
 MODES = [
     ("exl3", bk.METADATA_REAL, 60),
@@ -73,3 +73,19 @@ def test_exl3_build():
             bk.write(mode, again, meta, minutes)
             check(digest(out / "main.py") == digest(again / "main.py"),
                   f"{mode}: 再生成が決定的でない")
+
+
+def test_exl3_smoke_variant():
+    """--smoke は serve を「疎通 → 終了」に差し替える（GPU 時間の節約）。"""
+    with tempfile.TemporaryDirectory(prefix="kc-exl3smoke-") as tmp:
+        out = pathlib.Path(tmp) / "serve"
+        bk.write("exl3", out, bk.METADATA_REAL, 5, smoke=True)
+        body = (out / "main.py").read_text()
+        check("SMOKE = True" in body, "smoke: SMOKE フラグが立っていない")
+        check("--stop-pid" in body, "smoke: /stop がエンジンを落とさない")
+        check("if SMOKE:" in body, "smoke: 分岐が無い")
+        # smoke 分岐は tunnel より前にある
+        head = body.split("def main():")[1]
+        check(head.index("if SMOKE:") < head.index("start_tunnel()"),
+              "smoke: tunnel より後に置かれている")
+        ast.parse(body)

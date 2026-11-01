@@ -11,24 +11,53 @@ from kbuild import secrets
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 GET_RE = re.compile(r'get_secret\(\s*"([A-Z0-9_]+)"')
 SECRET_RE = re.compile(r'(?<![A-Za-z_])secret\(\s*"([A-Z0-9_]+)"')
+# エンジン辞書（serve_script の engine_code / build_exl3_serve の _engine）は
+# Secret 名をデータで持つ。リテラル参照と同じように台帳と突き合わせる。
+SECRET_KEY_RE = re.compile(r'"secret_(?:user|pass)"\s*:\s*"([A-Z0-9_]+)"')
 GENERATED = {
-    ROOT / "kaggle" / "exl3-serve" / d for d in ("kernel", "dryrun", "keepalive")
+    ROOT / "kaggle" / "exl3-serve-kernel" / d
+    for d in ("serve", "dryrun", "keepalive")
+} | {
+    ROOT / "kaggle" / "lmdeploy-serve",
+    ROOT / "kaggle" / "sglang-serve",
+    # Ollama / vLLM の script 版（serve_script の生成物。Secret 参照は
+    # kbuild/serve_script.py 側で台帳に載っている）
+    ROOT / "kaggle" / "step2-script",
+    ROOT / "kaggle" / "step2-vllm-script",
+    ROOT / "kaggle" / "llama-server-script",
+    # 実験用 playground（同じく serve_script の生成物）。トンネル / Gist /
+    # keepalive を丸ごと飛ばすので、GIST_ID / NGROK_TOKEN 等の参照は
+    # テンプレートに残っているが**到達しない**。二重に数えない。
+    ROOT / "kaggle" / "vllm-playground",
 }
 
 
 def _names(path):
     src = path.read_text(encoding="utf-8")
-    return {m.group(1) for pat in (GET_RE, SECRET_RE) for m in pat.finditer(src)}
+    return {m.group(1) for pat in (GET_RE, SECRET_RE, SECRET_KEY_RE)
+            for m in pat.finditer(src)}
 
 
 def _is_generated(path):
-    return any(str(path).startswith(str(d)) for d in GENERATED)
+    if any(str(path).startswith(str(d)) for d in GENERATED):
+        return True
+    # 配信しないカーネルの script 版（kaggle/<kernel>/script/main.py）は
+    # 元ビルダーの cells をそのまま連結したもの。Secret 参照は元ビルダー側で
+    # 台帳に載っているので、ここでは二重に数えない。
+    return "/script/" in path.as_posix()
 
 
 def test_secrets_match_ledger():
     seen = {}
     for path in (ROOT / "kaggle").rglob("*.py"):
         if "archive" in path.parts or _is_generated(path):
+            continue
+        names = _names(path)
+        if names:
+            seen[path.relative_to(ROOT).as_posix()] = names
+    # 梱包層（テンプレート内の Secret 参照）も台帳に載せる
+    for path in (ROOT / "kbuild").rglob("*.py"):
+        if "archive" in path.parts:
             continue
         names = _names(path)
         if names:

@@ -47,6 +47,33 @@ def kc_gpu_usage(timeout=5):
         return "N/A"
 
 
+def kc_context_budget(vram_total_mib, model_gib, kv_kib_per_token, candidates,
+                      requested=None, budget_ratio=0.88):
+    """VRAM から (コンテキスト長, 予算 GiB) を決める。
+
+    予算は実効 VRAM の `budget_ratio` 倍（T4 x2 の 30 GiB をそのまま
+    使うと CUDA graph / activation で溢れるため 0.88 で見積もる）。
+    `requested` が収まるならそれを優先し、駄目なら `candidates` を
+    大きい順に試す。どれも収まらなければ最小候補を返す（起動は試す）。
+    """
+    budget_gib = vram_total_mib / 1024 * budget_ratio
+
+    def fits(ctx):
+        return model_gib + kv_kib_per_token * ctx / 1024 / 1024 <= budget_gib
+
+    if requested and fits(requested):
+        return requested, budget_gib
+    for ctx in candidates:
+        if fits(ctx):
+            return ctx, budget_gib
+    return candidates[-1], budget_gib
+
+
+def kc_context_gib(model_gib, kv_kib_per_token, ctx):
+    """コンテキスト 1 本ぶんの見積り（モデル + KV）を GiB で返す。"""
+    return model_gib + kv_kib_per_token * ctx / 1024 / 1024
+
+
 def kc_detect_gpu(timeout=15):
     """全 GPU の (名前, VRAM MiB) を返す。検出失敗は ([], [])。"""
     try:

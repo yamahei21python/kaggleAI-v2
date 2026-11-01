@@ -93,26 +93,9 @@ else:
     print(f"⚠ Dataset が見つかりません: {DATASET_PATH}")
     print("  → Add Data で Dataset を追加するか、下で直接 pull します。")
 
-# --- 環境変数 ---
-# OLLAMA_CONTEXT_LENGTH : コンテキスト長（未設定だと 4096 に落ちる）
-# OLLAMA_KV_CACHE_TYPE  : KV を q8_0 に量子化して VRAM を半分に
-# OLLAMA_FLASH_ATTENTION: 有効化
-# OLLAMA_KEEP_ALIVE     : -1 で常時ロード維持
-env = {
-    **os.environ,
-    "OLLAMA_MODELS": OLLAMA_MODELS,
-    "OLLAMA_HOST": "127.0.0.1:11434",
-    "OLLAMA_ORIGINS": "*",
-    "OLLAMA_KEEP_ALIVE": "-1",
-    "OLLAMA_CONTEXT_LENGTH": str(CONTEXT_LENGTH),
-    "OLLAMA_KV_CACHE_TYPE": "q8_0",
-    "OLLAMA_FLASH_ATTENTION": "1",
-    # 既定 5分（stall 検出）。v9 は load 198s で通過したが v10 は超過して
-    # "timed out waiting for llama-server to start" → 500 になった。
-    # mmap 読込はページキャッシュ次第で揺れるので 10分に緩和（warmup 900s 未満）。
-    "OLLAMA_LOAD_TIMEOUT": "600",
-    "OLLAMA_NUM_PARALLEL": "1",   # qwen35 は並列が blocklist されているため 1
-}
+# --- 環境変数 / 実体パス ---
+# `env` と `OLLAMA_BIN` は設定セル（00_settings.py）が持つ。
+# 確認セル・ウォームアップセルも同じ値を見るので、ここでは再定義しない。
 
 # --- 既存プロセスを掃除 ---
 # 前回セッションの孤児 llama-server が残っているとポート/VRAMを
@@ -123,29 +106,29 @@ subprocess.run(["pkill", "-9", "-f", "llama-server"], capture_output=True)
 subprocess.run(["pkill", "-9", "ollama"], capture_output=True)
 time.sleep(2)
 
-OLLAMA_BIN = "/usr/local/bin/ollama"
-with open("/tmp/ollama.log", "w") as log:
-    proc = subprocess.Popen([OLLAMA_BIN, "serve"], env=env, stdout=log, stderr=log)
+with open(ENGINE_LOG, "w") as log:
+    proc = subprocess.Popen([OLLAMA_BIN, "serve"], env=OLLAMA_ENV,
+                            stdout=log, stderr=log)
 print(f"🔄 Ollama PID: {proc.pid}")
 
 # --- 起動待機 ---
 for i in range(60):
-    r = subprocess.run([OLLAMA_BIN, "list"], env=env, capture_output=True, text=True)
+    r = subprocess.run([OLLAMA_BIN, "list"], env=OLLAMA_ENV, capture_output=True, text=True)
     if r.returncode == 0:
         print(f"✅ Ollama サーバー起動完了（{i+1}s）")
         break
     time.sleep(1)
 else:
-    print(open("/tmp/ollama.log").read()[-3000:])
+    print(open(ENGINE_LOG).read()[-3000:])
     fail("Ollama サーバー起動失敗", "/tmp/ollama.log")
 
 # --- モデル確認 ---
-r = subprocess.run([OLLAMA_BIN, "show", MODEL_NAME], env=env,
+r = subprocess.run([OLLAMA_BIN, "show", MODEL_NAME], env=OLLAMA_ENV,
                    capture_output=True, text=True)
 if r.returncode != 0:
     # なぜ show が失敗したかを残さないと「全数充足なのに pull」が再現不能になる
     print(f"⚠ show 失敗（stderr）: {r.stderr.strip()[:500]}")
-    print(f"⏳ Dataset にモデルが無いため pull します（16.5 GiB / 10〜30分）")
+    print("⏳ Dataset にモデルが無いため pull します（16.5 GiB / 10〜30分）")
     # pull 前に空き容量を確認。16.5 GiB + 退避バッファが無いと
     # 途中で ENOSPC になり、長い待機の後に初めて失敗するのを防ぐ。
     _du = shutil.disk_usage("/kaggle/tmp")
@@ -158,7 +141,7 @@ if r.returncode != 0:
     # 失敗しても例外のまま死なず、証跡を残してから止める
     # （進捗はセル出力へそのまま流す。pull のエラー表示もそこに残る）
     try:
-        pull = subprocess.run([OLLAMA_BIN, "pull", MODEL_NAME], env=env,
+        pull = subprocess.run([OLLAMA_BIN, "pull", MODEL_NAME], env=OLLAMA_ENV,
                               timeout=7200)
     except subprocess.TimeoutExpired:
         fail("モデル pull が 7200s でタイムアウトしました")
@@ -169,5 +152,5 @@ else:
     print(f"✅ モデル {MODEL_NAME} は利用可能")
 
 print()
-print(subprocess.run([OLLAMA_BIN, "list"], env=env,
+print(subprocess.run([OLLAMA_BIN, "list"], env=OLLAMA_ENV,
                      capture_output=True, text=True).stdout)

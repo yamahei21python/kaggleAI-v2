@@ -87,16 +87,16 @@ def main():
                           [sys.executable, "kaggle/check_notebooks.py"]))
         steps += [
             ("exl3-generate",
-             [sys.executable, "kaggle/exl3-serve/build_kernel.py"]),
+             [sys.executable, "kaggle/build_exl3_serve.py"]),
+            ("engine-generate",
+             [sys.executable, "kaggle/build_engine_serve.py"]),
             ("ruff-generated",
              [sys.executable, "-m", "ruff", "check", "--no-respect-gitignore",
-              "kaggle/exl3-serve/kernel",
-              "kaggle/exl3-serve/dryrun",
-              "kaggle/exl3-serve/keepalive"]),
+              "kaggle/exl3-serve-kernel", "kaggle/lmdeploy-serve",
+              "kaggle/sglang-serve"]),
             ("compileall", [sys.executable, "-m", "compileall", "-q",
-                            "kaggle/exl3-serve/kernel",
-                            "kaggle/exl3-serve/dryrun",
-                            "kaggle/exl3-serve/keepalive"]),
+                            "kaggle/exl3-serve-kernel", "kaggle/lmdeploy-serve",
+                            "kaggle/sglang-serve"]),
         ]
 
         for name, cmd in steps:

@@ -211,4 +211,5 @@ cells.append(("markdown", """---
 （cloudflared の quick tunnel。authtoken 不要）。
 """))
 
-pack_nb.write(OUT, cells, cell_ids=True)
+if __name__ == "__main__":
+    pack_nb.write(OUT, cells, cell_ids=True)

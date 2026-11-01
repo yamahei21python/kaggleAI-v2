@@ -84,7 +84,6 @@ _add("code", source_bundle("net", "proc", "storage", "keepalive", "proxy"))
 
 # ── 1: 設定 ─────────────────────────────────────────────────
 _add("code", _tpl('''# 設定（GPU 不要）
-import glob as _glob
 import json
 import os
 import re
@@ -108,23 +107,8 @@ CHAT_PATH = "/usr/local/bin/llama-chat.html"
 
 OUT_DIRS = ("/kaggle/working", "/output")
 
-
-def _find_input(slug):
-    cands = []
-    for pat in ("/kaggle/input/" + slug,
-                "/kaggle/input/*/" + slug,
-                "/kaggle/input/*/*/" + slug):
-        cands += [p for p in _glob.glob(pat) if os.path.isdir(p)]
-    for p in sorted(cands):
-        try:
-            if os.listdir(p):
-                return p
-        except OSError:
-            continue
-    return cands[0] if cands else "/kaggle/input/" + slug
-
-
-MODEL_SRC = _find_input("__DATASET_SLUG__")
+# Dataset のマウント先は共通ランタイム（runtime/storage.py）に一本化。
+MODEL_SRC = kc_find_dataset("__DATASET_SLUG__")
 
 
 save_output = kc_save_output
@@ -499,33 +483,10 @@ import urllib.request
 
 CF_BIN = "/usr/local/bin/cloudflared"
 
+# 公開URLを開く（IPv4 優先で 1 回だけ再試行）。実体は runtime/net.py。
+_open_public = kc_urlopen_v4
 
-def _open_public(url, timeout=15):
-    """公開URLを開く。失敗時は IPv4 優先で再解決して 1 回だけ再試行。
-
-    Kaggle の VM は AAAA を返すのに IPv6 経路が無いことがあり、
-    urlopen が "Network is unreachable" になる（dryrun v6 で実測）。
-    """
-    import socket
-    try:
-        return urllib.request.urlopen(url, timeout=timeout)
-    except Exception as first:
-        err = first
-    orig = socket.getaddrinfo
-
-    def _v4(host, port, family=0, type=0, proto=0, flags=0):
-        return orig(host, port, socket.AF_INET, type, proto, flags)
-
-    socket.getaddrinfo = _v4
-    try:
-        return urllib.request.urlopen(url, timeout=timeout)
-    except Exception:
-        raise err
-    finally:
-        socket.getaddrinfo = orig
-
-
-NONE = _find_input("my-cloudflared-bin")
+NONE = kc_find_dataset("my-cloudflared-bin")
 src = None
 for cand in (os.path.join(NONE, "cloudflared"),
              os.path.join(NONE, "bin", "cloudflared")):
@@ -772,23 +733,24 @@ if left:
 ''')
 
 # ── 書き出し ────────────────────────────────────────────────
-pack_nb.write_cells(OUT, cells, "3.11.0")
+if __name__ == "__main__":
+    pack_nb.write_cells(OUT, cells, "3.11.0")
 
-meta = {
-    "id": f"{OWNER}/{SLUG}",
-    "title": "Step2 vLLM dryrun",
-    "code_file": OUT.name,
-    "language": "python",
-    "kernel_type": "notebook",
-    "is_private": True,
-    "enable_gpu": False,
-    "enable_tpu": False,
-    "enable_internet": True,
-    "keywords": [],
-    "dataset_sources": [DATASET_ID, f"{OWNER}/my-cloudflared-bin"],
-    "kernel_sources": [],
-    "competition_sources": [],
-    "model_sources": [],
-}
-metadata.write(OUT_DIR / "kernel-metadata.json", meta)
-print(f"wrote {OUT_DIR / 'kernel-metadata.json'}")
+    meta = {
+        "id": f"{OWNER}/{SLUG}",
+        "title": "Step2 vLLM dryrun",
+        "code_file": OUT.name,
+        "language": "python",
+        "kernel_type": "notebook",
+        "is_private": True,
+        "enable_gpu": False,
+        "enable_tpu": False,
+        "enable_internet": True,
+        "keywords": [],
+        "dataset_sources": [DATASET_ID, f"{OWNER}/my-cloudflared-bin"],
+        "kernel_sources": [],
+        "competition_sources": [],
+        "model_sources": [],
+    }
+    metadata.write(OUT_DIR / "kernel-metadata.json", meta)
+    print(f"wrote {OUT_DIR / 'kernel-metadata.json'}")
