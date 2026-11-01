@@ -16,6 +16,7 @@
 | `operations.md` | 手順の詳細（README から切り出し。パスは 2026-10-30 時点のスナップショット） |
 | `runtime-notes.md` | 起動高速化・技術詳細・既知の問題・ローカル検証（同上） |
 | `url-publishing.md` | **公開 URL の伝え方**。Gist 方式（このリポジトリの実装）と、専用アカウントで採った**ビーコンカーネル**方式の比較・実測・未検証点。起動の進捗はどちらもカバーしていない |
+| `serve-parity.md` | **配信の 2 実装（notebook セル / script 骨格）の差分台帳**。機能ごとの対応と、いま効いている差（script 版は公開 URL の失効に気づかない） |
 
 ## 計測・落とし穴（2026-11-01 に新設）
 
@@ -35,7 +36,7 @@ CPU プローブは `kaggle/cpu-tests/`（`vllm-flags` / `tiny-llama` / `tiny-ol
 |---|---|
 | `exllamav3-kaggle-decisions.md` | EXL3 版の決定事項ログ |
 | `vllm-cpu-findings.md` | vLLM を Kaggle で動かすまでの実測・失敗ログ |
-| `vllm-startup-speedup.md` | vLLM 起動時間の短縮策。**§18 が最新**（先読みは退行＝重みロード 181→745 秒、v14/v15 の 2 例で再現）。§17.1 の機構は §18.1 で否定済み |
+| `vllm-startup-speedup.md` | vLLM 起動時間の短縮策。**§23 が最新**: 重み prefetch（`num-threads=1`）で重みロード 2,877 → 1,186 秒・起動全体 3,820 → 2,011 秒。§23 は本番の既定にも入れた（`Kernel.bake_env`）。§18 の「先読みは退行」は `KC_PREWARM`（自前実装）の話で、vLLM 内蔵 prefetch は別物 |
 | `tpu-llm-plan.md` | TPU で LLM を動かす検討 |
 
 ## ローカル uzu / Qwen3.5-9B

@@ -70,6 +70,9 @@ README 側も「114 本」「109 本」と実態（210 本）からずれてい�
 | 33 | **Kaggle Secrets の「未紐付け」は `ConnectionError` として出る**。`get_secret()` が `Connection error trying to communicate with service.` を投げるので、ネットワーク障害を疑って時間を溶かす。実際は「このカーネルに Secret が 1 つも付いていない」で、アカウントへの登録だけでは読めない | 例外を握りつぶさず**理由ごと返す**（`kc_gh_token_detail`）。`""` の 1 語では「登録漏れ」と「紐付け漏れ」を分けられない | `test_runtime.py::test_gist`（理由が空にならないこと）+ `cpu-tests/gist`（実機で `token_detail` を確認） |
 | 34 | **Dataset に上げた `.tar` は展開されて保持される**。195 MB の tar を `datasets create` したら、マウント側は `root/.triton/cache/<hash>/...` の木になり `*.tar` は 1 本も無かった。`*.tar` だけを探す復元は「Dataset が空」と誤判定し、`require` が**正当な Dataset を落とす** | tar と展開済みの木の両方を受ける（`_kc_wc_tree` が `.triton/cache` を探す）。`timings.warm_cache_restore.source` にどちらから復元したかを残す | `test_vllm_cells.py::test_warm_cache_restores_an_expanded_dataset` |
 | 35 | **`cli push` はビルダーを再実行する**ので、env を push のときにも渡さないと**別の設定**が積まれる。`KC_EXPERIMENT=baseline_long`（予算 7,000 秒）でビルドした直後にenv 無しで push し、既定の `baseline`（4,200 秒）で上書きされた（実測 2026-11-02 00:48）。生成ログの 1 行目を読まないと気づけず、そのまま 2 時間走る | push 直前に生成物の指紋を取り、再生成で変わったら警告する（`_artifact_warning`）。ビルダーの docstring にも「push のときにも env を渡す」と書く | `test_cli.py::test_push_warns_when_the_rebuild_changes_the_artifact` |
+| 36 | **`**/*.py` を `ast.parse` で舐めると `.venv-kaggle-cli/` まで入る**。3.9 では venv 内の `match` 構文で SyntaxError、ディレクトリが重いのでプロセスごと SIGKILL される（実測 137） | 走査先を `kaggle/ kbuild/ runtime/ cli/ tests/` + ルート直下に限定する | `test_spec.py::test_no_module_imports_the_kcconfig_shim` |
+| 37 | **サブパーサの `nargs=REMAINDER` は先頭の `--help` を取りこぼす**（`unrecognized arguments` になる）。委譲先の help が出せない | `add_help=False` + `parse_known_args` の余りを渡す | `test_cli.py::test_passthrough_gets_the_remaining_args` |
+| 38 | **テストの関数切り出しが「上から最初の `def`」**だと、同名の関数があるとき黙って別物を掴んで緑になる（`reason = loop(procs)` が 2 箇所あった） | `tests/_cells.py` が `ast` で切り出し、同名が複数なら例外にする | `test_cells_helper.py::test_slice_def_refuses_ambiguous_names` |
 
 
 ## 既に別ファイルで固定済みのもの
