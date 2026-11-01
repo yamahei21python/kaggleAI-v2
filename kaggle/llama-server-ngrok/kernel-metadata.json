@@ -1,7 +1,7 @@
 {
-  "id": "yamahei21python/step2-direct-llama-server-ngrok",
-  "title": "Step2 direct llama-server ngrok",
-  "code_file": "step2-direct-ngrok.ipynb",
+  "id": "yamahei21python/llama-server-ngrok",
+  "title": "llama-server ngrok",
+  "code_file": "llama-server-ngrok.ipynb",
   "language": "python",
   "kernel_type": "notebook",
   "is_private": true,

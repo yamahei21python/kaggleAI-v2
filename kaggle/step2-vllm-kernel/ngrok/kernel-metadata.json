@@ -11,7 +11,8 @@
   "keywords": [],
   "dataset_sources": [
     "yamahei21python/qwen38-27b-uncensored-hauhaucs-awq-mtp",
-    "yamahei21python/vllm-wheelhouse"
+    "yamahei21python/vllm-wheelhouse",
+    "yamahei21python/vllm-wheelhouse-patch"
   ],
   "kernel_sources": [],
   "competition_sources": [],

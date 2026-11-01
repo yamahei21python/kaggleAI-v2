@@ -1,6 +1,6 @@
 {
   "id": "yamahei21python/smoke-orcarouter-qwen38-27b",
-  "title": "Smoke: orcarouter Qwen3.8-27B on T4x2",
+  "title": "Smoke orcarouter Qwen38 27B",
   "code_file": "smoke-orcarouter-qwen38-27b.ipynb",
   "language": "python",
   "kernel_type": "notebook",
