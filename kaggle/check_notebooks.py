@@ -19,37 +19,29 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(HERE))
 
 import _regen  # noqa: E402
+from kbuild import spec  # noqa: E402
 
 # (ビルダー, 追加の環境変数, 生成物) — 生成物はリポジトリ相対。
-# notebook 版は KC_SMOKE のような「台帳に載らないノブ」を使うので、
-# script 版と違って台帳から自動導出せず、ここで明示する。
-TARGETS = [
-    ("build_step1.py", {}, "kaggle/step1/step1-orcarouter-qwen38-27b-dl.ipynb"),
-    ("build_step2.py", {"STEP2_TUNNEL": "cloudflared"},
-     "kaggle/step2/step2-orcarouter-qwen38-27b-cloudflared.ipynb"),
-    ("build_smoke.py", {}, "kaggle/smoke/smoke-orcarouter-qwen38-27b.ipynb"),
-    ("build_bench.py", {}, "kaggle/bench/bench-ctx-orcarouter-qwen38-27b.ipynb"),
-    ("build_bench_mtp.py", {},
-     "kaggle/bench_mtp/bench-mtp-orcarouter-qwen38-27b.ipynb"),
-    ("build_keepalive_test.py", {},
-     "kaggle/step2/step2-keepalive-test.ipynb"),
-    # ngrok 版（`kaggle/step2-ngrok/` `kaggle/llama-server-ngrok/`
-    # `kaggle/step2-vllm-kernel/ngrok/`）は 2026-11-01 に retired。
-    # ビルダーが ngrok を受け付けなくなったので、ここからは外す
-    # （ノートブックは消さない方針なのでファイルは残る）。
-    ("build_vllm_dataset.py", {},
-     "kaggle/step2-vllm/prepare-vllm-dataset.ipynb"),
-    ("build_vllm_dryrun.py", {},
-     "kaggle/step2-vllm-dryrun/step2-vllm-dryrun.ipynb"),
-    ("build_step2_vllm.py", {"STEP2_TUNNEL": "cloudflared"},
-     "kaggle/step2-vllm-kernel/cloudflared/"
-     "step2-vllm-qwen38-27b-cloudflared.ipynb"),
-    # smoke 版は通常版と別パス・別セル数（15 セル）。同じ TARGETS で見ないと
-    # 「通常版を smoke で上書き」も「smoke の取りこぼし」も検知できない。
-    ("build_step2_vllm.py", {"STEP2_TUNNEL": "cloudflared", "KC_SMOKE": "1"},
-     "kaggle/step2-vllm-kernel/smoke-cloudflared/"
-     "step2-vllm-qwen38-27b-cloudflared.ipynb"),
-]
+#
+# **手書きしない。** 台帳（`kbuild/spec.py`）から導出する。
+# notebook の生成物は「台帳の out + code_file」で決まり、smoke 版は
+# `smoke_out` に別名で出る（`KC_SMOKE=1` を足す）。以前はここに 10 行
+# 直書きしていて、新カーネルを足すと**検査されないまま commit できた**
+# （生成し忘れを検出するためのチェックが、そのカーネルだけ素通りする）。
+def _targets():
+    out = []
+    for k in spec.KERNELS:
+        if k.kind != "notebook" or k.status == spec.RETIRED or not k.builder:
+            continue
+        out.append((f"{k.builder}.py", dict(k.env),
+                    f"{k.out}/{k.code_file}"))
+        if k.smoke_out:
+            out.append((f"{k.builder}.py", {**dict(k.env), "KC_SMOKE": "1"},
+                        f"{k.smoke_out}/{k.code_file}"))
+    return out
+
+
+TARGETS = _targets()
 
 
 def main():

@@ -33,6 +33,7 @@ class Kernel:
     metadata_file: str = "kernel-metadata.json"
     status: str = ACTIVE
     smoke_out: str = ""           # smoke 版の出力先（空 = out と同じ場所）
+    smoke: bool = False           # `--smoke` で push してよいか
 
     @property
     def id(self) -> str:
@@ -53,11 +54,12 @@ class Kernel:
 
 
 def _k(name, title, kind, out, code, gpu=False, ds=(), builder="", env=(),
-       status=ACTIVE, meta="kernel-metadata.json", smoke_out=""):
+       status=ACTIVE, meta="kernel-metadata.json", smoke_out="",
+       smoke=False):
     return Kernel(name=name, title=title, kind=kind, out=out, code_file=code,
                   gpu=gpu, datasets=tuple(ds), builder=builder,
                   env=tuple(env), status=status, metadata_file=meta,
-                  smoke_out=smoke_out)
+                  smoke_out=smoke_out, smoke=smoke)
 
 
 _K = _k
@@ -105,7 +107,7 @@ KERNELS = (
            "yamahei21python/vllm-wheelhouse",
            "yamahei21python/vllm-wheelhouse-patch"),
        builder="build_step2_vllm", env=(("STEP2_TUNNEL", "cloudflared"),),
-       smoke_out="kaggle/step2-vllm-kernel/smoke-cloudflared"),
+       smoke_out="kaggle/step2-vllm-kernel/smoke-cloudflared", smoke=True),
     # ngrok 廃止。ノートブックは残すが retired。
     _K("step2-vllm-qwen38-27b-ngrok", "step2 vllm qwen38 27b ngrok", "notebook",
        "kaggle/step2-vllm-kernel/ngrok", "step2-vllm-qwen38-27b-ngrok.ipynb",
@@ -123,7 +125,7 @@ KERNELS = (
            "yamahei21python/my-ollama-orcarouter-qwen38-27b-patch",
            "yamahei21python/my-cloudflared-bin"),
        builder="build_step2_script", env=(("STEP2_TUNNEL", "cloudflared"),),
-       status=SEMI, smoke_out="kaggle/step2-script/smoke-cloudflared"),
+       status=SEMI, smoke_out="kaggle/step2-script/smoke-cloudflared", smoke=True),
     # ngrok 廃止。`main.py` は残すが retired（再生成しない）。
     _K("step2-orcarouter-qwen38-27b-ngrok-script",
        "step2 orcarouter qwen38 27b ngrok script", "script",
@@ -142,7 +144,7 @@ KERNELS = (
            "yamahei21python/vllm-wheelhouse-patch"),
        builder="build_step2_vllm_script",
        env=(("STEP2_TUNNEL", "cloudflared"),), status=SEMI,
-       smoke_out="kaggle/step2-vllm-script/smoke-cloudflared"),
+       smoke_out="kaggle/step2-vllm-script/smoke-cloudflared", smoke=True),
     # ngrok 廃止。`main.py` は残すが retired（再生成しない）。
     _K("step2-vllm-qwen38-27b-ngrok-script",
        "step2 vllm qwen38 27b ngrok script", "script",
@@ -256,7 +258,7 @@ KERNELS = (
        "main.py", gpu=True,
        ds=("yamahei21python/qwen38-27b-uncensored-exl3-4bpw",
            "yamahei21python/my-cloudflared-bin"),
-       builder="build_exl3_serve"),
+       builder="build_exl3_serve", smoke=True),
     _K("exl3-serve-dryrun", "EXL3 serve dryrun", "script",
        "kaggle/exl3-serve-kernel/dryrun", "main.py",
        ds=("yamahei21python/my-cloudflared-bin",), builder="build_exl3_serve"),
@@ -280,7 +282,7 @@ KERNELS = (
        "kaggle/lmdeploy-serve", "main.py", gpu=True,
        ds=("yamahei21python/qwen38-27b-uncensored-hauhaucs-awq-mtp",
            "yamahei21python/my-cloudflared-bin"),
-       builder="build_engine_serve", status=SEMI),
+       builder="build_engine_serve", status=SEMI, smoke=True),
     # SGLang は **T4（sm75）では不可**（2026-11-01 実測・4 往復で確定）。
     # install は Rust を入れれば通る（rustup 12.7s + pip 488.4s。cp313 wheel が
     # 無いのは `outlines_core==0.1.26` だけ）。しかしモデルの量子化を解釈する段で:
@@ -294,7 +296,7 @@ KERNELS = (
        "kaggle/sglang-serve", "main.py", gpu=True,
        ds=("yamahei21python/qwen38-27b-uncensored-hauhaucs-awq-mtp",
            "yamahei21python/my-cloudflared-bin"),
-       builder="build_engine_serve", status=SEMI),
+       builder="build_engine_serve", status=SEMI, smoke=True),
     # ---- 検証・ベンチ・CPU ----
     _K("llama-server-cpu-check", "llama-server CPU check", "script",
        "kaggle/cpu-check", "main.py",

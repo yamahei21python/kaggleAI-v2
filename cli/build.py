@@ -15,28 +15,18 @@ from kbuild import spec
 
 ROOT = spec.ROOT
 
-# `--smoke` を受けるビルダー（それ以外は通常生成のみ）
-SMOKE_BUILDERS = {
-    "build_exl3_serve",
-    "build_engine_serve",
-    "build_step2_vllm",
-    # script 版（骨格）。smoke は `smoke-<tunnel>/` へ別書きする。
-    "build_step2_script",
-    "build_step2_vllm_script",
-    "build_llama_server_script",
-}
-
-# `--smoke` で push してよいカーネル（serve 本体だけ。dryrun / keepalive は対象外）
-# smoke 版は spec の `smoke_out`（smoke-<tunnel>/）へ別名で生成され、
-# push もそちらを staging する（通常版を上書きしない）。
-SMOKE_KERNELS = {
-    "exl3-serve",
-    "step2-lmdeploy-qwen38-27b-cloudflared",
-    "step2-sglang-qwen38-27b-cloudflared",
-    "step2-vllm-qwen38-27b-cloudflared",
-    "step2-orcarouter-qwen38-27b-cloudflared-script",
-    "step2-vllm-qwen38-27b-cloudflared-script",
-}
+# `--smoke` を受けるビルダーと、`--smoke` で push してよいカーネル。
+#
+# **手書きしない。** 台帳（`kbuild/spec.py` の `smoke`）から導出する。
+# 以前はここに 6 本ずつ直書きしていて、新カーネルを足すと**静かに漏れた**
+# （`smoke` を渡しても「対象外」で止まるので気づきにくい）。
+# smoke 版の出力先は `smoke_out`（空なら同じディレクトリ）。push は
+# そちらを staging するので通常版を上書きしない。
+SMOKE_KERNELS = frozenset(
+    k.name for k in spec.KERNELS if k.smoke and k.status != spec.RETIRED)
+SMOKE_BUILDERS = frozenset(
+    k.builder for k in spec.KERNELS
+    if k.smoke and k.status != spec.RETIRED and k.builder)
 
 
 def plan(targets=None):
