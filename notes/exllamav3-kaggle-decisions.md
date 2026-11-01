@@ -10,7 +10,7 @@ Kaggle での推論エンジン選定〜ExLlamaV3版の設計方針を記録す�
 | GPU構成 | T4 x2（16GB x2）、GPUクォータは限られている |
 | 直起動 | `llama-server`（Ollama同梱バイナリ）を patch Dataset から復元して起動 |
 | 公開 | auth_proxy.py（UI配信/認証/keepalive）→ ngrok / cloudflared |
-| カーネル | `yamahei21python/step2-direct-llama-server-ngrok`（現在ERROR: 起動待ち900s切れ+fail()未定義バグ） |
+| カーネル | `yamahei21python/step2-direct-llama-server-ngrok`（現在ERROR: 起動待ち900s切れ+fail()未定義バグ）→ 2026-10-30 に `llama-server-ngrok` へ改名 |
 
 ## 決定
 
@@ -178,7 +178,7 @@ Kaggle ノートには `KAGGLE_USERNAME` / `KAGGLE_KEY` が環境変数で入っ
 1. **Dataset 化**（上記）— **完了**。GPU セッションからモデル DL を削除
 2. **薄い OpenAI 互換ラッパー**を先に作り、CPU でモック自己テスト — **完了**。
    `kaggle/exl3-serve/chat_server.py`（`/v1/chat/completions` non-stream + SSE、
-   `/v1/models`、`/health`）と `_selftest_server.py`（MockEngine で全経路 green）。
+   `/v1/models`、`/health`）と `tests/test_exl3_server.py`（MockEngine で全経路 green）。
    GPU では「ロード → 配信」だけにする。既存の auth_proxy.py / ngrok / ask.py / keepalive を再利用
 3. **配信カーネルに時間予算（自動停止）** — 30/60 分で自分で exit（クォータ事故防止）※未実装
 4. **MTP の実測を検証 1 回に含める** — **完了**（検証カーネルにステージ追加）。GGUF では 1.18x
@@ -201,8 +201,8 @@ Kaggle ノートには `KAGGLE_USERNAME` / `KAGGLE_KEY` が環境変数で入っ
 
 ## 配信カーネル（exl3-serve）と乾燥走行（2026-10-30 完了）
 
-- 生成: `kaggle/exl3-serve/build_kernel.py` → `kernel/`（GPU・60 分）、
-  `dryrun/`（mock・5 分）、`keepalive/`（mock・keepalive 実測）。
+- 生成: `kaggle/build_exl3_serve.py` → `exl3-serve-kernel/serve/`（GPU・60 分）、
+  `exl3-serve-kernel/dryrun/`（mock・5 分）、`exl3-serve-kernel/keepalive/`（mock・keepalive 実測）。
   script カーネルは code_file を 1 つしか push できないため、
   chat_server / auth_proxy / llama-chat.html を base64 で埋め込む。
 - `exl3-serve-dryrun` v5: `ok: true` / 334 秒で `budget` 停止 /

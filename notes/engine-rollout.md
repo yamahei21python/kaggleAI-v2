@@ -8,6 +8,75 @@
 proxy / tunnel / keepalive / verify の共通層はそのまま使い、
 `runtime/engines/<name>.py` だけを足す。
 
+## 実装状況（2026-10-30・CPU 検証まで）
+
+2 本とも**カーネル生成と CPU テストまで完了**。GPU 実測は未実施（クォータ待ち）。
+
+| 項目 | LMDeploy | SGLang |
+|---|---|---|
+| ビルダー | `kaggle/build_engine_serve.py`（共通。エンジン式を差し替え） | 同左 |
+| テンプレート | `kbuild/serve_script.py` | 同左 |
+| 起動引数 | `runtime/engines/lmdeploy.py` | `runtime/engines/sglang.py` |
+| 生成物 | `kaggle/lmdeploy-serve/`（gitignore） | `kaggle/sglang-serve/`（gitignore） |
+| カーネル id | `step2-lmdeploy-qwen38-27b-cloudflared` | `step2-sglang-qwen38-27b-cloudflared` |
+| 状態 | semi（比較用） | semi（比較用） |
+| CPU テスト | `tests/test_engines.py`（argv / pip 固定 / 生成決定性 / AST / Secret 非混入） | 同左 |
+| smoke | `--smoke` で install → launch → 会話 → 停止 | 同左 |
+
+```bash
+python3 kaggle/build_engine_serve.py            # 2 本を生成（配信）
+python3 kaggle/build_engine_serve.py --smoke    # 疎通だけの変種（GPU 時間の節約）
+python3 -m pytest tests/test_engines.py -q
+python3 -m cli list | grep -E "lmdeploy|sglang"
+python3 -m cli push step2-lmdeploy-qwen38-27b-cloudflared --smoke --yes   # GPU 実測（1 回）
+```
+
+生成される `main.py` の流れは exl3 と同じ:
+`stage_env → find_model → pip install → launch → proxy → verify → tunnel →
+Gist 公開 → keepalive/予算ループ → 停止`。差分は推論サーバの起動 argv だけ。
+`result.json` に `engine` / `version` / `tp` / `knobs` / `spec_decode=false` /
+`smoke` / `stop_remaining` を残す。
+
+smoke は auth_proxy / cloudflared / Gist / keepalive を**省略**し、エンジンへ直接
+`/v1/chat/completions` を投げて終了する。CPU 側で検証済みの経路を GPU で
+なぞらないための仕組み（詳細: `notes/gpu-smoke-plan.md`）。
+
+実行時バグの修正（2026-10-30 レビュー反映）:
+- `secret()` が env のみ → `kaggle_secrets.UserSecretsClient` フォールバック追加
+- 例外時にプロセス残留 → `finally` で `stop_all()`（TERM → wait → KILL → `kc_stop_processes`）
+- `terminate()` だけ → 段階停止（残存を `result.json` の `stop_remaining` に記録）
+- `/stop` がエンジンを落とさない → `kc_start_proxy(..., extra_args=("--stop-pid", pid))`
+
+## 骨格の統一（2026-10-30 追記・第 4 次計画）
+
+「全部 1 本の骨組みにしたい」方針で、**配信カーネルは notebook / script とも
+1 本の骨格に集約**した。エンジンを足すときに増やすのは「差のデータ」だけになる。
+
+| | notebook 版 | script 版 |
+|---|---|---|
+| 骨格 | `kbuild/serve_notebook.py` の `Flow` | `kbuild/serve_script.py` |
+| エンジン差 | `kaggle/<kernel>/cells/*.py` | 同じセルを `textwrap.indent` で関数化 |
+| 設定 | `kaggle/step2/cells/00_settings.py`（両者が同じファイルを読む） | 同左 |
+| 疎通確認 | `engine_checks(judge, retry, base, auth=None)` | 同左（同じ体裁） |
+
+骨格に足した差の表現:
+
+| 差 | 表現 |
+|---|---|
+| 配信するか | `SERVE=False` で単発モード（install → launch → 終了） |
+| ウォームアップ / 後片付け | `WARMUP` / `CLEANUP` フラグ + `warmup()` / `cleanup()`（既定は no-op） |
+| エンジン固有の定数 | `$SETTINGS` スロット（`PORT` / `ALIAS` / `CONTEXT_LENGTH` を上書き） |
+| 判定項目 | `engine_checks()` のみ。`verify()` の足場は共通 |
+
+これで 6 エンジン（Ollama / llama-server / vLLM / ExLlamaV3 / LMDeploy / SGLang）が
+**同じ `result.json` の形**を返す。
+
+**トンネルも骨格が両方持つ**（2026-10-30 解消）。`kbuild/serve_script.py` は
+`start_cloudflared()` / `start_ngrok()` を持ち、`tunnel=`（既定 `cloudflared`）で
+選ぶ。`start_tunnel()` が分岐する唯一の場所で、`data["tunnel"] = TUNNEL` により
+`result.json` の `tunnel` は**実際に張った方**になる（設定セルの `TUNNEL_KIND` より
+骨格の実装が優先）。`NGROK_TOKEN` は Secret、`NGROK_DOMAIN` は埋め込み既定値。
+
 ## 前提
 
 | 項目 | 値 |
@@ -27,7 +96,8 @@ proxy / tunnel / keepalive / verify の共通層はそのまま使い、
 | | LMDeploy | SGLang |
 |---|---|---|
 | 再利用する量子化 | AWQ / GPTQ（既存 #1） | AWQ（既存 #1） |
-| T4 対応 | 公式（Turing sm75 明記） | sm75 は対応範囲。ただし要検証 |
+| T4 対応 | 公式（Turing sm75 明記） | 公式に sm75 以上（T4 を例示）。ただし FlashInfer 問題あり |
+| T4 の必須オプション | `--backend turbomind`（失敗時 `pytorch`） | `--attention-backend triton --sampling-backend pytorch` |
 | TP=2 | `--tp 2` | `--tp 2` |
 | 認証 | 版により差。共通 proxy で Basic を付ける | `--api-key` あり。共通 proxy 推奨 |
 | 導入 | PyPI wheel（cp313 あり） | PyPI wheel（cp313 あり） |
@@ -94,9 +164,12 @@ lmdeploy serve api_server <AWQ_MOUNT> \
 ## SGLang（第二候補）
 
 AWQ を再利用でき、RadixAttention（プレフィックスキャッシュ）の効果を測れる。
-ただし T4 では FlashInfer / CUDA graph を無効化して当たる。
+公式は sm75 以上（T4 を例に挙げている）を対応とするが、同じ文書に sm75+ の
+FlashInfer 問題と回避策（`--attention-backend triton --sampling-backend pytorch`）が
+載っている。CUDA graph も sm75 で落ちる報告があるため無効から始める。
 
 ```bash
+# ⚠ この 1 行では入らない（実測 2026-11-01）。下の「install の実測」を見る。
 pip install -U "sglang==0.5.22"
 python -m sglang.launch_server \
   --model-path <AWQ_MOUNT> \
@@ -104,19 +177,70 @@ python -m sglang.launch_server \
   --tp 2 \
   --host 0.0.0.0 --port 8000 \
   --attention-backend triton \
+  --sampling-backend pytorch \
   --disable-cuda-graph \
   --mem-fraction-static 0.75 \
   --trust-remote-code
 ```
 
+### install の実測（2026-11-01 / `sglang-install-probe`・GPU 0 秒）
+
+素の `pip install sglang==0.5.22` は **297 秒で `pip install 失敗 (1)`**。
+`install_tail` は `Failed building wheel for outlines_core` だけで、
+**エンジンは一度も起動していなかった**（「T4 で動かない」は未検証だった）。
+
+| 対象 | cp313 wheel | 備考 |
+|---|---|---|
+| `outlines-core==0.1.26` | **無い** | `sglang → outlines==0.1.11` が完全固定。Rust 実装（maturin） |
+| `outlines-core==0.1.17` | ある | 0.1.x で cp313 があるのはここだけ |
+| `cuda-tile==1.6.0rc5` | 無い（sdist） | ただし**ビルドは通る**（失敗一覧に出ない） |
+
+直接依存 26 本を調べた結果、**cp313 wheel が無いのはこの 2 本だけ**。
+環境に `cargo` / `rustc` が無いことが原因なので、**Rust を入れれば通る**:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+  | sh -s -- -y --profile minimal --default-toolchain stable   # 9.4s
+. "$HOME/.cargo/env"
+pip install "sglang==0.5.22"                                    # 389.8s
+```
+
+結果: `import sglang` 26.6s / `launch_server --help` 12.5s とも成功。
+torch はイメージの 2.13.0+cu130 → **2.14.1+cu130** に差し替わる。
+→ カーネル側は `kc_sglang_pip_steps()`（2 ステップ）で実装済み。
+
+### 判定: **T4 では不可**（2026-11-01 / v4 実測）
+
+install を通したあと、モデルの量子化を解釈する段で止まる:
+
+```
+RuntimeError: ('Quantization scheme is not supported for ', 'the current GPU.
+Min capability: 80. ', 'Current capability: 75.')
+```
+
+上流のソースで裏取り（GPU 0 秒）:
+
+- `CompressedTensorsWNA16.get_min_capability()` は **80**
+  （`schemes/compressed_tensors_wNa16.py:94`）。T4 は **75**。
+- 同ファイルのコメント: symmetric / asymmetric とも **Marlin カーネル経路**。
+  Marlin は sm80+ 専用。
+- Triton 実装は `CompressedTensorsWNA16TritonMoE`（**MoE 専用**）しかなく、
+  Linear 層に sm75 の逃げ道が無い。
+
+**LMDeploy との違い**: LMDeploy は `group_size=128` を**読めなかった**（形式）。
+SGLang は**読めるがカーネルが sm80 必須**（能力）。根は違うが、結論は同じ「不可」。
+
+→ 比較表は vLLM と llama-server の 2 本で確定（`notes/gpu-run-sheet.md` §9）。
+
 - SGLang 0.5.22 は Python 3.11+ / CUDA 13 前提で、Kaggle 画像と一致する。
 - **FlashInfer は sm80+ 前提の機能がある**ため `--attention-backend triton` を明示。
+  公式の回避策に従い `--sampling-backend pytorch` も付ける（既定値に設定済み）。
 - CUDA graph capture が T4 で失敗する報告があるため `--disable-cuda-graph` から始める。
   起動できたら graph 有効化を試し、VRAM と起動時間を比較。
 - 認証は `--api-key` が使えるが、`/quota`・`/stop` は共通 proxy が持つので
   proxy を外さない。
-- 固有ノブ: `attention_backend` / `disable_cuda_graph` / `mem_fraction_static` /
-  `tp` / `api_key`。
+- 固有ノブ: `attention_backend` / `sampling_backend` / `disable_cuda_graph` /
+  `mem_fraction_static` / `tp` / `api_key`。
 
 **検証ポイント**: `sgl_kernel` の import、Triton JIT の初回コンパイル時間、
 TP=2 の NCCL 初期化、16 GB x2 での `mem_fraction_static` 調整。
@@ -195,6 +319,50 @@ def verify_extra(base_url: str, auth: str | None) -> dict: ...
 
 前提が変わると順位も変わる: マルチユーザー重視なら SGLang/vLLM、
 単発レイテンシ重視なら LMDeploy/ExLlamaV3、TPU が使えるなら TPU 枠が浮上する。
+
+### 推定のうち、実測で決着したもの（2026-11-01）
+
+| 推定 | 実測 | 結論 |
+|---|---|---|
+| LMDeploy が「次に導入」で最有力 | `group_size=128` を読めず `ValueError`（125s） | **不可が確定**（推定は外れ） |
+| SGLang は「T4 は博打」 | install は Rust で通った（513s）。しかし **WNA16 が sm80 必須**で起動時に停止 | **博打ではなく非対応が確定** |
+| ExLlamaV3 は「既存を維持」 | **エンジンは起動した**（v2）。`loaded in 229s; serving qwen38-exl3 on 127.0.0.1:9931 (ctx 8192)`。落ちたのはこちらの `engine_checks()` の引数不一致 | **T4 で動く（初の実証）** |
+| vLLM が「現行の基準」 | 31.7 t/s / 929s（v10 は 31.0 t/s / 978s） | **維持**（ただし起動に 373 秒の JIT を含む） |
+
+→ **「ERROR」を「不可」と読まない。** 判定に到達したのは LMDeploy だけで、
+SGLang と ExLlamaV3 はどちらも**エンジンが起動する前**に落ちている。
+
+### ExLlamaV3 の実測（2026-11-01 / `exl3-serve` v2）
+
+梱包ミス（`.py` を notebook として push）を直して再投入したら、**エンジンは普通に
+起動した**。落ちたのは 3 段目ではなく、その後の疎通確認。
+
+```
+install_method : wheel
+wheel_name     : exllamav3-1.6.5+cu128.torch2.11.0-cp313-cp313-linux_x86_64.whl
+pip_seconds    : 12.8
+load_seconds   : 230.4        ← 15.9 GiB を 1 枚の T4 に
+chat_server.log: loaded in 229s; serving qwen38-exl3 on 127.0.0.1:9931 (ctx 8192)
+elapsed_seconds: 263.6
+error          : TypeError: engine_checks() takes from 3 to 4 positional
+                 arguments but 5 were given
+```
+
+読み取れること:
+
+1. **ExLlamaV3 は T4（sm75）で動く。** wheel が `+cu128` で 12.8 秒で入る。TP 非対応
+   なので 1 枚だけ使い、2 枚目は空く。
+2. **ロード 230 秒**は vLLM の 181 秒（page cache が温まっていない素の読み）と同程度。
+   ただしこちらは事前の先読みをしていない。**vLLM の 373 秒 JIT に相当する山が無い**
+   のが ExLlamaV3 の利点で、起動 263.6 秒は vLLM の 929 秒に対して約 3.5 分の 1。
+3. 落ちた原因は**エンジンではなくこちらの骨格**。`verify()` は
+   `engine_checks(judge, retry, base, auth, direct)` と 5 引数で呼ぶのに、骨格の
+   **既定** `engine_checks` だけ `auth=None` で止まっていた。`checks_code` を持つ
+   エンジン（ollama / vllm / llama-server）は自前の 5 引数版で上書きするので露見せず、
+   **exl3 だけが既定を使う**ため初めて踏んだ。修正済み＋回帰テスト追加
+   （`tests/test_smoke_checks.py`）。
+4. 速度（t/s）は**まだ測れていない**。`stage: "load"` で止まっており、生成まで
+   到達していない。単発レイテンシという別軸の比較は次回。
 
 ## 参考
 

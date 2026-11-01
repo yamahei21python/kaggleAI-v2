@@ -5,6 +5,12 @@
 
 > 運用制約: **GPU kernel の push はユーザーの明示的な Go があるまで禁止**（CPU で潰せる検証を先に全部やる）。
 
+> **⚠ §12 を先に読む（2026-10-31 追記）**
+> #2 vLLM が初めて成功し、**全工程の実測内訳**が取れた。§1〜§11 の「未計測 / 仮説」は
+> §12 で置き換わっている。結論だけ先に書くと、**最大のボトルネックは install でも
+> モデルロードでもなく、torch.compile 直後の「無音の 360 秒」**だった。
+> 以下 §1〜§11 は当時の見積りの記録として残す（判断の根拠を後から検算できるように）。
+
 ---
 
 ## 1. 現状の内訳（実測値）
@@ -248,3 +254,558 @@ TP=2 で各 GPU が半分だけ読む構成（既に実施）。
 
 なお `_stage_model(with_mtp=False)` は mtp ファイルを symlink しないので、
 MTP なしの段では 0.79 GiB を読まない（既存実装で正しい）。
+
+---
+
+## 12. 実測内訳（2026-10-31 / #2 vLLM 初成功 `result.json` elapsed 928.7s）
+
+出典: `/tmp/out2g/step2-vllm-qwen38-27b-cloudflared-script.log`（JSON 行、`time` は
+カーネル開始からの秒）。**推定ではなく全部ログの時刻差**。
+
+| 区間 | 絶対時刻 | 長さ | 何が起きているか |
+|---|---|---|---|
+| install（purge → import 確認） | 13.0 → 255.7 | **242.7s** | 下に分解 |
+| └ torch 物理削除 | 13.0 → 13.8 | 0.8s | 8 パス削除（`_purge_torch`） |
+| └ `pip install vllm==0.32.0`（PyPI） | 13.0 → 212.6 | **199.6s** | wheelhouse Dataset が無く PyPI 経路 |
+| └ torchaudio 整合確認 | 212.6 → 222.6 | 10.0s | `torchaudio import: OK`（修復は発動せず） |
+| └ import probe（torch+vllm） | 222.6 → 255.7 | 33.1s | 子プロセスで `import torch, vllm` |
+| `vllm serve --help=all` | 255.8 → 273.0 | 17.2s | 154,018 文字を保存（旧実測 27s から短縮） |
+| **エンジン起動** | 273.0 → 915.4 | **642.4s** | 下に分解 |
+| └ 重みロード | 273 → 454 | **約 181s** | VRAM 0 → 9,097 → 9,459 MiB |
+| └ torch.compile | 454.2 → 514.3 | **61.2s** | vLLM 自身が `took 61.22 s` と出力 |
+| └ **無音区間（未同定）** | 514.3 → 874 | **約 360s** | 出力は `shm_broadcast ... 60 seconds` のみ。VRAM 9,995 → 10,733 MiB へ漸増 |
+| └ CUDA graph capture | 874.6 → 915.4 | 約 41s | `Capturing CUDA graphs (FULL) 1/2` |
+| ウォームアップ + 検証 6 項目 | 915.5 → 928.7 | 13.2s | 生成 31.7 t/s、VRAM 13,343 MiB |
+
+配分: **install 26.1% / 起動 69.2% / その他 3.3%**。旧見積りの「install が主因（7.6 分）」
+は外れで、実際は **install 4.0 分 + 起動 10.7 分**。削るべきは起動側。
+
+### 12.1 最大の的は「無音の 360 秒」
+
+> **2026-11-01 追記**: v10（計測機構入り）で位置は確定した。**§13.3 を先に読む**。
+> 以下は v9 時点の記録として残す。
+
+`torch.compile` 終了（514.3）から CUDA graph capture 開始（874.6）までの 360 秒、
+ログには 60 秒ごとの `shm_broadcast` 警告しか出ない。VRAM が 9,995 → 10,733 MiB へ
+**少しずつ**増えるので、何かを段階的に確保しながら進んでいる（一括確保ではない）。
+
+**§11 の「draft の二重読み」は除外できる（2026-11-01 検算）**。試行 1 は既に
+`spec=mtp+dd` で走っており、`vllm_cmd.json` の `--speculative-config` にも
+`"model": "/kaggle/tmp/vllm-draft"` が入っている（ログ: `draft dir : /kaggle/tmp/vllm-draft
+（symlink 7 個）`）。つまり draft は 0.79 GiB だけ読む構成で、**対策は実装済み**。
+360 秒の原因ではない。ここを疑って 1 往復溶かさないために明記しておく。
+
+残る候補（**いずれも未同定。断定しない**）:
+
+1. **ダミー実行 / memory profiling** … compile 後に shape ごとの実 forward が走る
+2. **追加サブグラフの compile** … `torch.compile took 61.22 s` は backbone 分だけ
+3. **AWQ GEMM の Triton autotune**（sm75 で初回）
+4. KV cache の確保と block 分割
+
+**切り分け方は 2 つ。どちらも GPU 1 回で足りる**:
+
+- 2026-11-01 に **節目ログを実装した**（`_MILESTONES`）。起動待ちの 60 秒出力が
+  `log N KiB (+増分) / 節目: <最後に越えた関門>` を出すので、360 秒の間に
+  「どの関門の後で止まっているか」が読める。増分 0 なら無言の計算、増えていれば
+  ログを出しながらの工程。
+- PLAN の 2 番目が `eager`（`--enforce-eager`）。eager で 360 秒が消えれば
+  graph capture 周辺、残れば compile/autotune。
+
+### 12.2 優先順位の付け直し（実測ベース）
+
+| 順 | 施策 | 見込み | 根拠 |
+|---|---|---|---|
+| 1 | **無音区間の同定** | 測定のみ（実装済） | 360 秒 = 全体の 39%。正体が分からないまま他の施策を積むのは順序が逆 |
+| 2 | **B: wheel Dataset** | **-140s** | install 199.6s のうち転送が支配（3.94 GB / 137s 実測） |
+| 3 | C: Triton/JIT cache | -60〜120s? | 無音区間が autotune なら効く。sm75 固有 |
+| 4 | D: `--enforce-eager` | **-41s**（実測 capture 分） | 旧見積り 30〜90s の実測は 41s。速度劣化と引き換え |
+| 5 | F: `--max-num-seqs` / `--max-model-len` を下げる | -10〜30s? | `max-num-seqs 2` は既に適用済み。compile 対象の削減余地は小さい |
+| 6 | A: uv | -60s? | B のインストーラとしてのみ意味がある |
+
+2 だけで **928.7 → 約 790s**。1 で 360 秒の正体が分かってから 3〜5 を積む。
+無音区間が丸ごと消せれば **約 570s（9.5 分）** まで落ちる計算になる。
+
+
+### 12.3 副産物: `result.json` の `torch` が実態とズレる
+
+`stage_env()` は **install より前**に走るので、`result.json` の `torch` は
+`2.11.0+cu128`（イメージ同梱）になる。実際に配信しているのは `2.13.0+cu130`。
+誤読の元なので、install 後に測り直した値を `torch_serving` のような別キーで
+残すのが望ましい（未実装）。
+
+→ **2026-11-01 実装**: `timings.torch_after_install` に install 後の値を残し、
+`cli timings` の `torch` 列はそちらを優先する（無い回だけ `result.json` に戻る）。
+
+---
+
+## 13. v10 実測（2026-11-01 / 計測機構を入れた回）
+
+v9 の内訳は**ログ時刻を人手で突き合わせた**もの。v10 は `timings` を機械で
+埋めた回で、以下は全部 `result.json` から読める値。
+
+### 13.1 数字
+
+| 項目 | v9（手作業） | v10（機械計測） |
+|---|---|---|
+| install | 242.7s + help 17.2s = **259.9s** | **271.3s**（help 込み） |
+| 起動 | 642.4s | **706.5s** |
+| 起動まで | 915.5s | **977.8s** |
+| 重みロード | 約 181s（VRAM からの推定） | **133s**（ログ実測） |
+| torch.compile | 61.2s | **61.0s** |
+| 無音区間 | 約 360s | **378.8s** |
+| graph capture | 約 41s（ポーリング粒度） | **2.2s**（ログ実測） |
+
+**capture 41s は幻だった。** 60 秒ポーリングで測ると無音区間の末尾を
+capture と誤認する。実測 2.2s なので `--enforce-eager`（capture を消す）の
+価値はほぼゼロ。
+
+### 13.2 施策 B（wheel Dataset）は**効かない**（実測で決着）
+
+v10 は wheelhouse Dataset（190 + 11 wheel、`--no-index`）を実際に使った
+（ログ: `📦 ローカル wheelhouse: vllm-wheelhouse（190 wheel）`）。結果:
+
+| 経路 | pip の所要 |
+|---|---|
+| v9: PyPI から取得 | **199.6s** |
+| v10: wheelhouse（`--no-index`） | **230.4s** |
+
+**31 秒遅くなった。** §2-B の「-140s」は「199.6s のうち転送が支配（3.94 GB /
+137s）」という前提だったが、その前提が外れている。ローカル wheel でも
+**3.25 GB の展開と数万個の小ファイル書き込み**が支配的で、転送を消しても
+縮まない。install の床はこの展開コスト。
+
+→ B は**却下**。残る手は「展開そのものを速くする」だけ（`uv`、`--no-compile`、
+事前展開済み site-packages のコピー）。これは GPU 不要の CPU カーネルで
+測れる（`kaggle/cpu-tests/` の枠組み）。
+
+### 13.3 381 秒の無音区間: 分かったこと / まだ分からないこと
+
+**分かったこと**
+
+- 位置: `torch.compile took 61.00 s` の**直後**から `Graph capturing finished`
+  まで（282 → 663）。compile の後片付けではなく、**compile と capture の間**。
+- 出ているログ: 60 秒おきの `shm_broadcast ... No available shared memory
+  broadcast block found in 60 seconds. This typically happens when some
+  processes are hanging or doing some 'time-consuming' work such as ray remote
+  call, compilation, etc.` が 5 回だけ。**vLLM 自身が「時間のかかる作業中」と
+  言っている**＝症状であって原因ではない。
+- GPU: `util=0%, mem=10,733 MiB`（60 秒ごとの 5 サンプルすべて 0%）。
+  **GPU は遊んでいる** → ホスト（CPU）側の作業。
+- VRAM: 9,995 → 10,733 MiB へ漸増。KV cache（13,343 MiB）の確保前。
+- 再現性: v9 でも同じ 5 回が同じ位置（13:25:53〜13:29:53）に出ている。
+
+**まだ分からないこと**: 何の計算をしているか。候補は compile 後の dummy run /
+memory profiling の Triton JIT（sm75 初回）。**断定しない。**
+
+**次回で確定させる計器（実装済み）**
+
+1. 成功時も `vllm_{idx}.log` を保存する（旧実装は失敗時だけ。だから compile
+   直後に出た 2,281 B を読めなかった）。
+2. `startup_gaps` に「無音の直前の行 / 直後の行」を残す。長さだけでは次の一手が
+   決まらない。60 秒警告の繰り返しは 1 本に連結する（5 本並ぶと「60 秒が 5 回」に
+   見えて「381 秒詰まった」に見えない）。
+3. `cli timings` が `起動まで s`（install + 起動）を出す。総計は keepalive を
+   含むので比較に使えない（v10 の総計 4,637s のうち 3,660s は配信）。
+
+### 13.4 優先順位（v10 実測で付け直し）
+
+| 順 | 施策 | 見込み | 状態 |
+|---|---|---|---|
+| 1 | 無音 381 秒の中身を読む（成功時ログ保存） | 測定 | **実装済・次回 1 本で確定** |
+| 2 | 無音が Triton/JIT なら C（cache Dataset 化） | -250〜350s? | 1 の結果待ち |
+| 3 | install の展開コスト（uv / `--no-compile`） | -60〜150s? | **CPU で測れる**（GPU 0 秒） |
+| 4 | ~~B: wheel Dataset~~ | **+31s（実測）** | **却下** |
+| 5 | ~~D: `--enforce-eager`~~ | **-2.2s** | **却下**（速度劣化に見合わない） |
+| 6 | F: `--max-num-seqs` / `--max-model-len` を下げる | -10〜30s? | 据え置き |
+
+1 が終わるまで 2 は動かさない。**381 秒 = 起動の 54%** なので、ここが外れれば
+他を積む意味が変わる。
+
+## 14. v11 / v12（2026-11-01）— 2 つの施策が実測で落ち、別の壁が出た
+
+### 14.1 install の高速化: uv は**本番でだけ**遅い → 却下
+
+CPU ベンチ `vllm-install-bench`（`pip install --target` で同じ 190 wheel）:
+
+| 戦略 | 所要 | files |
+|---|---|---|
+| pip（暖・基準） | 200.1s | 81,844 |
+| pip `--no-compile` | 112.6s | 56,416 |
+| **uv** | **35.7s** | 56,812 |
+| pip `--no-deps`+パス直指定 | 101.5s | 47,835 |
+
+差の大半は **pyc 25,428 個の生成**。転送ではない。そこで uv を既定にした。
+
+**本番（GPU 実測）:**
+
+| 経路 | install | 内訳 |
+|---|---|---|
+| v10 pip + wheelhouse | 271.3s | pip 230.4 |
+| v11 pip + wheelhouse | 304.2s | pip 261.6 |
+| v12 uv + wheelhouse | **1208.5s** | **uv 1151.7** |
+
+**比が移らない。** bench は `--target` の**まっさらなディレクトリ**、本番は
+torch を物理削除した **site-packages**。同じ wheel・同じホストで 4.4 倍遅い。
+理由は未同定（uv のキャッシュ経路が GCSFUSE 上の wheel を引き直している疑い）。
+
+**教訓**: `--target` のベンチは「展開の仕方」の比較には使えるが、
+**install 先が違う**ので絶対値も比も本番に持ち込めない。既定を変える前に
+本番と同じ形（site-packages へ入れる）で 1 回測る。既定は pip に戻した。
+
+### 14.2 起動: 本当の壁は「重みロード」だった
+
+v12 の 2 試行はどちらも同じ場所で死んだ。
+
+```
+Filesystem type for checkpoints: FUSE.GCSFUSE. Checkpoint size: 18.21 GiB.
+Available RAM: 5.68 GiB.
+Auto-prefetch is disabled because the filesystem (FUSE.GCSFUSE) is not a
+recognized network FS (NFS/Lustre) and the checkpoint size (18.21 GiB)
+exceeds 90% of available RAM (5.68 GiB).
+Loading safetensors checkpoint shards:  50% Completed | 1/2 [00:02<00:02]
+→ ここから 800 秒、ログ +0 バイト / GPU util 0% / VRAM 9,097 MiB で固定
+```
+
+vLLM は **checkpoint が空き RAM の 90% を超えると auto-prefetch を切る**。
+切ると GCSFUSE の safetensors を頁単位で mmap するしかない。
+
+v10 は同じ symlink ステージング・同じ FUSE で重み 133 秒だった
+（= 18.21 GiB / 133s = 140 MiB/s）。**v10 は prefetch が有効だった**と推定できる。
+差を決めているのは起動時点の `MemAvailable` だけ。
+
+**分からないこと**: v12 は試行開始の 4 分前に `空き RAM: 30315 MiB` と出ていた。
+その 24 GiB がどこへ消えたかは特定できていない。空き 1 個の数字では
+「page cache が張り付いた」のか「誰かが anon で食った」のか決められない。
+
+→ 対策は 2 つ。どちらも GPU 0 秒で進められる。
+
+1. **内訳を残す**（実装済）: `MemTotal / MemFree / MemAvailable / Cached /
+   Shmem` + RSS 上位 5 プロセスを起動待ちのループで毎回出す。
+2. **CPU で I/O を測る**（`vllm-io-bench`・実装済）: GCSFUSE の逐次読み /
+   mmap / ローカル実コピー / コピーの読み直し。各フェーズの meminfo も残す。
+   「読むと空きが減る」なら**コピーでは解決しない**と分かる。
+
+### 14.3 優先順位（v12 後）
+
+| 順 | 施策 | 見込み | 状態 |
+|---|---|---|---|
+| 1 | **重みロードの 800 秒ハングを外す**（prefetch を効かせる / ローカル化） | **-700s?** | `vllm-io-bench` の結果待ち |
+| 2 | 無音 381 秒の中身（成功時ログ） | 測定 | v12 でログは取れたが起動に届かず |
+| 3 | install を pip に戻す | **-890s（実測）** | **完了** |
+| 4 | ~~uv~~ | **+890s（実測）** | **却下** |
+| 5 | ~~B: wheel Dataset~~ / ~~D: `--enforce-eager`~~ | +31s / -2.2s | 却下 |
+
+**1 が通るまで他は積まない。** 起動に到達しないと 381 秒の話も始まらない。
+
+## 15. v14（2026-11-01 12:48）— 先読みを実測したら**逆効果**だった
+
+v13 で入れた「8 並列の先読み」は、io-bench v2 で **2.2 MiB/s**（1 本の 1/50）と
+分かったので **1 本**に直して v14 を投入した。結果は「起動まで −111 秒」だが、
+中身は**退行**。
+
+| 項目 | v10 | v14 |
+|---|---|---|
+| install | 271.3s | **227.7s** ✅ |
+| 先読み | — | **152.5s**（122.2 MiB/s / 1 本） |
+| 起動（`load_seconds`） | 706.5s | 486.1s |
+| 合計 | 977.8s | 866.3s |
+| **成功した試行** | 1 発目（`mtp+dd`） | **2 発目（`eager`）** |
+| **速度** | **31.0 t/s** | **4.5 t/s（7 倍遅い）** |
+
+**−111 秒は `eager` が compile を飛ばした分。** 1 発目は 921 秒で予算切れした。
+速度が 1/7 になるなら、この 111 秒は割に合わない。
+
+### 15.1 先読みは 152.5 秒の**純コスト**（効かない）
+
+| 試行 | `Loading weights took` |
+|---|---|
+| 1 発目（`mtp+dd`） | **64.37s** |
+| 2 発目（`eager`） | **6.39s** |
+
+2 発目が 6.39 秒なのは、**1 発目が読み直して page cache に入れ直したから**。
+つまり先読みの 18.21 GiB は、**ワーカーが `8.88 GiB × 2` の anonymous を確保する
+時点で追い出されている**。先読みを活かすには「anon 確保の後」に読むしかない＝無理。
+
+→ `KC_PREWARM` の既定は **0 にすべき**（v14 の実測）。
+
+### 15.2 373 秒の無音の正体が確定（v10 の推定が当たり）
+
+v14 の 2 発目は `--enforce-eager` なので **compile が無い**。それでも
+`shm_broadcast.py:871` が 60 秒おきに **6 回（373 秒）** 出た。位置は KV cache 確保の
+直前＝ memory profiling の最中で、直後に
+
+```
+[gpu_worker.py:759] Available KV cache memory: 3.45 GiB
+[qwen_triton_warmup.py:296] Warming up Qwen GDN Triton kernels for model_type=qwen3_5_text
+```
+
+が並ぶ。**Qwen3.5 の GDN（線形注意力）カーネルの Triton JIT**。起動の 54%。
+
+→ ここを削るには **Triton のキャッシュを持ち込む**（`~/.triton` を Dataset 化）しか
+ない。同じ T4・同じ版ならキーが一致する見込み。**次の第一候補はこれ**（-373s?）。
+
+### 15.3 24 GiB の謎は「消えていない」
+
+`ram_trace.txt`（5 秒ごと）で v14 の推移を見ると、`MemAvailable` は
+**21〜25 GiB で安定**していた。`Cached` が 20〜23 GiB あるだけで、これは先読みの
+残骸＝回収可能。`Shmem` は 29 MiB。
+
+→ v12 の `空き RAM: 30315 MiB` → vLLM の `Available RAM: 5.68 GiB` は、
+**vLLM が `MemAvailable` ではなく別の値（cgroup の limit − 使用量）を見ている**
+ため。「24 GiB が誰かに食われた」わけではない。
+
+### 15.4 優先順位（v14 後）
+
+| 順 | 施策 | 見込み | 状態 |
+|---|---|---|---|
+| 1 | **無音 373 秒 = GDN Triton JIT を潰す**（`~/.triton` を Dataset 化） | **-373s** | 次にやる |
+| 2 | **先読みの既定を切る**（`KC_PREWARM=0`） | **-152.5s** | 実装 1 行 |
+| 3 | 1 発目が予算内に収まるよう `STARTUP_BUDGET` を見直す（eager に落とさない） | 速度 7 倍の回復 | 要検討 |
+| 4 | ~~並列先読み~~ | 13〜50 倍遅い | **却下（実測）** |
+| 5 | ~~uv~~ / ~~wheel Dataset~~ / ~~`--enforce-eager` 単体~~ | +890s / +31s / −2.2s | 却下 |
+
+**2 は即効・確実。1 が本命。3 は「速度を捨てない」ための前提。**
+
+## 16. v14 のログを読み直したら 15.2 が**半分ずれていた**（2026-11-01）
+
+§15.2 は「373 秒 = GDN Triton JIT」と書いたが、**JIT が起きている場所を取り違えて
+いた**。`vllm_2.log` の行番号で押さえ直すと:
+
+| 時刻 | 行 | 中身 |
+|---|---|---|
+| 03:52:21 | `default_loader.py:501` | `Loading weights took 6.39 seconds` |
+| 03:52:25 | `utils.py:347` | `Using LBNHC KV cache layout` ← ここから無音 |
+| 03:53:26〜03:58:26 | `shm_broadcast.py:871` ×6 | 60 秒おきの警告（373 秒） |
+| 03:58:38 | `gpu_worker.py:759` | `Available KV cache memory: 3.45 GiB` |
+| 03:58:38 | `qwen_triton_warmup.py:296` | `Warming up Qwen GDN Triton kernels` |
+| 03:58:41 | `core.py:402` | `init engine (profile, create kv cache, warmup model) took 376.24 s` |
+
+**名前の付いた warmup は 3 秒**（03:58:38 → 03:58:41）しかない。373 秒はその**手前**、
+`determine_available_memory` が行う **profile run（dummy run）** の中で起きている。
+`qwen_triton_warmup` は「本番の生成で JIT しないための予熱」であって、起動時間の
+短縮には寄与しない（profile run が先に同じカーネルを作ってしまうため）。
+
+ハングではないことは `ram_trace.txt` で裏が取れる。無音区間のワーカー RSS は
+
+```
+300.1s top=VLLM::Worker_TP:6987 VLLM::Worker_TP:6984
+425.1s top=VLLM::Worker_TP:8361 VLLM::Worker_TP:8358
+```
+
+と **125 秒で 1.37 GiB（約 11 MiB/s）増え続けており**、`MemAvailable` は 25 GiB で
+一定。コンパイルでメモリが積み上がっている形で、待たされているだけではない。
+
+→ 打ち手（`~/.triton` を持ち込む）は**変わらない**。profile run も同じ Triton
+キャッシュに落ちるため。ただし「warmup を消せば速くなる」という読みは誤りなので、
+そこを根拠にした施策は立てない。
+
+### 16.1 退避が一度も走っていなかった
+
+`00_settings.py` の `engine_cleanup()` は `~/.cache/vllm` / `~/.triton` を
+`warm-cache.tar` にまとめる実装を**既に持っていた**。しかし呼び出し元は
+キープアライブセルの後片付けで、v14 の成果物には tar が無く、ログにも
+キャッシュの行が 1 本も無い（あるのは `01` の
+`ℹ warm cache なし ... exists=False` だけ）。つまり**復元側だけがあり、
+退避側は一度も実行されていない**。
+
+→ 退避を「キープアライブ終了時」から**起動ループの合流点**（成功・失敗の両方が
+通る場所）へ移した。373 秒を払った回のカーネルは失敗してもディスクに残って
+いるので、持ち出す価値がある。
+
+### 16.2 当たったかを測る（「ファイルがある」では判定しない）
+
+Triton のキャッシュキーは Triton の版・対象 sm・ソースハッシュを含む。**ずれれば
+黙ってミスし、373 秒がそのまま戻る**。この状態を「キャッシュを入れた」と
+報告すると、v14 の先読みと同じ失敗（効かない施策を効いたことにする）を繰り返す。
+
+そこで判定を **エントリの増分**にした（`~/.triton/cache` は 1 カーネル 1 ディレクトリ）。
+
+| フィールド | 意味 |
+|---|---|
+| `triton_cache_before.entries` | 起動前のエントリ数（復元が効いたかの証拠） |
+| `triton_cache.entries_after` | 起動後 |
+| `triton_cache.new_entries` | 今回作られた数。**0 に近いほど当たっている** |
+| `triton_cache.reused_pct` | 今回使ったエントリのうち前回からあった割合 |
+
+`new_entries` が `entries_before` の 20% を超えたら「当たっていない」と警告する。
+併せて `TRITON_CACHE_DIR` を起動プロセスへ明示した（既定は Triton の版によって
+`~/.triton/cache` と `~/.cache/triton` のどちらにもなり得て、復元先と食い違うと
+1 件も当たらない）。
+
+### 16.3 手順（2 往復）
+
+1. **v15**: 起動して `warm-cache.tar` を成果物に出す（この回は `entries_before=0`
+   なので全部が新規。`new_entries` がそのまま「キャッシュの大きさ」になる）
+2. tar を Kaggle Dataset `vllm-warm-cache` として上げ、`dataset_sources` に足す
+3. **v16**: 復元して起動。`new_entries` と `startup_gaps` の 373 秒が消えたかを見る
+
+1 は smoke 変種で足りる（起動＋1 回の会話で終了するので、30 分のキープアライブを
+回さずに済む）。
+
+### 16.4 「Triton キャッシュで 31 t/s が戻る」は**間違い**（v14 の 1 発目を読む）
+
+キャッシュで 373 秒が消えれば 1 発目（`mtp+dd`）が `ATTEMPT_TIMEOUT=900` に収まり、
+速度 31.0 t/s が戻る——という読みは**成り立たない**。`vllm_1.log` を見ると 1 発目は
+
+```
+03:49:15  Loading weights took 705.00 seconds     ← 本体
+03:50:21  Loading weights took 64.37 seconds      ← draft（dd）
+03:50:23  Model loading took 8.88 GiB memory and 777.714009 seconds
+03:50:26  Using LBNHC KV cache layout
+03:50:29  [backbone] Starting torch.compile       ← ここで 921 秒の打ち切り
+```
+
+で、**373 秒の無音（profile run）にすら到達していない**。921 秒のうち 778 秒が
+重みロード。Triton キャッシュが効いても 1 発目は 900 秒に収まらない。
+
+（2 発目の `Loading weights took 6.39 seconds` は、1 発目が読んだぶんが page cache に
+残っているため。つまり**1 発目が冷たい読みのコストを全部払い、2 発目がただ乗りする**
+構造で、これは先読みでは直らない——先読みの 18.21 GiB はワーカーの anonymous 確保
+（8.88 GiB × 2）に押し出される。§15.1）
+
+→ Triton キャッシュの効果は「**profile run に到達した試行**の 373 秒」に限られる。
+v14 でそれが該当するのは 2 発目（eager, `load_seconds` 486.1s）で、見込みは
+486 → 約 113 秒。**速度（31.0 → 4.5 t/s）は別問題**で、こちらは 1 発目の重みロード
+778 秒を何とかしないと動かない（`ATTEMPT_TIMEOUT` を上げるだけでは、起動に
+1,200 秒以上かかる段を毎回試すことになる）。
+
+## 17. 基準を out2g に戻す（2026-11-01・方針転換）
+
+「最初の方が起動も速いし速度も速いのでは」という指摘を受けて突き合わせた。
+**その通りだった。** v14 は「改善」ではなく退行で、しかも私がその後の議論を
+v14 の数字（起動 486 s）を基準に進めていたのが誤りだった。
+
+| | **out2g（10-31）** | **v14（11-01）** |
+|---|---|---|
+| 総時間（`elapsed_seconds`） | **928.7 s** | **1,876.7 s** |
+| install | 242.7 s | 227.7 s |
+| 先読み | なし | 152.5 s |
+| 試行 1（`mtp+dd`, compile on） | **成功** | **921 s で打ち切り** |
+| └ 重みロード | **約 181 s** | **705.00 s** |
+| 試行 2 | — | `eager` 486.1 s |
+| 起動 | 642.4 s | 486.1 s（**見かけだけ短い**） |
+| 生成速度 | **31.7 t/s** | **4.5 t/s** |
+
+### 17.1 重みロードが 181 → 705 s になった理由（第一候補＝先読み）
+
+v14 のログに、機械自身の実力が残っている:
+
+```
+259.4  🧮 重み 18.21 GiB / prefetch に必要な空き 21754 MiB
+259.4  🔥 重みを先に読む（18.21 GiB / 1 本 / 予算 300s）…
+411.9    122.2 MiB/s / 152.5s / 1 本
+```
+
+**先読み自身が 122.2 MiB/s を出している。** なら 18.21 GiB は約 150 秒。out2g の
+181 秒はこれで説明がつく。同じ重みを試行 1 が 705 秒かけたのは **26 MiB/s**、
+機械の実力の 4.7 倍遅い。読み出し中に何かが競合している。
+
+機構（推定）: 先読みが page cache を埋める → ワーカーが 8.88 GiB × 2 を
+anonymous で確保 → カーネルが page cache を 17.8 GiB 追い出す（＝先読みした
+重みが消える）→ 試行は cold read に戻り、しかも reclaim と競合する。
+`ram_trace.txt` の `Cached` が 20〜23 GiB で推移していたのと矛盾しない。
+
+> ⚠ **この機構は §18.1 で否定された。** v15 の trace では `MemAvailable` が
+> 23.5 GiB を下回らず、`cache` も崩れていない。追い出しは起きていない。
+> 4.4 倍の遅化は事実として残るが、理由は未解明（候補 2 つは §18.1）。
+
+→ **先読みの既定を OFF にした**（`KC_PREWARM=0` が既定。`=1` で A/B 可）。
+これは最悪ケースでも 152.5 秒が確実に浮くので、機構が外れていても損をしない。
+
+### 17.2 実験は playground で行い、効果があったものだけ本番へ
+
+これまで実験は `--smoke` で**本番カーネルへ push** していた。smoke 変種は同じ
+kernel id なので、実験のたびに本番のバージョン履歴が埋まる（v15 もそう）。
+
+→ `vllm-playground`（`kaggle/build_vllm_playground.py`）を作った。**セルは本番と
+同一**で、骨組み（トンネル / proxy / keepalive）だけ外す。ノブは `KC_EXPERIMENT`
+が選ぶ環境変数の初期値だけで、セルの中身は変えない。だから当たったノブは
+本番の既定を書き換えるだけで移せる。
+
+| `KC_EXPERIMENT` | `KC_PREWARM` | `KC_WARM_CACHE` | その他 | 目的 |
+|---|---|---|---|---|
+| `baseline` | 0 | 0 | — | **out2g の再現**（181 s / 31.7 t/s が出るか） |
+| `prewarm_on` | 1 | 0 | — | 先読みの対照（v14 の再現） |
+| `cache` | 0 | 1 | — | キャッシュの効果 |
+| `force_first` | 0 | 0 | `VLLM_TRITON_FORCE_FIRST_CONFIG=1` | 373 秒が autotune かの判定 |
+
+どれも**1 変数だけ**動かす。2 つ同時だと、効いたときにどちらが効いたか分からず、
+v14 の先読みと同じ轍を踏む。各実験は `KC_PREWARM` と `KC_WARM_CACHE` を
+**明示**する（既定に頼ると、既定を変えた瞬間に対照群が壊れる）。
+
+## 18. v15 の結果（2026-11-01）— 先読みの退行が**2 例目**で再現
+
+v15 は既定反転の**前**に push したので、中身は v14 と同じ「先読み ON」構成。
+つまりこれは v14 の追試であり、結果は**再現した**（そして悪化した）。
+
+```
+ 256.7  🧠 RAM 空き 30333 / 空 2994 / cache 25607 / shm 1 MiB（全 32098）
+ 256.7  🔥 重みを先に読む（18.21 GiB / 1 本 / 予算 300s）…
+ 430.9  🧠 Triton キャッシュ: 0 エントリ（なし / 環境変数 /root/.triton/cache）
+ 430.9  --- 試行 1/9: spec=mtp+dd ... ---
+1331.7  --- 試行 2/9: spec=eager ... ---          ← 試行 1 は 900.8s で打ち切り
+2192.6  Loading weights took 745.32 seconds        ← 8.48 GiB に対して
+2232.7  Model loading took 8.48 GiB memory and 752.895002 seconds
+2252.7  ⏱ 起動予算 1800s 超過（1821s） → 残り 7 試行を打ち切り
+```
+
+| | **out2g（先読み OFF）** | **v14（ON）** | **v15（ON）** |
+|---|---|---|---|
+| 先読み | なし | 152.5 s | 174.2 s（107.0 MiB/s） |
+| 重みロード | **約 181 s** | **705.00 s** | **745.32 s** |
+| 試行 1 | 成功（642.4 s 起動） | 921 s 打ち切り | 900.8 s 打ち切り |
+| 速度 | **31.7 t/s** | 4.5 t/s | 起動せず（ERROR） |
+| 総時間 | 928.7 s | 1,876.7 s | **2,256.2 s** |
+
+### 18.1 §17.1 の機構（page cache 追い出し）は**支持されない**——訂正
+
+v15 の `ram_trace.txt` を読むと、私が §17.1 に書いた筋書きは成り立っていない。
+
+```
+ t(s)    avail   free  cache
+  430   25028    495  23208     ← 先読み直後
+ 1330   23641    482  22023     ← 試行 1 の終わり
+```
+
+- `avail`（MemAvailable）は**一度も 23.5 GiB を下回らない**。OOM 圧力は無い。
+- `cache` も 22〜23.6 GiB で**崩れていない**。「先読みした重みが追い出された」形跡が無い。
+
+（この trace は 1820 秒で止まる。予算打ち切りで監視プロセスも死ぬため、**745 秒の
+読み込み区間そのものは写っていない**。だから「追い出された」も「されていない」も
+trace だけでは言えない。言えるのは「試行 1 の 900 秒の間、メモリは余っていた」まで。）
+
+数字のほうが雄弁。1 ワーカーあたり 8.48 GiB / 745 s = **11.6 MiB/s**、2 ワーカー合計で
+23 MiB/s。out2g は 18.21 GiB / 181 s = **103 MiB/s**（合計）。先読み自身は 107 MiB/s。
+つまり **out2g は素の読み出し速度しか出しておらず、page cache の恩恵を最初から
+受けていない**。それでも先読みありより 4.4 倍速い。
+
+→ 先読みは「効かなかった」のではなく **「効かないうえに 4 倍遅くする」**。機構は未解明で、
+候補は 2 つ:
+
+1. 18 GiB の cache を抱えたままワーカーが anonymous を確保すると、触ったページごとに
+   同期的な reclaim が挟まり、読み出しが待たされる
+2. `/kaggle/input` を 2 回続けて読むこと自体が絞られている（2 回目のスロットリング）
+
+どちらかは playground の `baseline` vs `prewarm_on` の A/B で切り分けられる。
+**切り分けが済むまで既定は OFF**（`KC_PREWARM=0`）。機構が外れていても 174 秒は浮く。
+
+### 18.2 v15 が残した `warm-cache.tar` は**不完全**（使ってはいけない）
+
+`_capture_warm_cache()` は成功・失敗の合流点で走るので、**失敗した回でも tar を作る**。
+v15 の tar は 23.9 MB / 30 エントリ / カーネル 4 種:
+
+```
+_fused_post_conv_kernel  _prepare_rope_positions_kernel
+chunk_local_cumsum_scalar_kernel  chunk_scaled_dot_kkt_fwd_kernel
+```
+
+これは**重みロード中に落ちるまでに compiles されたぶんだけ**。373 秒の主役である
+`chunk_o` / `chunk_delta_h` は入っていない（どの試行も profile run に到達していない）。
+これを Dataset にして `cache` 実験を回すと「キャッシュは効かない」という**偽陰性**が出る。
+
+→ 復元用の tar は**起動に成功した回**から採る。`baseline` は out2g と同じ経路を通るので、
+そこで採れた tar が完全版になる。
+
+
+
+
