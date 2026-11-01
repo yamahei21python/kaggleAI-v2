@@ -106,7 +106,7 @@ def test_every_experiment_declares_both_knobs():
     mod = _module()
     assert set(mod.EXPERIMENTS) == {
         "baseline", "prewarm_on", "cache", "force_first",
-        "baseline_long"}, mod.EXPERIMENTS
+        "baseline_long", "prefetch1"}, mod.EXPERIMENTS
     for name, (desc, env) in mod.EXPERIMENTS.items():
         assert "KC_PREWARM" in env, f"{name} が KC_PREWARM を明示していない"
         assert "KC_WARM_CACHE" in env, f"{name} が KC_WARM_CACHE を明示していない"
@@ -207,3 +207,22 @@ def test_tunnel_none_is_rejected_outside_smoke():
             {"name": "x", "alias": "y"}, tunnel="none",
             run_minutes=1, runtime="", proxy_b64="", html_b64="",
             gist_id="", gist_owner="")
+
+
+def test_prefetch1_is_one_knob_against_baseline_long():
+    """`prefetch1` は `baseline_long` と予算まで揃え、**prefetch だけ**足す。
+
+    予算を揃えないと「prefetch の効果」と「予算の効果」が混ざる。
+    2026-11-02 01:58 の `baseline_long`（3,820 秒 / 重み 2,802 秒）が対照。
+    """
+    mod = _module()
+    base = mod.EXPERIMENTS["baseline_long"][1]
+    pf = mod.EXPERIMENTS["prefetch1"][1]
+
+    added = set(pf) - set(base)
+    assert added == {"VLLM_SAFETENSORS_STRATEGY",
+                     "VLLM_SAFETENSORS_PREFETCH_THREADS"}, added
+    assert {k: v for k, v in pf.items() if k not in added} == base
+    assert pf["VLLM_SAFETENSORS_STRATEGY"] == "prefetch"
+    # 既定の 8 は実測で一番遅い形（8 本 2.3 MiB/s / 1 本 110 MiB/s）
+    assert pf["VLLM_SAFETENSORS_PREFETCH_THREADS"] == "1"

@@ -675,3 +675,56 @@ def test_warm_cache_off_never_searches_for_tars(tmp_path):
         else:
             _os.environ["KC_WARM_CACHE"] = old
     assert globbed == [], f"KC_WARM_CACHE=0 なのに tar を探した: {globbed}"
+
+
+# ── 重み prefetch（§22）────────────────────────────────────
+def _prefetch_block(src):
+    """`LOAD_ARGS` を組み立てるブロックだけを切り出す（PLAN の直前まで）。"""
+    start = src.index("# 重みロードの prefetch")
+    end = src.index("PLAN = []", start)
+    return src[start:end]
+
+
+def test_prefetch_flags_are_env_gated():
+    """重み prefetch のフラグは、env が空なら**1 バイトも足さない**。
+
+    `notes/vllm-startup-speedup.md` §22: vLLM 0.32 の
+    `_prefetch_all_checkpoints` は `sorted_files[rank::world_size]` で
+    rank ごとにファイルを分担するので、TP=2 でも総読みが 1 回分になる。
+    既定のスレッド数 8 は CPU 実測で一番遅い形（8 本 2.3 MiB/s / 1 本 110 MiB/s）。
+
+    既定で足すと対照群（`baseline`）が静かに変わって A/B が壊れるので、
+    **env を見て足す**形にしてある。
+    """
+    from types import SimpleNamespace
+
+    block = _prefetch_block(_cells.cell(*SERVE))
+
+    def load_args(env, supported=True):
+        ns = {"os": SimpleNamespace(environ=env),
+              "_has": lambda flag: supported,
+              "print": lambda *a, **k: None}
+        exec(block, ns)          # noqa: S102 - 自前ソースの切り出しのみ
+        return ns["LOAD_ARGS"]
+
+    assert load_args({}) == []
+    assert load_args({"VLLM_SAFETENSORS_PREFETCH_THREADS": "1"}) == [], (
+        "戦略が無いのにスレッドだけ足している")
+    assert load_args({"VLLM_SAFETENSORS_STRATEGY": "prefetch",
+                      "VLLM_SAFETENSORS_PREFETCH_THREADS": "1"}) == [
+        "--safetensors-load-strategy", "prefetch",
+        "--safetensors-prefetch-num-threads", "1"]
+    # フラグを持たない版なら付けない（黙って落とすと「効かなかった」に見える）
+    assert load_args({"VLLM_SAFETENSORS_STRATEGY": "prefetch"}, supported=False) == []
+
+
+def test_prefetch_is_applied_to_every_attempt():
+    """prefetch は読み込み段の話なので、試行段すべてに同じフラグを足す。
+
+    段ごとに変えると、効いたときにどの段のおかげか分からなくなる（v14 の轍）。
+    """
+    src = _cells.cell(*SERVE)
+    assert "_f + LOAD_ARGS" in src, "PLAN の全段に足していない"
+    # 足したあとに「7 要素」の検査を通っていること（タプルを壊していない）
+    assert src.index("_f + LOAD_ARGS") > src.index(
+        'assert all(len(p) == 7 for p in PLAN)')

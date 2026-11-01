@@ -365,6 +365,25 @@ ATTEMPT_TIMEOUT = int(os.environ.get("VLLM_ATTEMPT_TIMEOUT", "4200"))  # 1 試�
 # 予算をほとんど食わず、次の段に回せる。遅いだけの試行を 15 分で切ると
 # **必ず落ちる**うえ、次段も同じ理由で落ちる。
 
+# 重みロードの prefetch（`notes/vllm-startup-speedup.md` §22）。
+# vLLM 0.32 の `_prefetch_all_checkpoints` は `sorted_files[rank::world_size]`
+# で**rank ごとにファイルを分担**して page cache に載せる。TP=2 でも総読みが
+# チェックポイント 1 回分になる計算（いまは 2 ワーカーが各自 mmap して 2 回読む）。
+# ただし既定のスレッド数 8 は CPU 実測で一番遅い形（8 本 2.3 MiB/s / 1 本 110 MiB/s）。
+# **env が空なら 1 バイトも足さない**（既存の生成物と挙動を変えない）。
+_PF_STRATEGY = os.environ.get("VLLM_SAFETENSORS_STRATEGY", "").strip()
+_PF_THREADS = os.environ.get("VLLM_SAFETENSORS_PREFETCH_THREADS", "").strip()
+LOAD_ARGS = []
+if _PF_STRATEGY:
+    if _has("--safetensors-load-strategy"):
+        LOAD_ARGS += ["--safetensors-load-strategy", _PF_STRATEGY]
+        # スレッド数は prefetch のときだけ意味がある（lazy/eager では無視される）
+        if _PF_THREADS and _has("--safetensors-prefetch-num-threads"):
+            LOAD_ARGS += ["--safetensors-prefetch-num-threads", _PF_THREADS]
+    else:
+        # 黙って落とすと「prefetch は効かなかった」という偽陰性になる
+        print("⚠ --safetensors-load-strategy 非対応 → 重み prefetch は付けない")
+
 PLAN = []
 # 予算 1500s で 1 試行 600s。MTP を 2 段続けると失敗時に予算を食い潰すので、
 # 「MTP+draft dir」→ 失敗したら MTP を一旦あきらめて素の起動を優先する。
@@ -394,6 +413,13 @@ if SPEC:
 PLAN.append(("vl0", None, 8192, {}, False,
              ["--limit-mm-per-prompt", '{"image":0,"video":0}'], AUTO_Q))
 assert all(len(p) == 7 for p in PLAN), "PLAN の要素数が 7 でない"
+
+# prefetch は「読み込み段」の話なので、全試行に同じフラグを足す。
+# 段ごとに変えると、効いたときにどの段のおかげか分からなくなる（v14 の轍）。
+if LOAD_ARGS:
+    PLAN = [(_l, _s, _m, _e, _o, _f + LOAD_ARGS, _q)
+            for (_l, _s, _m, _e, _o, _f, _q) in PLAN]
+    print("ℹ 重み prefetch: " + " ".join(LOAD_ARGS))
 
 # 予算が短いとき（< 900s）は「最も軽い仮説検証」を先頭に持ってくる。
 # 実測: 27B の重みロードだけで約 250s、torch.compile が 61s。

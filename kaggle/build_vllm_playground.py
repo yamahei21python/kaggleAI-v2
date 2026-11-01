@@ -118,6 +118,24 @@ EXPERIMENTS = {
         {"KC_PREWARM": "0", "KC_WARM_CACHE": "0",
          "VLLM_STARTUP_BUDGET": "7000", "VLLM_ATTEMPT_TIMEOUT": "7000"},
     ),
+    # 2026-11-02 01:58 の `baseline_long` で内訳が確定した: 重みロード
+    # 2,802 秒（起動の 74%）/ compile 62 / capture 389。キャッシュが狙えるのは
+    # 451 秒（復元 190 秒を引くと黒字 260 秒が上限）なので、74% 側を撃つ。
+    #
+    # vLLM 0.32 の `_prefetch_all_checkpoints` は `sorted_files[rank::world_size]`
+    # で **rank ごとにファイルを分担**する。TP=2 でも総読みがチェックポイント
+    # 1 回分になる計算（いまは 2 ワーカーが各自 mmap して 2 回読んでいる）。
+    # 既定のスレッド数 8 は CPU 実測で一番遅い形（8 本 2.3 MiB/s / 1 本 110 MiB/s）。
+    #
+    # **対照は `baseline_long`**（同じ 7,000 秒）。予算を揃えないと
+    # 「prefetch の効果」と「予算の効果」が混ざる。
+    "prefetch1": (
+        "重み prefetch を 1 スレッドで（rank 分担で総読みを半分に）",
+        {"KC_PREWARM": "0", "KC_WARM_CACHE": "0",
+         "VLLM_STARTUP_BUDGET": "7000", "VLLM_ATTEMPT_TIMEOUT": "7000",
+         "VLLM_SAFETENSORS_STRATEGY": "prefetch",
+         "VLLM_SAFETENSORS_PREFETCH_THREADS": "1"},
+    ),
 }
 
 EXPERIMENT = os.environ.get("KC_EXPERIMENT", "baseline").strip().lower()
