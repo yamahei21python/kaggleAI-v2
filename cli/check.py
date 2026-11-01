@@ -32,6 +32,17 @@ def _tool(module, exe, *args):
     return [found, *args]
 
 
+def _compile_targets():
+    """compileall に渡す対象。
+
+    以前は 14 個のディレクトリをここに手で並べていた。台帳の外に出力先が増える
+    たびに追随が要り、実際 `kaggle/vllm-playground`（push する main.py を持つ）が
+    漏れていた。生成物はすべて `kaggle/` の下にあるので、木ごと渡す。
+    3 秒で終わるし、並べ間違いが起きない。
+    """
+    return ["kaggle"]
+
+
 def steps():
     return [
         ("build", [sys.executable, "-m", "cli", "build"]),
@@ -42,15 +53,7 @@ def steps():
         # バイト比較する（生成し忘れた main.py が push されるのを防ぐ）。
         ("scripts", [sys.executable, "kaggle/check_scripts.py"]),
         ("compileall", [sys.executable, "-m", "compileall", "-q",
-                        "kaggle/exl3-serve-kernel", "kaggle/lmdeploy-serve",
-                        "kaggle/sglang-serve", "kaggle/ci-cpu",
-                        "kaggle/step2-script", "kaggle/step2-vllm-script",
-                        "kaggle/llama-server-script",
-                        # 配信しないカーネルの script 版（セル連結）
-                        "kaggle/step1/script", "kaggle/step2/script",
-                        "kaggle/step2-vllm/script", "kaggle/step2-vllm-dryrun/script",
-                        "kaggle/smoke/script", "kaggle/bench/script",
-                        "kaggle/bench_mtp/script"]),
+                        *_compile_targets()]),
     ]
 
 

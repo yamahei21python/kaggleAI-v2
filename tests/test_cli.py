@@ -7,6 +7,7 @@ import pathlib
 
 from cli import __main__ as cli_main
 from cli import build as build_mod
+from cli import check as check_mod
 from cli import push as push_mod
 from kbuild import spec
 
@@ -172,3 +173,23 @@ def test_stage_requires_generated_code(tmp_path):
         assert "生成物が無い" in str(e)
     else:                                                      # pragma: no cover
         raise AssertionError("生成物が無いのに通った")
+
+
+def test_compileall_covers_every_generated_python():
+    """compileall の対象が台帳の生成物を全部含むこと。
+
+    以前は 14 個のディレクトリを手で並べていて、`kaggle/vllm-playground` が
+    漏れていた。対象を絞り直したときに気づけるよう、台帳側から突き合わせる。
+    """
+    targets = [pathlib.Path(t) for t in check_mod._compile_targets()]
+    missed = []
+    for kernel in spec.KERNELS:
+        if not kernel.code_file.endswith(".py"):
+            continue
+        for out in (kernel.out, kernel.smoke_out):
+            if not out:
+                continue
+            path = pathlib.Path(out) / kernel.code_file
+            if not any(path == t or t in path.parents for t in targets):
+                missed.append(str(path))
+    assert not missed, f"compileall の対象外: {missed}"
