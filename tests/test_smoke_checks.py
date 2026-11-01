@@ -12,6 +12,8 @@ SKIP は failures に数えないが PASS とも書かない、という契約�
 import pathlib
 import types
 
+import _cells
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # (ソースのセル, エンジン名) — 3 エンジンとも同じ契約を持つ
@@ -151,12 +153,12 @@ def test_engine_checks_without_checks_code_is_callable_with_five_args():
     上のテストは文字列一致なので、`direct=False` を消さずに別の理由で
     引数が減る変更（`*args` 化など）を見逃す。ここでは本文を取り出して
     exec し、本番と同じ 5 引数で叩く。
+
+    切り出し元は**テンプレート本体**（`TEMPLATE.template`）。ファイル全体を
+    渡すと `engine_checks` は文字列リテラルの内側なので見つからない。
     """
-    import re
-    src = (ROOT / "kbuild" / "serve_script.py").read_text()
-    m = re.search(r"^def engine_checks\(.*?(?=^def verify\()", src, re.S | re.M)
-    assert m, "骨格の engine_checks を切り出せない"
-    body = m.group(0)
+    from kbuild import serve_script
+    body = _cells.slice_def(serve_script.TEMPLATE.template, "engine_checks")
 
     ns = {"ALIAS": "dummy", "data": {},
           # `/v1/models` は 1 引数、`/v1/chat/completions` は payload 込みの

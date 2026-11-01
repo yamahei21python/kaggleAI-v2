@@ -9,12 +9,21 @@
 （実際に「終端が `def` のみ」版と「インデント無し行」版が混在していた）。
 
 `kbuild/serve_script.py` の `TEMPLATE` は `string.Template`（`$PLACEHOLDER` 入り）
-なので、これも**置換前の文字列から**関数を切り出して exec する。プレースホルダは
-関数本体に現れない範囲だけを切り出す（`def` 単位なら満たされる）。
+なので、`$NAME` を名前だけに潰してから構文解析する（行番号は変わらないので、
+切り出しは元の文字列から行う）。
+
+切り出しは `ast` で行う。以前は「`def name(` で始まる行を上から探す」だった
+ので、同名の関数が 2 つあると**黙って先頭を選んでいた**（2026-11-02 に
+`reason = loop(procs)` が 2 箇所あり、位置比較のテストが誤った箇所を掴んだ）。
 """
+import ast
 import pathlib
+import re
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+# `string.Template` の `$NAME` / `${NAME}`。潰すのは名前だけ（`$` を消す）。
+_TOKEN = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
 
 
 def cell(*parts):
@@ -25,25 +34,31 @@ def cell(*parts):
     return ROOT.joinpath(*parts).read_text(encoding="utf-8")
 
 
-def slice_def(src, name):
-    """`def name(` から 1 関数を切り出す。
+def _neutralize(src):
+    """`$NAME` を `NAME` にして構文解析できるようにする（行数・行番号は不変）。"""
+    return _TOKEN.sub(lambda m: m.group(1) or m.group(2), src)
 
-    終端は「インデントの無い非空行」。`def` の直後の `X = 1` まで巻き込むと
-    未定義名を評価して NameError になる（実測 2026-11-01）。
-    関数内のネストした `def` はインデントされているので巻き込まない。
+
+def slice_def(src, name):
+    """`def name(` から 1 関数を切り出す（本体だけ・デコレータは含めない）。
+
+    同名の関数が複数あるときは**例外**にする。黙って先頭を選ぶと、
+    テストが別の関数を評価して緑になる（偽の成功）。
     """
+    tree = ast.parse(_neutralize(src))
+    found = [n for n in tree.body
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and n.name == name]
+    if not found:
+        raise AssertionError(f"関数 {name}() が見つからない")
+    if len(found) > 1:
+        lines = [f"  {n.lineno} 行目" for n in found]
+        raise AssertionError(
+            f"関数 {name}() が {len(found)} 個ある（切り出し先を決められない）:\n"
+            + "\n".join(lines))
+    node = found[0]
     lines = src.splitlines()
-    try:
-        start = next(i for i, ln in enumerate(lines)
-                     if ln.startswith(f"def {name}("))
-    except StopIteration:
-        raise AssertionError(f"関数 {name}() が見つからない") from None
-    out = [lines[start]]
-    for ln in lines[start + 1:]:
-        if ln.strip() and not ln[:1].isspace():
-            break
-        out.append(ln)
-    return "\n".join(out).rstrip() + "\n"
+    return "\n".join(lines[node.lineno - 1:node.end_lineno]) + "\n"
 
 
 def exec_def(src, name, **ns):

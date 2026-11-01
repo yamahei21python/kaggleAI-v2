@@ -130,10 +130,14 @@ def test_cells_do_not_touch_the_script_only_data_dict():
 
 def test_template_merges_cell_timings_into_result():
     """timings.json を result.json に合流させないと、計測が成果物に残らない。"""
-    tpl = (_cells.ROOT / "kbuild" / "serve_script.py").read_text(encoding="utf-8")
+    from kbuild import serve_script
+    # 切り出し元はテンプレート本体（ファイル全体だと関数は文字列の内側）。
+    tpl = serve_script.TEMPLATE.template
     assert 'TIMINGS = "/kaggle/working/timings.json"' in tpl
     assert "data[\"timings\"]" in tpl
-    assert "TIMINGS" in tpl.split("def save():")[1][:600]
+    # 切り出しは `_cells` に任せる（`def save():` の文字列分割だと、同名の
+    # 定義が増えたときに黙って別のものを掴む）。
+    assert "TIMINGS" in _cells.slice_def(tpl, "save")
 
 
 
