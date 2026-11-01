@@ -833,15 +833,23 @@ def launch(model_dir):
     data["stage"] = "load"
     save()
     t0 = time.time()
+    # 起動待ちは無言になりやすい（実測 2026-11-01 vLLM: 重み読み込み後
+    # 〜profile run まで約 360 秒、ログにも出ず原因不明のまま 4 往復した）。
+    # 観測を残せば「遅い」と「固まった」を区別できる。
+    watch, watch_stop = kc_watch(p.pid)
     try:
         wait_http(READY_URL, timeout=2400)
     except Exception:
+        data["load_watch"] = watch
         try:
             with open(log_path) as f:
                 data["engine_log_tail"] = tail(f.read(), 40)
         except OSError:
             pass
         raise
+    finally:
+        watch_stop()      # 起動できたら止める（相手は何時間も生きる）
+    data["load_watch"] = watch
     data["load_seconds"] = round(time.time() - t0, 1)
     print(f"{ENGINE} 起動: {data['load_seconds']}s")
     return p

@@ -59,6 +59,15 @@ def test_exl3_build():
                        "kc_stop_via_proxy", "kc_keepalive_expired",
                        "kc_cloudflared_url"):
                 check(f"def {fn}" in body, f"{mode}: runtime の {fn} が無い")
+            # 起動待ちは無言になる。`--no-progress` で進捗を切り、chat_server は
+            # 完走時にしか 1 行出さないので、観測が外れると「遅い」と
+            # 「固まった」を区別できない（実測 2026-11-01: 1800 秒で 0 バイト）。
+            check("watch, watch_stop = kc_watch(p.pid)" in body,
+                  f"{mode}: 起動待ちの観測（kc_watch）が無い")
+            check("watch_stop()" in body,
+                  f"{mode}: 観測を止めていない（起動後も 30 秒ごとに吐き続ける）")
+            check('data["load_watch"] = watch' in body,
+                  f"{mode}: 観測結果を result.json に入れていない")
             check("releases/latest" not in body,
                   f"{mode}: cloudflared の URL が latest のまま")
             proxy_src = base64.b64decode(bk.PROXY_B64).decode()

@@ -2,6 +2,7 @@
 import base64
 import http.server
 import json
+import os
 import pathlib
 import shutil
 import socketserver
@@ -440,6 +441,62 @@ def test_proc():
               proc.kc_wait_gpu_idle(timeout=1) == -1)
     finally:
         proc.subprocess.run = orig_run
+
+
+def test_watch():
+    print("\n=== proc（起動待ちの観測） ===")
+    # /proc の形をしたディレクトリを作り、**変換だけ**を固定する。実プロセスの
+    # RSS は環境で変わるので、そこを assert すると「たまたま通る」テストになる。
+    root = pathlib.Path(tempfile.mkdtemp(prefix="kcproc-"))
+    orig_vram = proc.kc_vram_used
+    proc.kc_vram_used = lambda *a, **kw: []
+    try:
+        d = root / "4242"
+        d.mkdir()
+        (d / "status").write_text("Name:\tpython\nVmRSS:\t 1048576 kB\n")
+        (d / "io").write_text("rchar: 3145728\nread_bytes: 2097152\n")
+        s = proc.kc_sample(4242, root=str(root))
+        check("VmRSS を MiB にする", s["rss_mib"] == 1024, str(s))
+        check("read_bytes を MiB にする", s["read_mib"] == 2, str(s))
+        check("rchar を MiB にする", s["char_mib"] == 3, str(s))
+        check("GPU が無ければ vram は None", s["vram_mib"] is None, str(s))
+        check("存在しない PID は None",
+              proc.kc_sample(999999, root=str(root))["rss_mib"] is None)
+        # io だけ読めない環境（権限が無い等）でも rss は取れて落ちない
+        (d / "io").unlink()
+        s2 = proc.kc_sample(4242, root=str(root))
+        check("io が読めなくても rss は取れる",
+              s2["rss_mib"] == 1024 and s2["read_mib"] is None, str(s2))
+    finally:
+        proc.kc_vram_used = orig_vram
+        shutil.rmtree(root, ignore_errors=True)
+
+    # 生きているプロセスに対しては溜まり、止めたら止まる。
+    # `keep` を小さくして、上限で古いものが落ちることも同時に見る。
+    # 溜まること・止まることは /proc が無くても確かめられる（os.kill だけで足りる）。
+    p = subprocess.Popen([sys.executable, "-c",
+                          "import time; time.sleep(30)"])
+    samples = []
+    try:
+        samples, stop = proc.kc_watch(p.pid, every=0.1, keep=3)
+        time.sleep(0.5)
+        check("kc_watch は keep 件まで溜める", len(samples) == 3, str(len(samples)))
+        check("経過秒が入る", all("t" in x for x in samples), str(samples))
+        if os.path.isdir("/proc"):          # macOS には無い
+            check("rss が取れている", (samples[-1]["rss_mib"] or 0) > 0,
+                  str(samples[-1]))
+        else:
+            print("  ℹ /proc が無いので rss の実測は飛ばす（Kaggle では効く）")
+        # 相手が生きたままでも `stop()` で止まること。ここを見ないと、
+        # 起動が通ったあと何時間も `[watch]` を吐き続ける実装に戻れる。
+        stop()
+        time.sleep(0.3)
+        n = len(samples)
+        time.sleep(0.4)
+        check("stop() で観測を止める", len(samples) == n, f"{n} → {len(samples)}")
+    finally:
+        p.kill()
+        p.wait()
 
 
 def test_ollama():

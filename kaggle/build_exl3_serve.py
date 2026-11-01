@@ -132,16 +132,24 @@ def launch(model_dir):
     data["stage"] = "load"
     save()
     t0 = time.time()
+    # 起動待ちの間は無言になる（`--no-progress` で進捗を切っているうえ、
+    # chat_server は完走時にしか 1 行出さない）。観測を残さないと
+    # 「遅い」と「固まった」を区別できず、次の手が打てない。
+    watch, watch_stop = kc_watch(p.pid)
     timeout = 60 if MODE == "mock" else 1800
     try:
         wait_http(f"http://127.0.0.1:{PORT}/health", timeout)
     except Exception:
+        data["load_watch"] = watch
         try:
             with open(log_path) as f:
                 data["chat_log_tail"] = tail(f.read(), 40)
         except OSError:
             pass
         raise
+    finally:
+        watch_stop()      # 起動できたら止める（相手は何時間も生きる）
+    data["load_watch"] = watch
     data["load_seconds"] = round(time.time() - t0, 1)
     print(f"chat_server 起動: {data['load_seconds']}s")
     return p
