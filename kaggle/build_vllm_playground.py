@@ -52,6 +52,7 @@ from cli import config  # noqa: E402
 from kbuild import (embed, metadata, pack_script,  # noqa: E402
                      serve_script, spec)
 from kbuild.settings_cell import render as render_settings  # noqa: E402
+from kbuild.settings_cell import env_preamble as render_env  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 from runtime.constants import PROXY_PORT, VLLM_PORT  # noqa: E402
 
@@ -165,13 +166,8 @@ SETTINGS = render_settings(CELLS / "00_settings.py", {
 
 # 実験の環境変数は**設定セルより前**に置く。後ろに置くと、設定セルや install
 # セルが既定値で動き出してから書き換えることになり、効かない。
-# `import os` を先頭に付けるのは、設定セル側の import より前で使うため。
-SETTINGS = (
-    "import os\n"
-    + "".join(f"os.environ.setdefault({k!r}, {v!r})\n"
-              for k, v in EXP_ENV.items())
-    + "\n" + SETTINGS
-)
+# 本番（`build_step2_vllm*.py`）と同じ helper を使う。
+SETTINGS = render_env(EXP_ENV) + SETTINGS
 
 ENGINE_CODE = (
     pack_script.wrap_cell(CELLS / "01_install_vllm.py", "def stage_install():\n")

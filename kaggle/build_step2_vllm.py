@@ -35,12 +35,15 @@ if TUNNEL != "cloudflared":
         f"STEP2_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
         "（ngrok は 2026-11-01 に廃止。notes/url-publishing.md）")
 
+SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}"
+
 HERE = pathlib.Path(__file__).resolve().parent
 
 sys.path.insert(0, str(HERE.parent))
 from cli import config  # noqa: E402
-from kbuild import embed, metadata, pack_nb  # noqa: E402
+from kbuild import embed, metadata, pack_nb, spec  # noqa: E402
 from kbuild.serve_notebook import Flow  # noqa: E402
+from kbuild.settings_cell import env_preamble as render_env  # noqa: E402
 from runtime import proxy_source  # noqa: E402
 
 CFG = config.load()
@@ -125,7 +128,9 @@ __SECRET__
 """, TUNNEL=TUNNEL, HFMODEL=HF_MODEL, DATASET=DATASET_ID,
     CFBULLET=cf_bullet, SECRET=secret_note)
 
-SETTINGS = _tpl(
+# 既定ノブ（`VLLM_BAKE_ENV`）は設定セルの**前**に置く。後ろだと、設定セルや
+# install セルが既定値で動き出してから書き換えることになり、効かない。
+SETTINGS = render_env(spec.find(SLUG).bake_env) + _tpl(
     _cell("00_settings.py"),
     DATASET_SLUG=DATASET_SLUG, SERVED=SERVED_NAME, TUNNEL=TUNNEL,
     PROXY_B64=PROXY_SRC_B64, CHAT_B64=CHAT_SRC_B64,
@@ -225,7 +230,6 @@ else:
     flow.write(OUT)
 
 # ── kernel-metadata.json（push 用・まだ push しない）─────────
-SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}"
 sources = [DATASET_ID, f"{OWNER}/my-cloudflared-bin"]
 # wheelhouse 2 点（本体 + cublas patch）。patch が無いと `cuda-toolkit 13.0.3` の
 # `nvidia-cublas==13.1.1.3.*` を満たせない（CPU 実測 2026-10-31）。

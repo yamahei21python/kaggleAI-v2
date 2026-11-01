@@ -25,6 +25,7 @@ from cli import config  # noqa: E402
 from kbuild import (embed, metadata, pack_script,  # noqa: E402
                      serve_script, spec)
 from kbuild.settings_cell import render as render_settings  # noqa: E402
+from kbuild.settings_cell import env_preamble as render_env  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 from runtime.constants import PROXY_PORT, VLLM_PORT  # noqa: E402
 
@@ -39,6 +40,11 @@ if TUNNEL != "cloudflared":
         f"STEP2_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
         "（ngrok は 2026-11-01 に廃止。notes/url-publishing.md）")
 
+SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}-script"
+# 台帳から引く。`env` はビルダーへ渡す値、`bake_env` は**生成物に焼く**値
+# （既定ノブ。`kbuild/spec.py` の `VLLM_BAKE_ENV`）。
+KERNEL = spec.find(SLUG)
+
 # smoke 版は通常版と別ディレクトリへ書く（`cli push --smoke` が通常版を
 # 上書きしないため。notebook 版の `smoke_out` と同じ考え方）。
 SMOKE = "--smoke" in sys.argv or os.environ.get("KC_SMOKE") == "1"
@@ -49,7 +55,7 @@ OUT = HERE / "step2-vllm-script" / (f"smoke-{TUNNEL}" if SMOKE else TUNNEL)
 PROXY_SRC_B64 = embed.b64_text(proxy_source(HERE / "step2" / "auth_proxy.py"))
 CHAT_SRC_B64 = embed.b64_file(ROOT / "llama-chat.html")
 
-SETTINGS = render_settings(CELLS / "00_settings.py", {
+SETTINGS = render_env(KERNEL.bake_env) + render_settings(CELLS / "00_settings.py", {
     "__DATASET_SLUG__": DATASET_SLUG,
     "__SERVED__": SERVED_NAME,
     "__TUNNEL__": TUNNEL,
@@ -96,7 +102,6 @@ ENGINE = {
                   '"smoke": SMOKE}'),
 }
 
-SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}-script"
 # metadata は台帳から引く。datasets（モデル + cloudflared + wheelhouse 2 点）も
 # 台帳側に移した。wheelhouse の patch が要る理由は `kbuild/spec.py` の当該行に
 # 書いてある（cuda-toolkit 13.0.3 が `nvidia-cublas` を固定するため）。

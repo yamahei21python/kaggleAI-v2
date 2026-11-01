@@ -1325,3 +1325,25 @@ prefetch は **rank ごとにファイルを分担**する。TP=2 でも総読�
 env 2 つを消すだけで、コードは変わらない（`03_vllm_serve.py` は
 `VLLM_SAFETENSORS_*` が空なら 1 バイトも足さない）。
 
+### 実施（2026-11-02 03:05）— 台帳の `bake_env` として本番の既定にした
+
+`kbuild/spec.py` に `Kernel.bake_env` を足し、`VLLM_BAKE_ENV`（同じ 2 つ）を
+本番 2 カーネル（notebook 版と script 版）に付けた。ビルダーは
+`kbuild.settings_cell.env_preamble` で**設定セルの前**に `os.environ.setdefault`
+として焼く。生成物の差分は 4 行だけ（`import os` + 2 行 + 空行）。
+
+`env`（ビルダーへ渡す・`STEP2_TUNNEL` など）とは別の欄にした。同じ欄に混ぜると
+「ビルド時に効く値」と「カーネル内で効く値」が区別できなくなる。
+
+| 場所 | 役割 |
+|---|---|
+| `Kernel.env` | ビルダーの実行環境（`STEP2_TUNNEL` / `KC_EXPERIMENT` など） |
+| `Kernel.bake_env` | **生成物に焼く**既定値（カーネル内で効く） |
+
+戻し方は 3 通り。どれもセルを触らない:
+
+1. 台帳の `bake_env` を空にする（次のビルドから消える）
+2. Kaggle の環境変数で `VLLM_SAFETENSORS_STRATEGY=lazy` を入れる（`setdefault` なので負ける）
+3. `VLLM_SAFETENSORS_PREFETCH_THREADS` だけ変える（例 `8`）
+
+

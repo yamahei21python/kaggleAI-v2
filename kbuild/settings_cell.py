@@ -19,3 +19,20 @@ def render(path, tokens: dict) -> str:
         raise ValueError(
             f"{pathlib.Path(path).name}: 未置換のトークン {leftover}")
     return text
+
+
+def env_preamble(env) -> str:
+    """環境変数の既定値を、設定セルの**前**に置く。
+
+    後ろに置くと、設定セルや install セルが既定値で動き出してから書き換える
+    ことになり、効かない（playground の `KC_EXPERIMENT` で実証済み）。
+
+    `os.environ.setdefault` なので、Kaggle の環境変数で上書きできる。
+    `env` が空なら**空文字**を返す（生成物に 1 バイトも足さない）。
+    """
+    env = dict(env or {})
+    if not env:
+        return ""
+    lines = "".join(f"os.environ.setdefault({k!r}, {v!r})\n"
+                    for k, v in env.items())
+    return "import os\n" + lines + "\n"

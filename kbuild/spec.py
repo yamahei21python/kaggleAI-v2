@@ -18,6 +18,19 @@ OWNER = "yamahei21python"
 
 ACTIVE, SEMI, RETIRED = "active", "semi", "retired"
 
+# vLLM 配信の**生成物に焼く**既定ノブ。
+#
+# `playground` の `prefetch1` で当たった 2 つ（`notes/vllm-startup-speedup.md`
+# §23）。重みロードが 2,877 → 1,186 秒、起動全体が 3,820 → 2,011 秒になった。
+# 値は `os.environ.setdefault` で入るので、Kaggle の環境変数で上書きできる
+# （戻したいときは env を 1 つ入れるだけでよい・セルは触らない）。
+#
+# `env`（ビルダーへ渡す）とは別物。こちらは**カーネルの中で効く**値。
+VLLM_BAKE_ENV = (
+    ("VLLM_SAFETENSORS_STRATEGY", "prefetch"),
+    ("VLLM_SAFETENSORS_PREFETCH_THREADS", "1"),
+)
+
 
 @dataclass(frozen=True)
 class Kernel:
@@ -30,6 +43,7 @@ class Kernel:
     datasets: tuple = ()
     builder: str = ""             # kaggle/build_*.py のモジュール名（空 = ビルダー無し）
     env: tuple = ()               # ((KEY, VALUE), ...) ビルダーへ渡す環境変数
+    bake_env: tuple = ()          # ((KEY, VALUE), ...) 生成物に焼く既定値
     metadata_file: str = "kernel-metadata.json"
     status: str = ACTIVE
     smoke_out: str = ""           # smoke 版の出力先（空 = out と同じ場所）
@@ -54,12 +68,12 @@ class Kernel:
 
 
 def _k(name, title, kind, out, code, gpu=False, ds=(), builder="", env=(),
-       status=ACTIVE, meta="kernel-metadata.json", smoke_out="",
+       bake_env=(), status=ACTIVE, meta="kernel-metadata.json", smoke_out="",
        smoke=False):
     return Kernel(name=name, title=title, kind=kind, out=out, code_file=code,
                   gpu=gpu, datasets=tuple(ds), builder=builder,
-                  env=tuple(env), status=status, metadata_file=meta,
-                  smoke_out=smoke_out, smoke=smoke)
+                  env=tuple(env), bake_env=tuple(bake_env), status=status,
+                  metadata_file=meta, smoke_out=smoke_out, smoke=smoke)
 
 
 _K = _k
@@ -107,6 +121,7 @@ KERNELS = (
            "yamahei21python/vllm-wheelhouse",
            "yamahei21python/vllm-wheelhouse-patch"),
        builder="build_step2_vllm", env=(("STEP2_TUNNEL", "cloudflared"),),
+       bake_env=VLLM_BAKE_ENV,
        smoke_out="kaggle/step2-vllm-kernel/smoke-cloudflared", smoke=True),
     # ngrok 廃止。ノートブックは残すが retired。
     _K("step2-vllm-qwen38-27b-ngrok", "step2 vllm qwen38 27b ngrok", "notebook",
@@ -143,7 +158,8 @@ KERNELS = (
            "yamahei21python/vllm-wheelhouse",
            "yamahei21python/vllm-wheelhouse-patch"),
        builder="build_step2_vllm_script",
-       env=(("STEP2_TUNNEL", "cloudflared"),), status=SEMI,
+       env=(("STEP2_TUNNEL", "cloudflared"),), bake_env=VLLM_BAKE_ENV,
+       status=SEMI,
        smoke_out="kaggle/step2-vllm-script/smoke-cloudflared", smoke=True),
     # ngrok 廃止。`main.py` は残すが retired（再生成しない）。
     _K("step2-vllm-qwen38-27b-ngrok-script",

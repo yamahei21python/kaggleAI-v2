@@ -1040,6 +1040,10 @@ def kc_beacon_pull(slug="", dest=None, timeout=180, exe=""):
 # ── エンジン固有の定数（旧 settings セル）──────────────────────
 # 骨格が読む名前（PORT / ALIAS / CONTEXT_LENGTH など）はここで上書きできる。
 # 差は「データ」だけにして、骨格には手を入れない。
+import os
+os.environ.setdefault('VLLM_SAFETENSORS_STRATEGY', 'prefetch')
+os.environ.setdefault('VLLM_SAFETENSORS_PREFETCH_THREADS', '1')
+
 # ============================================================
 # Step 2 (vLLM): 配信カーネルの設定
 # ============================================================

@@ -203,6 +203,32 @@ def test_no_module_imports_the_kcconfig_shim():
     assert not offenders, "kcconfig シムを import している: " + ", ".join(offenders)
 
 
+def test_env_preamble_is_empty_without_knobs():
+    """焼く既定値が無いときは**空文字**（生成物に 1 バイトも足さない）。"""
+    from kbuild.settings_cell import env_preamble
+    assert env_preamble(()) == ""
+    assert env_preamble({}) == ""
+    assert env_preamble((("A", "1"),)) == (
+        "import os\nos.environ.setdefault('A', '1')\n\n")
+
+
+def test_vllm_production_kernels_bake_the_prefetch_knobs():
+    """本番の vLLM 2 カーネルが prefetch を焼いていること。
+
+    playground の `prefetch1` で重みロードが 2,877 → 1,186 秒、起動全体が
+    3,820 → 2,011 秒になった（`notes/vllm-startup-speedup.md` §23）ので既定に
+    した。台帳の `bake_env` を落とすと**静かに遅い既定へ戻る**ので、生成物まで
+    見る（notebook は JSON の中に同じ行が入る）。
+    """
+    for name in ("step2-vllm-qwen38-27b-cloudflared",
+                 "step2-vllm-qwen38-27b-cloudflared-script"):
+        k = spec.find(name)
+        assert dict(k.bake_env) == dict(spec.VLLM_BAKE_ENV), name
+        text = (k.dir / k.code_file).read_text(encoding="utf-8")
+        for key, val in k.bake_env:
+            assert f"os.environ.setdefault({key!r}, {val!r})" in text, name
+
+
 def test_for_kernel_matches_the_ledger():
     """`for_kernel` は台帳の値だけを使い、上書きは明示した分だけ効く。"""
     from kbuild import metadata
