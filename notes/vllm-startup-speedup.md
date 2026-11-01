@@ -872,6 +872,48 @@ root/.triton/cache/26FVPAU7.../chunk_gated_delta_rule_fwd_kernel_h_blockdim64.cu
 `timings.warm_cache_restore.source` にどちらから復元したかが残る。
 `notes/pitfall-coverage.md` #34。
 
+#### 実行結果（2026-11-01 21:21 の `KC_EXPERIMENT=cache`）— **復元は成功、実験は不成立**
+
+復元側は直った。**が、キャッシュの効果は測れていない。** 理由は復元ではなく
+重みロードで、1 回目の試行が予算を食い切った。
+
+```
+warm_cache_restore: {mode: "require", restored: true,
+                     source: "/kaggle/input/vllm-warm-cache/root/.triton/cache",
+                     mib: 191.1, entries: 236, seconds: 189.9, missing: []}
+triton_cache_before: {entries: 236, dir: "/root/.triton/cache"}
+install_seconds: 456.2
+⏱ 起動予算 4200s 超過（4227s） → 残り 8 試行を打ち切り
+```
+
+| 事実 | 数字 |
+|---|---|
+| 復元（191 MiB / 236 エントリ） | **189.9 秒** |
+| 試行 1 の開始 | t=489.7s |
+| 予算切れ | t=4,227s（**試行 1 本で使い切った**） |
+| そのとき重みロードは | 12:31:13（worker 起動）→ 13:39:28 で **layers.34** に到達したところ |
+| 出力 | `FAILED.txt` / `vllm_1.log` / `ram_trace.txt` は残った（`result.json` は `stage: "env"`） |
+
+つまり **コンパイル / autotune の段に一度も到達していない**。Triton キャッシュが
+効くのはその段なので、この回は「効いた / 効かない」のどちらでもない（**判定不能**）。
+
+読み取れること 2 つ:
+
+1. **復元コストは 190 秒**。キャッシュは 190 秒以上を削って初めて元が取れる。
+   §12 の 928.7s 構成では autotune が 373 秒だったので、**差し引きで得**になる
+   可能性はあるが、まだ 1 度も観測していない。
+2. **重みロードが 4,000 秒でも終わらないことがある**。§20 の 2,640 秒、v4 の
+   1,304 秒に続く 3 例目で、しかも最悪。ログは
+   `Attempted to load weight ... bfloat16 into parameter with dtype torch.float16`
+   を層ごとに数本ずつ、6〜8 秒間隔で吐いていた（同じ層の別テンソルごとに 1 行）。
+   **bf16 の重みを fp16 のパラメータへ入れる変換が 1 テンソルずつ効いている**
+   ように見える。v4 は同じロードを 1,304 秒で終えているので、同じコードで
+   ここまで差が出る理由はまだ説明できていない。
+
+次に回すなら、`cache` をもう一度ではなく **予算を 4,200 → 7,000 秒に上げた
+`baseline`** を 1 回。そうしないと「重みで死ぬ回」と「キャッシュの効果」が
+どちらも測れない。GPU を 1 往復使うので、やるかどうかは別途判断。
+
 
 
 
