@@ -49,23 +49,23 @@
   → 実施。追跡 13 → 11 件。**実体は無傷**（ランチャーが参照する現役ディレクトリ）。
   履歴は書き換えていない（`filter-repo` 不使用）。`.gitignore` に 2 行追加。
 
-### P1 — 今週・未コミット 137 件の返済（要判断は 1 点だけ）
+### P1 — 今週・未コミット 137 件の返済 ✅ 実施済み（5 コミット）
 
-6 コミットに割る:
+当初案は 6 コミットだったが、**5 に統合した**。理由は §6.5。
 
-| # | 内容 |
-|---|---|
-| 1 | `kbuild/serve_notebook.py` `kbuild/spec.py` ほか kbuild 群 + `kaggle/serve-cells/` |
-| 2 | `runtime/engines/{lmdeploy,sglang}.py` `runtime/constants.py` `runtime/quota.py` |
-| 3 | ビルダー 19 本（`RM` の rename 7 件を含む） |
-| 4 | script 生成物 15 dirs（下の判断待ち） |
-| 5 | `tests/` 追加 12 本 |
-| 6 | `notes/` + `README.md` |
+| 実際のコミット | 内容 | 当初案との差 |
+|---|---|---|
+| `e805359` refactor | kbuild 4 本 + cli/ + serve-cells + cells + runtime + ビルダー 19 本 + tests 13 本 + ルートの薄い入口 | 案の 1〜3・5 を統合 |
+| `b8637bb` build | script 生成物 13 変種 + `.gitattributes` | 案の 4 |
+| `e5c6b7e` build | ノートブック 13 本 + metadata 2 件 | 案に無し（増えた分） |
+| `a688cf8` chore | ci.yml / README / check_notebooks / ruff.toml / 生成 2 本 | 案の 6 の一部 |
+| `61d26e4` docs | notes 15 本 | 案の 6 |
 
-**唯一の判断: script 生成物（`kaggle/*/script/`、未追跡 6.6 MB）を commit するか。**
-推奨は **commit**。`kaggle/check_scripts.py` が「commit 済みの生成物」と再生成結果を
-突き合わせる設計なので、ignore すると検査が空振りする。
-base64 埋め込み行だけ `.gitattributes` で `-diff` を付けて差分ノイズを抑える。
+**判断していた「script 生成物を commit するか」は commit で決着。**
+`kaggle/check_scripts.py` は「commit 済み」と再生成結果をバイト比較するので、
+追跡しないと検査が空振りする。差分ノイズは `.gitattributes` の `-diff` で抑えた。
+
+結果: **未コミット 137 → 0。** `python3 -m cli check` は 6 段階すべて緑、250 テスト通過。
 
 ### P2 — 構造（1 コミットずつ、`python3 -m cli build` と check 系をゲートに）
 
@@ -191,3 +191,29 @@ datasets/*/*
   git 操作が全部失敗していた。`ps` が使えない環境なので時刻を根拠に判断し、
   `/tmp/kc-index.lock.bak` へ退避（削除はしていない）。**心当たりが無ければ
   このファイルは捨ててよい。**
+
+### 6.5 なぜ 6 コミットではなく 5 にしたか
+
+案の 1〜3・5（kbuild / runtime / ビルダー / tests）は**互いに参照し合っていて、
+単独では緑にならない**。`kbuild/spec.py` を入れずにビルダーだけ入れても import が
+通らず、`tests/test_spec.py` を入れずに spec.py を入れても意味がない。分割すると
+「レビューしやすいが、どの時点でも壊れている」コミットが 4 つ並ぶ。
+
+そこで **ソース一式を 1 コミット**（113 ファイル・+14,261 / −4,560）にし、
+生成物・ノートブック・設定・docs を別コミットに分けた。レビューは「ソースの差分」と
+「生成物の差分（`.gitattributes` で `-diff` 済み）」で見分けられる。
+
+分割数を増やす価値があるのは、**将来 `git bisect` を回したくなったとき**。
+そのときは「ソースが緑になる地点」で切る必要があるので、今の 1 本では足りない。
+ただしその作業は履歴の書き換えになるので、必要になったときにやる。
+
+### 6.6 骨格のバグを 1 件直した（P1 の副産物）
+
+`git add` の途中で `kbuild/serve_script.py` が未追跡だと気づき、中身を確認したら
+**exl3 の ERROR の原因**だった（§`engine-rollout.md`）。骨格の既定
+`engine_checks(judge, retry, base, auth=None)` が `direct` を受け取らないのに、
+`verify()` が 5 引数で呼んでいた。`checks_code` を持つ 3 エンジンは自前の 5 引数版で
+上書きするので露見せず、**既定を使う exl3 だけが踏んだ**。
+
+既存テストが 4 引数 + kwargs で呼んでいたのも見逃しの原因なので、
+「呼び出し側」と「受け口」の両方を固定する回帰テストを 2 本足した。
