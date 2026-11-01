@@ -399,34 +399,70 @@ def test_warm_cache_is_captured_on_both_paths():
 
 
 
-def _exec_warm_cache_block(tmp_path, mode):
-    """install セルの warm cache ブロックだけを exec して、結果を返す。
+def _exec_warm_cache_block(tmp_path, mode, tar_entries=None):
+    """install セルの warm cache ブロックだけを exec して `_WC_INFO` を返す。
 
     ブロックは `os` / `_glob` / `kc_find_dataset` にしか依存しないので、この 3 つを
     差し替えれば単体で動く。Dataset を**空のディレクトリ**に見せかけることで
     「Dataset はあるが tar が無い」＝実際に起きる最悪の形を再現する。
+
+    `tar_entries` を渡すと、その件数だけ展開された状態を作る。展開だけ差し替える
+    のは、ブロックが `extractall("/")` を呼ぶため——tar の arcname 次第で
+    **どこへでも書く**ので、テストで本物を走らせてはいけない。数える側
+    （`os.listdir`）は本物を通すので、「数えている」こと自体は検証できる。
     """
     import os as _os
+    import sys as _sys
+    import types as _types
 
     src = _cells.cell(*INSTALL)
     start = src.index("# ---- warm cache（任意 Dataset）----")
     end = src.index("# ---- torch を「消してから入れる」ための道具 ----")
     block = src[start:end]
 
-    empty = tmp_path / "empty-dataset"
-    empty.mkdir(exist_ok=True)
+    ds = tmp_path / "dataset"
+    ds.mkdir(exist_ok=True)
+    if tar_entries is not None:
+        (ds / "warm-cache.tar").write_bytes(b"\0" * 1024)   # getsize を呼ぶので実体が要る
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+
+    class _FakeTar:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extractall(self, root):
+            tc = _os.path.join(_os.environ["HOME"], ".triton", "cache")
+            _os.makedirs(tc, exist_ok=True)
+            for i in range(tar_entries):
+                _os.makedirs(_os.path.join(tc, f"kernel-{i:03d}"), exist_ok=True)
+
+    fake = _types.ModuleType("tarfile")
+    fake.open = lambda path: _FakeTar()
 
     ns = {"os": _os, "_glob": _glob, "print": lambda *a, **k: None,
-          "kc_find_dataset": lambda slug: str(empty)}
-    old = _os.environ.get("KC_WARM_CACHE")
+          "kc_find_dataset": lambda slug: str(ds)}
+    saved = {k: _os.environ.get(k) for k in ("KC_WARM_CACHE", "HOME")}
+    orig_tarfile = _sys.modules.get("tarfile")
     _os.environ["KC_WARM_CACHE"] = mode
+    _os.environ["HOME"] = str(home)
+    _sys.modules["tarfile"] = fake
     try:
         exec(compile(block, "cell:01_install_vllm:warm_cache", "exec"), ns)
+        return ns.get("_WC_INFO", {})
     finally:
-        if old is None:
-            _os.environ.pop("KC_WARM_CACHE", None)
+        for k, v in saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+        if orig_tarfile is not None:
+            _sys.modules["tarfile"] = orig_tarfile
         else:
-            _os.environ["KC_WARM_CACHE"] = old
+            _sys.modules.pop("tarfile", None)
 
 
 def test_warm_cache_require_raises_on_an_empty_dataset(tmp_path):
@@ -439,6 +475,46 @@ def test_warm_cache_require_raises_on_an_empty_dataset(tmp_path):
         _exec_warm_cache_block(tmp_path, "require")
     assert "require" in str(e.value)
     assert "偽陰性" in str(e.value), "落ちる理由がメッセージに無い"
+
+
+def test_warm_cache_require_rejects_an_incomplete_tar(tmp_path):
+    """復元はできるが**中身が薄い** tar も `require` では落とす。
+
+    実測 2026-11-01: 重みロード中に落ちた回の tar は 30 エントリ / 23.9 MB で、
+    373 秒の主役（`chunk_o` / `chunk_delta_h`）が入っていなかった。これは
+    起動に成功していない＝profile run に到達していない回のもの。復元すると
+    一部だけ当たって「少し効いた」ように見え、やはり偽陰性になる。
+    """
+    with pytest.raises(RuntimeError) as e:
+        _exec_warm_cache_block(tmp_path, "require", tar_entries=30)
+    msg = str(e.value)
+    assert "30" in msg, f"件数がメッセージに無い: {msg}"
+    assert "偽陰性" in msg, f"落ちる理由がメッセージに無い: {msg}"
+
+
+def test_warm_cache_require_accepts_a_complete_tar_and_records_the_count(tmp_path):
+    """エントリが十分あれば通り、**復元数が `_WC_INFO` に残る**。
+
+    `print` だけだと `cli timings` で横並びにできず、1 回の実行から
+    「効いたのか、そもそも当たっていないのか」を読み返せない。
+    """
+    info = _exec_warm_cache_block(tmp_path, "require", tar_entries=200)
+    assert info["restored"] is True, info
+    assert info["entries"] == 200, info
+    assert info["tar"] == "warm-cache.tar", info
+    assert info["mode"] == "require", info
+
+
+def test_warm_cache_restore_count_reaches_timings():
+    """復元数は `timings` まで運ばれている（セルの中で止めていない）。
+
+    `_WC_INFO` を作るだけで `kc_save_timings` に入れ忘れると、ログにしか
+    残らず `cli timings` から見えなくなる。
+    """
+    src = _cells.cell(*INSTALL)
+    assert '"warm_cache_restore": dict(_WC_INFO)' in src
+    assert src.index("_WC_INFO = {") < src.index('"warm_cache_restore"'), \
+        "使う前に定義されていない"
 
 
 def test_warm_cache_default_mode_continues_on_an_empty_dataset(tmp_path):

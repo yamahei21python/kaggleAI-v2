@@ -1753,6 +1753,16 @@ def stage_install():
     _KC_WC_MODE = os.environ.get("KC_WARM_CACHE", "1").strip().lower()
     _USE_WARM_CACHE = _KC_WC_MODE not in ("0", "off", "no", "false")
     _WC_REQUIRED = _KC_WC_MODE in ("require", "required")
+    # 復元の結果は `timings` に残す。**print だけだと 1 回の実行から読み取れない**
+    # （ログは流れるが、`cli timings` で横並びにできない）。
+    _WC_INFO = {"mode": _KC_WC_MODE, "restored": False, "tar": "",
+                "mib": 0.0, "entries": 0, "seconds": 0.0}
+    # 「完全な tar か」の目安。実測 2026-11-01: 重みロード中に落ちた回の tar は
+    # **30 エントリ / 23.9 MB** で、373 秒の主役である `chunk_o` /
+    # `chunk_delta_h` が入っていなかった（profile run に到達していない）。
+    # 起動に成功した回は 100〜200 と見込まれる。50 はその間に置いた**経験値**で、
+    # 厳密な判定ではない。誤検知が嫌なら `KC_WARM_CACHE=1`（検査しない）で回す。
+    _WC_MIN_ENTRIES = 50
     _wc = kc_find_dataset("vllm-warm-cache")
     # `kc_find_dataset` は**見つからなくても既定パスを返す**（`/kaggle/input/<slug>`）。
     # そのため `if _wc:` だけでは常に真になり、tar が 1 本も無いときに**何も
@@ -1776,11 +1786,33 @@ def stage_install():
                 # Triton は 1 カーネル 1 ディレクトリなので直下の数で足りる。
                 _tc = os.path.join(os.path.expanduser("~"), ".triton", "cache")
                 _n = len(os.listdir(_tc)) if os.path.isdir(_tc) else 0
+                _WC_INFO.update(restored=True, tar=os.path.basename(_t),
+                                mib=round(os.path.getsize(_t) / 1e6, 1),
+                                entries=_n,
+                                seconds=round(__import__("time").time() - _t0, 1))
                 print(f"🧠 キャッシュ復元: {os.path.basename(_t)} "
                       f"{os.path.getsize(_t)/1e6:.0f} MB ({__import__('time').time()-_t0:.1f}s)"
                       f" / Triton エントリ {_n}（{_tc}）")
             except Exception as _e:
                 print(f"⚠ キャッシュ復元をスキップ: {_e}")
+        # 復元はできたが**中身が薄い**場合。不完全な tar（30 エントリ）を復元すると
+        # 一部だけ当たって「少し効いた」ように見え、373 秒が戻る理由を
+        # 「キャッシュは効かない」と誤読する。`require` はその誤読を防ぐための
+        # モードなので、ここも落とす。
+        if _WC_REQUIRED and not _WC_INFO["restored"]:
+            raise RuntimeError(
+                f"KC_WARM_CACHE=require なのに tar を復元できなかった: {_tars}。"
+                "抽出で例外が出ている（上の ⚠ を参照）。")
+        if _WC_REQUIRED and _WC_INFO["entries"] < _WC_MIN_ENTRIES:
+            raise RuntimeError(
+                f"KC_WARM_CACHE=require なのに復元後のエントリが "
+                f"{_WC_INFO['entries']} 件しかない（下限 {_WC_MIN_ENTRIES}）: "
+                f"{_WC_INFO['tar']} {_WC_INFO['mib']} MB。"
+                "この tar は起動に成功していない回のもので、"
+                "373 秒の主役（chunk_o / chunk_delta_h）が入っていない可能性が高い。"
+                "不完全なまま測ると『キャッシュは効かない』という偽陰性になる。"
+                "`KC_EXPERIMENT=baseline` の成果物から採り直すこと"
+                "（判断できる場合は KC_WARM_CACHE=1 でこの検査を外せる）。")
     elif _WC_REQUIRED:
         # ここで落とす。続行すると baseline と同じ数字が出て、効かなかったのか
         # Dataset が無かったのか区別できないログだけが残る。
@@ -2106,6 +2138,9 @@ def stage_install():
                      "cuda_after_install": torch.version.cuda,
                      "wheelhouse": {"dirs": len(_wh_dirs),
                                     "no_index": bool(_pip_extra)},
+                     # 復元の有無と**エントリ数**。`entries` が小さいまま起動が
+                     # 速くならなければ「効いていない」ではなく「tar が不完全」。
+                     "warm_cache_restore": dict(_WC_INFO),
                      "vllm_version": vllm.__version__})
     print(f"⏱ install 内訳: {_MARKS}")
 
