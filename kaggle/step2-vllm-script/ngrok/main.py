@@ -2215,7 +2215,7 @@ def stage_install():
     _WC_REQUIRED = _KC_WC_MODE in ("require", "required")
     # 復元の結果は `timings` に残す。**print だけだと 1 回の実行から読み取れない**
     # （ログは流れるが、`cli timings` で横並びにできない）。
-    _WC_INFO = {"mode": _KC_WC_MODE, "restored": False, "tar": "",
+    _WC_INFO = {"mode": _KC_WC_MODE, "restored": False, "source": "", "tar": "",
                 "mib": 0.0, "entries": 0, "seconds": 0.0, "missing": []}
     # 「完全な tar か」の判定に**件数を使わない**。件数は Triton の版で変わるし、
     # しきい値を置くと「正当な tar を弾く」ほうに倒れる。代わりに**名前で見る**。
@@ -2238,23 +2238,62 @@ def stage_install():
     # そのため `if _wc:` だけでは常に真になり、tar が 1 本も無いときに**何も
     # 表示しないまま素通り**していた（実測 2026-11-01: ログに warm cache の行が
     # 1 行も出ず、効いているのか判別できなかった）。
+    #
+    # **Kaggle は Dataset に上げた `.tar` を展開して保持する。** 実測 2026-11-01:
+    # 195 MB の tar を `datasets create` したら、マウント側は
+    # `root/.triton/cache/<hash>/...` の木になっていて `*.tar` は 1 本も無かった。
+    # 「tar が無い＝キャッシュが無い」と読むと**正当な Dataset を落とす**ので、
+    # tar と展開済みの木の両方を受ける。
+    def _kc_wc_tree(root):
+        """Dataset の中の Triton キャッシュのディレクトリ（無ければ ""）。"""
+        if not root or not os.path.isdir(root):
+            return ""
+        base = root.rstrip(os.sep).count(os.sep)
+        for _dp, _dn, _fs in os.walk(root):
+            if (os.path.basename(_dp) == "cache"
+                    and os.path.basename(os.path.dirname(_dp)) == ".triton"):
+                return _dp
+            if _dp.count(os.sep) - base >= 4:      # これ以上は潜らない
+                _dn[:] = []
+        return ""
+
+
     _tars = [] if not _USE_WARM_CACHE else (
         _glob.glob(os.path.join(_wc, "*.tar"))
         + _glob.glob(os.path.join(_wc, "*", "*.tar")))
+    _tree = "" if not _USE_WARM_CACHE else _kc_wc_tree(_wc)
     if not _USE_WARM_CACHE:
         print("ℹ warm cache: KC_WARM_CACHE=0 なので復元しない（A/B の対照）")
-    elif _tars:
+    elif _tars or _tree:
+        import shutil as _sh2
         import tarfile as _tf2
-        for _t in _tars:
+        # 復元先を**数える**。`extractall("/")` は tar の arcname 次第で
+        # どこへでも落ちるので、サイズだけ出していると「復元したのに 1 件も
+        # 当たらない」を 1 往復使って調べることになる。
+        # Triton は 1 カーネル 1 ディレクトリなので直下の数で足りる。
+        _tc = os.path.join(os.path.expanduser("~"), ".triton", "cache")
+        _t0 = __import__("time").time()
+        # tar があれば tar（展開済みの木は見ない＝二重にコピーしない）。
+        _srcs = list(_tars) if _tars else [_tree]
+        for _s in _srcs:
             try:
-                _t0 = __import__("time").time()
-                with _tf2.open(_t) as _f:
-                    _f.extractall("/")
-                # 復元先を**数える**。`extractall("/")` は tar の arcname 次第で
-                # どこへでも落ちるので、サイズだけ出していると「復元したのに
-                # 1 件も当たらない」を 1 往復使って調べることになる。
-                # Triton は 1 カーネル 1 ディレクトリなので直下の数で足りる。
-                _tc = os.path.join(os.path.expanduser("~"), ".triton", "cache")
+                if os.path.isdir(_s):
+                    _mib = 0.0
+                    for _r, _d, _fs in os.walk(_s):
+                        for _fn in _fs:
+                            try:
+                                _mib += os.path.getsize(os.path.join(_r, _fn))
+                            except OSError:
+                                pass
+                    _mib = round(_mib / 1e6, 1)
+                    os.makedirs(_tc, exist_ok=True)
+                    _sh2.copytree(_s, _tc, dirs_exist_ok=True)
+                    _src = _s
+                else:
+                    _mib = round(os.path.getsize(_s) / 1e6, 1)
+                    with _tf2.open(_s) as _f:
+                        _f.extractall("/")
+                    _src = os.path.basename(_s)
                 _n = len(os.listdir(_tc)) if os.path.isdir(_tc) else 0
                 # 入っているカーネル名を集める。Triton は 1 カーネル 1 ディレクトリで、
                 # 中に `<カーネル名>.json` / `.ptx` などを置く。名前で見るのは
@@ -2265,13 +2304,11 @@ def stage_install():
                         _names.append(_fn.lower())
                 _missing = [k for k in _WC_REQUIRED_KERNELS
                             if not any(k in s for s in _names)]
-                _WC_INFO.update(restored=True, tar=os.path.basename(_t),
-                                mib=round(os.path.getsize(_t) / 1e6, 1),
+                _WC_INFO.update(restored=True, source=_src, tar=_src, mib=_mib,
                                 entries=_n, missing=_missing,
                                 seconds=round(__import__("time").time() - _t0, 1))
-                print(f"🧠 キャッシュ復元: {os.path.basename(_t)} "
-                      f"{os.path.getsize(_t)/1e6:.0f} MB ({__import__('time').time()-_t0:.1f}s)"
-                      f" / Triton エントリ {_n}（{_tc}）"
+                print(f"🧠 キャッシュ復元: {_src} {_mib:.0f} MB "
+                      f"({_WC_INFO['seconds']}s) / Triton エントリ {_n}（{_tc}）"
                       + (f" / ⚠ 欠け: {', '.join(_missing)}" if _missing else ""))
             except Exception as _e:
                 print(f"⚠ キャッシュ復元をスキップ: {_e}")
@@ -2280,16 +2317,16 @@ def stage_install():
         # 誤読する。`require` はその誤読を防ぐためのモードなので、ここも落とす。
         if _WC_REQUIRED and not _WC_INFO["restored"]:
             raise RuntimeError(
-                f"KC_WARM_CACHE=require なのに tar を復元できなかった: {_tars}。"
-                "抽出で例外が出ている（上の ⚠ を参照）。")
+                f"KC_WARM_CACHE=require なのに復元できなかった: {_srcs}。"
+                "抽出／コピーで例外が出ている（上の ⚠ を参照）。")
         if _WC_REQUIRED and _WC_INFO["missing"]:
             raise RuntimeError(
-                f"KC_WARM_CACHE=require なのに tar に "
+                f"KC_WARM_CACHE=require なのに "
                 f"{', '.join(_WC_INFO['missing'])} が入っていない: "
-                f"{_WC_INFO['tar']} {_WC_INFO['mib']} MB / "
+                f"{_WC_INFO['source']} {_WC_INFO['mib']} MB / "
                 f"エントリ {_WC_INFO['entries']}。"
                 "この 2 つは 373 秒の主役（profile run の GDN Triton JIT）で、"
-                "無いということは**起動に成功していない回**の tar ということ。"
+                "無いということは**起動に成功していない回**のキャッシュということ。"
                 "不完全なまま測ると『キャッシュは効かない』という偽陰性になる。"
                 "`KC_EXPERIMENT=baseline` の成果物から採り直すこと"
                 "（判断できる場合は KC_WARM_CACHE=1 でこの検査を外せる）。")
@@ -2297,13 +2334,13 @@ def stage_install():
         # ここで落とす。続行すると baseline と同じ数字が出て、効かなかったのか
         # Dataset が無かったのか区別できないログだけが残る。
         raise RuntimeError(
-            f"KC_WARM_CACHE=require なのに tar が 1 本も無い: {_wc}"
+            f"KC_WARM_CACHE=require なのに tar も展開済みの木も無い: {_wc}"
             f"（exists={os.path.isdir(_wc)}）。"
             "Dataset `vllm-warm-cache` が未作成か、空のまま push している。"
             "このまま走らせると baseline と同じ結果になり、"
             "「キャッシュは効かない」という偽陰性になるので中断する。")
     else:
-        # 「Dataset を付け忘れ」と「tar が入っていない」を切り分ける。
+        # 「Dataset を付け忘れ」と「中身が入っていない」を切り分ける。
         print(f"ℹ warm cache なし（compile をやり直す）: {_wc}"
               f" exists={os.path.isdir(_wc)}")
 

@@ -814,10 +814,10 @@ chunk_local_cumsum_scalar_kernel  chunk_scaled_dot_kkt_fwd_kernel
 → 復元用の tar は**起動に成功した回**から採る。`baseline` は out2g と同じ経路を通るので、
 そこで採れた tar が完全版になる。
 
-### 18.3 `vllm-warm-cache` は**まだ存在しない**（2026-11-01 判明）
+### 18.3 `vllm-warm-cache` は 2026-11-01 20:44 に作った（それまでは存在しなかった）
 
-`datasets/warm-cache/dataset-metadata.json` はローカルにあるが、Kaggle 側には
-**一度も作っていない**。`--no-run`（Quick Save）で playground を保存したときに出た警告:
+`datasets/warm-cache/dataset-metadata.json` はローカルにあったが、Kaggle 側には
+**一度も作っていなかった**。`--no-run`（Quick Save）で playground を保存したときに出た警告:
 
 ```
 The following are not valid dataset sources and could not be added to the kernel:
@@ -852,6 +852,25 @@ The following are not valid dataset sources and could not be added to the kernel
 2. `kaggle datasets create -p datasets/warm-cache` で Dataset 化
 3. `--no-run` で playground を保存し直し、警告が消えたことを確認
 4. `KC_EXPERIMENT=cache` で実行（`require` なので、Dataset が無ければ即落ちる）
+
+#### 実行結果（2026-11-01 20:44）
+
+v4 の 195 MB tar で 1〜2 を実行した。**ここで 1 つ想定外が出た**:
+
+```
+$ .venv-kaggle-cli/bin/kaggle datasets files yamahei21python/vllm-warm-cache
+root/.triton/cache/26FVPAU7.../chunk_gated_delta_rule_fwd_kernel_h_blockdim64.cubin
+```
+
+**Kaggle は上げた `.tar` を展開して保持する。** アップロードは成功したのに、
+マウント側に `*.tar` は 1 本も無く、`root/.triton/cache/<hash>/...` の木になっている
+（tar の arcname が `root/...` だったので `root/` が 1 段挟まる）。
+
+このままだと `KC_WARM_CACHE=require` が「tar が 1 本も無い」で**正当な Dataset を
+落とす**。復元側を tar と展開済みの木の両方を受けるように直した
+（`_kc_wc_tree` が `.triton/cache` を探し、`copytree` でローカルへ複製する）。
+`timings.warm_cache_restore.source` にどちらから復元したかが残る。
+`notes/pitfall-coverage.md` #34。
 
 
 

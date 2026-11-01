@@ -412,7 +412,7 @@ _MEASURED_TAR_KERNELS = ("chunk_fwd_kernel_o",
 _COMPLETE_KERNELS = _INCOMPLETE_KERNELS + _MEASURED_TAR_KERNELS
 
 
-def _exec_warm_cache_block(tmp_path, mode, kernels=None):
+def _exec_warm_cache_block(tmp_path, mode, kernels=None, tree=False):
     """install セルの warm cache ブロックだけを exec して `_WC_INFO` を返す。
 
     ブロックは `os` / `_glob` / `kc_find_dataset` にしか依存しないので、この 3 つを
@@ -423,6 +423,10 @@ def _exec_warm_cache_block(tmp_path, mode, kernels=None):
     展開だけ差し替えるのは、ブロックが `extractall("/")` を呼ぶため——tar の
     arcname 次第で**どこへでも書く**ので、テストで本物を走らせてはいけない。
     数える側（`os.walk`）は本物を通すので、「名前を見ている」こと自体は検証できる。
+
+    `tree=True` にすると、tar ではなく**展開済みの木**（`root/.triton/cache/...`）
+    を Dataset に置く。Kaggle は上げた tar を展開して保持するので、こちらが
+    実際のマウント形（実測 2026-11-01）。コピーは本物を通す。
     """
     import os as _os
     import sys as _sys
@@ -435,7 +439,13 @@ def _exec_warm_cache_block(tmp_path, mode, kernels=None):
 
     ds = tmp_path / "dataset"
     ds.mkdir(exist_ok=True)
-    if kernels is not None:
+    if kernels is not None and tree:
+        for i, name in enumerate(kernels):
+            d = ds / "root" / ".triton" / "cache" / f"{i:04d}"
+            d.mkdir(parents=True, exist_ok=True)
+            for ext in ("json", "ptx", "cubin"):
+                (d / f"{name}.{ext}").write_text("x")
+    elif kernels is not None:
         (ds / "warm-cache.tar").write_bytes(b"\0" * 1024)   # getsize を呼ぶので実体が要る
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -578,6 +588,28 @@ def test_warm_cache_require_accepts_a_complete_tar_and_records_the_count(tmp_pat
     assert info["entries"] == len(_COMPLETE_KERNELS), info
     assert info["tar"] == "warm-cache.tar", info
     assert info["mode"] == "require", info
+
+
+def test_warm_cache_restores_an_expanded_dataset(tmp_path):
+    """Kaggle は Dataset に上げた tar を**展開して**保持する（実測）。
+
+    2026-11-01 に 195 MB の tar を `datasets create` したら、マウント側は
+    `root/.triton/cache/<hash>/...` の木で `*.tar` は 1 本も無かった。
+    tar だけを探していると、`require` が**正当な Dataset を落とす**。
+    ここが通らないと `KC_EXPERIMENT=cache` は必ず「tar が無い」で死ぬ。
+    """
+    import os as _os
+
+    info = _exec_warm_cache_block(tmp_path, "require",
+                                  kernels=_COMPLETE_KERNELS, tree=True)
+    assert info["restored"] is True, info
+    assert info["missing"] == [], info
+    assert info["entries"] == len(_COMPLETE_KERNELS), info
+    assert info["source"].endswith(_os.path.join(".triton", "cache")), info
+    # テストのファイルは 1 バイトなので MB は 0 になる。型だけ固定しておく
+    # （`timings.json` に書くので、経路によって int/str になると読み手が壊れる）。
+    assert isinstance(info["mib"], float), info
+    assert info["tar"] == info["source"], info
 
 
 def test_warm_cache_default_mode_warns_but_continues_on_an_incomplete_tar(tmp_path):
