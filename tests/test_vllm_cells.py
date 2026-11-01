@@ -10,6 +10,8 @@
 - ここは「セルの順序・版の出どころ」など**セル内部の契約**だけ
 """
 import glob as _glob  # noqa: E402
+import pathlib  # noqa: E402
+import re  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -399,17 +401,23 @@ def test_warm_cache_is_captured_on_both_paths():
 
 
 
-def _exec_warm_cache_block(tmp_path, mode, tar_entries=None):
+# v15 が残した不完全な tar に入っていた 4 家族。**373 秒の主役が欠けている**。
+_INCOMPLETE_KERNELS = ("_fused_post_conv", "_prepare_rope_positions",
+                       "chunk_local_cumsum_scalar", "chunk_scaled_dot_kkt_fwd")
+_COMPLETE_KERNELS = _INCOMPLETE_KERNELS + ("chunk_o", "chunk_delta_h")
+
+
+def _exec_warm_cache_block(tmp_path, mode, kernels=None):
     """install セルの warm cache ブロックだけを exec して `_WC_INFO` を返す。
 
     ブロックは `os` / `_glob` / `kc_find_dataset` にしか依存しないので、この 3 つを
     差し替えれば単体で動く。Dataset を**空のディレクトリ**に見せかけることで
     「Dataset はあるが tar が無い」＝実際に起きる最悪の形を再現する。
 
-    `tar_entries` を渡すと、その件数だけ展開された状態を作る。展開だけ差し替える
-    のは、ブロックが `extractall("/")` を呼ぶため——tar の arcname 次第で
-    **どこへでも書く**ので、テストで本物を走らせてはいけない。数える側
-    （`os.listdir`）は本物を通すので、「数えている」こと自体は検証できる。
+    `kernels` を渡すと、そのカーネルだけが入った tar を展開した状態を作る。
+    展開だけ差し替えるのは、ブロックが `extractall("/")` を呼ぶため——tar の
+    arcname 次第で**どこへでも書く**ので、テストで本物を走らせてはいけない。
+    数える側（`os.walk`）は本物を通すので、「名前を見ている」こと自体は検証できる。
     """
     import os as _os
     import sys as _sys
@@ -422,7 +430,7 @@ def _exec_warm_cache_block(tmp_path, mode, tar_entries=None):
 
     ds = tmp_path / "dataset"
     ds.mkdir(exist_ok=True)
-    if tar_entries is not None:
+    if kernels is not None:
         (ds / "warm-cache.tar").write_bytes(b"\0" * 1024)   # getsize を呼ぶので実体が要る
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -435,10 +443,14 @@ def _exec_warm_cache_block(tmp_path, mode, tar_entries=None):
             return False
 
         def extractall(self, root):
+            # Triton の実配置に合わせる: 1 カーネル 1 ディレクトリで、
+            # 中に `<カーネル名>.<ext>` が入る。
             tc = _os.path.join(_os.environ["HOME"], ".triton", "cache")
-            _os.makedirs(tc, exist_ok=True)
-            for i in range(tar_entries):
-                _os.makedirs(_os.path.join(tc, f"kernel-{i:03d}"), exist_ok=True)
+            for i, name in enumerate(kernels):
+                d = _os.path.join(tc, f"{i:04d}")
+                _os.makedirs(d, exist_ok=True)
+                for ext in ("json", "ptx", "cubin"):
+                    (pathlib.Path(d) / f"{name}.{ext}").write_text("x")
 
     fake = _types.ModuleType("tarfile")
     fake.open = lambda path: _FakeTar()
@@ -465,6 +477,34 @@ def _exec_warm_cache_block(tmp_path, mode, tar_entries=None):
             _sys.modules.pop("tarfile", None)
 
 
+def test_attempt_timeout_covers_the_whole_startup_budget():
+    """1 試行の上限が総予算より小さいと、**遅い回は必ず切られる**。
+
+    2026-11-01 の `baseline` は 2 試行とも「壊れた」のではなく予算で切られた:
+    attempt 1 は 900 秒（`ATTEMPT_TIMEOUT`）で重みロードの途中、
+    attempt 2 は 806 秒（残予算でクランプ）で SIGTERM。
+    同じ回の vLLM ログは `Checkpoint size: 17.41 GiB / Available RAM: 5.85 GiB`
+    で prefetch を切り、GCSFUSE からの読みが 20 MiB/s 前後まで落ちていた。
+    17.41 GiB ÷ 20 MiB/s ≒ 900 秒に、profile run の 373 秒が乗る。
+
+    「遅い」失敗と「非対応」失敗は別物。非対応は即座に落ちるので予算を食わず、
+    次の段に回せる。遅いだけの試行を短い枠で切ると次段も同じ理由で落ちる。
+    """
+    src = _cells.cell(*SERVE)
+    budget = re.search(
+        r'STARTUP_BUDGET = int\(os\.environ\.get\("VLLM_STARTUP_BUDGET", "(\d+)"\)\)', src)
+    attempt = re.search(
+        r'ATTEMPT_TIMEOUT = int\(os\.environ\.get\("VLLM_ATTEMPT_TIMEOUT", "(\d+)"\)\)', src)
+    assert budget and attempt, "既定値の定義が見つからない"
+    b, a = int(budget.group(1)), int(attempt.group(1))
+    assert a >= b, (
+        f"1 試行の上限 {a}s が総予算 {b}s より小さい。遅い回は必ず切られる"
+        "（実測 2026-11-01: 重みだけで 900 秒 + profile run 373 秒）")
+    assert b >= 2400, (
+        f"総予算 {b}s は実測の遅い側に足りない。重み 900s + profile 373s + "
+        "compile 60s + smoke に余裕を持たせること")
+
+
 def test_warm_cache_require_raises_on_an_empty_dataset(tmp_path):
     """`require` は tar が 1 本も無ければ**実行時に**落ちる（テキストでなく挙動）。
 
@@ -477,36 +517,52 @@ def test_warm_cache_require_raises_on_an_empty_dataset(tmp_path):
     assert "偽陰性" in str(e.value), "落ちる理由がメッセージに無い"
 
 
-def test_warm_cache_require_rejects_an_incomplete_tar(tmp_path):
-    """復元はできるが**中身が薄い** tar も `require` では落とす。
+def test_warm_cache_require_rejects_a_tar_without_the_profile_run_kernels(tmp_path):
+    """復元はできるが**373 秒の主役が欠けている** tar も `require` では落とす。
 
     実測 2026-11-01: 重みロード中に落ちた回の tar は 30 エントリ / 23.9 MB で、
-    373 秒の主役（`chunk_o` / `chunk_delta_h`）が入っていなかった。これは
-    起動に成功していない＝profile run に到達していない回のもの。復元すると
-    一部だけ当たって「少し効いた」ように見え、やはり偽陰性になる。
+    `chunk_o` / `chunk_delta_h` が入っていなかった（profile run に未到達）。
+    復元すると一部だけ当たって「少し効いた」ように見えるので、件数ではなく
+    **名前**で判定する（件数は Triton の版で変わり、しきい値を置くと正当な tar を
+    弾くほうに倒れる）。
     """
     with pytest.raises(RuntimeError) as e:
-        _exec_warm_cache_block(tmp_path, "require", tar_entries=30)
+        _exec_warm_cache_block(tmp_path, "require",
+                               kernels=_INCOMPLETE_KERNELS)
     msg = str(e.value)
-    assert "30" in msg, f"件数がメッセージに無い: {msg}"
+    assert "chunk_o" in msg and "chunk_delta_h" in msg, \
+        f"何が欠けているか書いていない: {msg}"
     assert "偽陰性" in msg, f"落ちる理由がメッセージに無い: {msg}"
 
 
 def test_warm_cache_require_accepts_a_complete_tar_and_records_the_count(tmp_path):
-    """エントリが十分あれば通り、**復元数が `_WC_INFO` に残る**。
+    """主役が揃っていれば通り、**復元の内訳が `_WC_INFO` に残る**。
 
     `print` だけだと `cli timings` で横並びにできず、1 回の実行から
     「効いたのか、そもそも当たっていないのか」を読み返せない。
     """
-    info = _exec_warm_cache_block(tmp_path, "require", tar_entries=200)
+    info = _exec_warm_cache_block(tmp_path, "require",
+                                  kernels=_COMPLETE_KERNELS)
     assert info["restored"] is True, info
-    assert info["entries"] == 200, info
+    assert info["missing"] == [], info
+    assert info["entries"] == len(_COMPLETE_KERNELS), info
     assert info["tar"] == "warm-cache.tar", info
     assert info["mode"] == "require", info
 
 
+def test_warm_cache_default_mode_warns_but_continues_on_an_incomplete_tar(tmp_path):
+    """既定 `1` は欠けていても落ちない（本番は Dataset 次第で走り続ける）。
+
+    ただし `missing` に残すので、`timings` を見れば「効かなかった」ではなく
+    「tar が不完全だった」と後から判る。
+    """
+    info = _exec_warm_cache_block(tmp_path, "1", kernels=_INCOMPLETE_KERNELS)
+    assert info["restored"] is True, info
+    assert info["missing"] == ["chunk_o", "chunk_delta_h"], info
+
+
 def test_warm_cache_restore_count_reaches_timings():
-    """復元数は `timings` まで運ばれている（セルの中で止めていない）。
+    """復元の内訳は `timings` まで運ばれている（セルの中で止めていない）。
 
     `_WC_INFO` を作るだけで `kc_save_timings` に入れ忘れると、ログにしか
     残らず `cli timings` から見えなくなる。

@@ -328,11 +328,29 @@ CT_Q = ["--quantization", "compressed-tensors"]  # 明示（pack-quantized）
 # --quantization awq / auto は config の compressed-tensors と不一致で
 # ModelConfig の検証に落ちる（cfgresolve 実測）。試行段からは外した。
 
-STARTUP_BUDGET = int(os.environ.get("VLLM_STARTUP_BUDGET", "1800"))   # 30 分
-ATTEMPT_TIMEOUT = int(os.environ.get("VLLM_ATTEMPT_TIMEOUT", "900"))  # 1 試行 15 分
+STARTUP_BUDGET = int(os.environ.get("VLLM_STARTUP_BUDGET", "2700"))   # 45 分
+ATTEMPT_TIMEOUT = int(os.environ.get("VLLM_ATTEMPT_TIMEOUT", "2700"))  # 1 試行に総予算を渡す
 # 10/31 のリセット後（30h）前提の値。install は wheelhouse Dataset で
 # 60〜120s になる見込み（未実測）。短い予算で回すときは環境変数で下げる。
 # 注意: 残クォータが 30 分未満のときにこの設定で push しないこと。
+#
+# **なぜ 1800/900 をやめたか（2026-11-01 実測）**
+# `baseline` が 2 試行とも「切られた」だけで、壊れてはいなかった:
+#   attempt 1 … 900 秒（ATTEMPT_TIMEOUT）で終了、重みロードの途中
+#   attempt 2 … 806 秒（残予算でクランプ）で SIGTERM、
+#               08:07:53 開始 → 08:14:32 に embed_tokens まで到達、
+#               その後 `Loading weights took` が出ないまま打ち切り
+# 同じ回の vLLM ログは `Checkpoint size: 17.41 GiB / Available RAM: 5.85 GiB`
+# で prefetch を切り、GCSFUSE からの読みが 20 MiB/s 前後まで落ちていた。
+# 17.41 GiB ÷ 20 MiB/s ≒ 900 秒。**重みだけで 1 試行の枠を使い切る**ので、
+# そのあとの profile run（373 秒）に絶対に届かない。
+# 実測の幅は 103 MiB/s（out2g: 18.21 GiB / 181s）〜 20 MiB/s と 5 倍ある。
+# 予算は**速い回**に合わせると遅い回が必ず落ちるので、遅い側に合わせる。
+#
+# `ATTEMPT_TIMEOUT` を総予算と同値にしてあるのは、「遅い」失敗と
+# 「非対応」失敗を区別するため。非対応は即座に落ちる（SGLang の sm80 など）ので
+# 予算をほとんど食わず、次の段に回せる。遅いだけの試行を 15 分で切ると
+# **必ず落ちる**うえ、次段も同じ理由で落ちる。
 
 PLAN = []
 # 予算 1500s で 1 試行 600s。MTP を 2 段続けると失敗時に予算を食い潰すので、

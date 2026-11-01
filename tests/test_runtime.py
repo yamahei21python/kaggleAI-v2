@@ -479,7 +479,11 @@ def test_watch():
     samples = []
     try:
         samples, stop = proc.kc_watch(p.pid, every=0.1, keep=3)
-        time.sleep(0.5)
+        # 固定時間だけ待つと、`cli check` が他のテストと並んで走るときに
+        # サンプルが 2 件しか来ず落ちる（実測）。`keep` に達するまで待つ。
+        deadline = time.time() + 5
+        while len(samples) < 3 and time.time() < deadline:
+            time.sleep(0.02)
         check("kc_watch は keep 件まで溜める", len(samples) == 3, str(len(samples)))
         check("経過秒が入る", all("t" in x for x in samples), str(samples))
         if os.path.isdir("/proc"):          # macOS には無い

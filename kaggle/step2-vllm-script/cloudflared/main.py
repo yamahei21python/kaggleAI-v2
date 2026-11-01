@@ -1756,13 +1756,12 @@ def stage_install():
     # 復元の結果は `timings` に残す。**print だけだと 1 回の実行から読み取れない**
     # （ログは流れるが、`cli timings` で横並びにできない）。
     _WC_INFO = {"mode": _KC_WC_MODE, "restored": False, "tar": "",
-                "mib": 0.0, "entries": 0, "seconds": 0.0}
-    # 「完全な tar か」の目安。実測 2026-11-01: 重みロード中に落ちた回の tar は
-    # **30 エントリ / 23.9 MB** で、373 秒の主役である `chunk_o` /
-    # `chunk_delta_h` が入っていなかった（profile run に到達していない）。
-    # 起動に成功した回は 100〜200 と見込まれる。50 はその間に置いた**経験値**で、
-    # 厳密な判定ではない。誤検知が嫌なら `KC_WARM_CACHE=1`（検査しない）で回す。
-    _WC_MIN_ENTRIES = 50
+                "mib": 0.0, "entries": 0, "seconds": 0.0, "missing": []}
+    # 「完全な tar か」の判定に**件数を使わない**。件数は Triton の版で変わるし、
+    # しきい値を置くと「正当な tar を弾く」ほうに倒れる。代わりに**名前で見る**。
+    # 373 秒の主役は `chunk_o` / `chunk_delta_h`（この 2 つが無い tar は
+    # profile run に到達していない回のもの。実測 2026-11-01 の 30 エントリの tar）。
+    _WC_REQUIRED_KERNELS = ("chunk_o", "chunk_delta_h")
     _wc = kc_find_dataset("vllm-warm-cache")
     # `kc_find_dataset` は**見つからなくても既定パスを返す**（`/kaggle/input/<slug>`）。
     # そのため `if _wc:` だけでは常に真になり、tar が 1 本も無いときに**何も
@@ -1786,30 +1785,40 @@ def stage_install():
                 # Triton は 1 カーネル 1 ディレクトリなので直下の数で足りる。
                 _tc = os.path.join(os.path.expanduser("~"), ".triton", "cache")
                 _n = len(os.listdir(_tc)) if os.path.isdir(_tc) else 0
+                # 入っているカーネル名を集める。Triton は 1 カーネル 1 ディレクトリで、
+                # 中に `<カーネル名>.json` / `.ptx` などを置く。名前で見るのは
+                # 件数より意味がはっきりしているため（件数は Triton の版で変わる）。
+                _names = []
+                for _r, _d, _fs in os.walk(_tc):
+                    for _fn in _fs:
+                        _names.append(_fn.lower())
+                _missing = [k for k in _WC_REQUIRED_KERNELS
+                            if not any(k in s for s in _names)]
                 _WC_INFO.update(restored=True, tar=os.path.basename(_t),
                                 mib=round(os.path.getsize(_t) / 1e6, 1),
-                                entries=_n,
+                                entries=_n, missing=_missing,
                                 seconds=round(__import__("time").time() - _t0, 1))
                 print(f"🧠 キャッシュ復元: {os.path.basename(_t)} "
                       f"{os.path.getsize(_t)/1e6:.0f} MB ({__import__('time').time()-_t0:.1f}s)"
-                      f" / Triton エントリ {_n}（{_tc}）")
+                      f" / Triton エントリ {_n}（{_tc}）"
+                      + (f" / ⚠ 欠け: {', '.join(_missing)}" if _missing else ""))
             except Exception as _e:
                 print(f"⚠ キャッシュ復元をスキップ: {_e}")
-        # 復元はできたが**中身が薄い**場合。不完全な tar（30 エントリ）を復元すると
-        # 一部だけ当たって「少し効いた」ように見え、373 秒が戻る理由を
-        # 「キャッシュは効かない」と誤読する。`require` はその誤読を防ぐための
-        # モードなので、ここも落とす。
+        # 復元はできたが**中身が薄い**場合。不完全な tar を復元すると一部だけ当たって
+        # 「少し効いた」ように見え、373 秒が戻る理由を「キャッシュは効かない」と
+        # 誤読する。`require` はその誤読を防ぐためのモードなので、ここも落とす。
         if _WC_REQUIRED and not _WC_INFO["restored"]:
             raise RuntimeError(
                 f"KC_WARM_CACHE=require なのに tar を復元できなかった: {_tars}。"
                 "抽出で例外が出ている（上の ⚠ を参照）。")
-        if _WC_REQUIRED and _WC_INFO["entries"] < _WC_MIN_ENTRIES:
+        if _WC_REQUIRED and _WC_INFO["missing"]:
             raise RuntimeError(
-                f"KC_WARM_CACHE=require なのに復元後のエントリが "
-                f"{_WC_INFO['entries']} 件しかない（下限 {_WC_MIN_ENTRIES}）: "
-                f"{_WC_INFO['tar']} {_WC_INFO['mib']} MB。"
-                "この tar は起動に成功していない回のもので、"
-                "373 秒の主役（chunk_o / chunk_delta_h）が入っていない可能性が高い。"
+                f"KC_WARM_CACHE=require なのに tar に "
+                f"{', '.join(_WC_INFO['missing'])} が入っていない: "
+                f"{_WC_INFO['tar']} {_WC_INFO['mib']} MB / "
+                f"エントリ {_WC_INFO['entries']}。"
+                "この 2 つは 373 秒の主役（profile run の GDN Triton JIT）で、"
+                "無いということは**起動に成功していない回**の tar ということ。"
                 "不完全なまま測ると『キャッシュは効かない』という偽陰性になる。"
                 "`KC_EXPERIMENT=baseline` の成果物から採り直すこと"
                 "（判断できる場合は KC_WARM_CACHE=1 でこの検査を外せる）。")
@@ -2484,11 +2493,29 @@ def launch(model_dir):
     # --quantization awq / auto は config の compressed-tensors と不一致で
     # ModelConfig の検証に落ちる（cfgresolve 実測）。試行段からは外した。
 
-    STARTUP_BUDGET = int(os.environ.get("VLLM_STARTUP_BUDGET", "1800"))   # 30 分
-    ATTEMPT_TIMEOUT = int(os.environ.get("VLLM_ATTEMPT_TIMEOUT", "900"))  # 1 試行 15 分
+    STARTUP_BUDGET = int(os.environ.get("VLLM_STARTUP_BUDGET", "2700"))   # 45 分
+    ATTEMPT_TIMEOUT = int(os.environ.get("VLLM_ATTEMPT_TIMEOUT", "2700"))  # 1 試行に総予算を渡す
     # 10/31 のリセット後（30h）前提の値。install は wheelhouse Dataset で
     # 60〜120s になる見込み（未実測）。短い予算で回すときは環境変数で下げる。
     # 注意: 残クォータが 30 分未満のときにこの設定で push しないこと。
+    #
+    # **なぜ 1800/900 をやめたか（2026-11-01 実測）**
+    # `baseline` が 2 試行とも「切られた」だけで、壊れてはいなかった:
+    #   attempt 1 … 900 秒（ATTEMPT_TIMEOUT）で終了、重みロードの途中
+    #   attempt 2 … 806 秒（残予算でクランプ）で SIGTERM、
+    #               08:07:53 開始 → 08:14:32 に embed_tokens まで到達、
+    #               その後 `Loading weights took` が出ないまま打ち切り
+    # 同じ回の vLLM ログは `Checkpoint size: 17.41 GiB / Available RAM: 5.85 GiB`
+    # で prefetch を切り、GCSFUSE からの読みが 20 MiB/s 前後まで落ちていた。
+    # 17.41 GiB ÷ 20 MiB/s ≒ 900 秒。**重みだけで 1 試行の枠を使い切る**ので、
+    # そのあとの profile run（373 秒）に絶対に届かない。
+    # 実測の幅は 103 MiB/s（out2g: 18.21 GiB / 181s）〜 20 MiB/s と 5 倍ある。
+    # 予算は**速い回**に合わせると遅い回が必ず落ちるので、遅い側に合わせる。
+    #
+    # `ATTEMPT_TIMEOUT` を総予算と同値にしてあるのは、「遅い」失敗と
+    # 「非対応」失敗を区別するため。非対応は即座に落ちる（SGLang の sm80 など）ので
+    # 予算をほとんど食わず、次の段に回せる。遅いだけの試行を 15 分で切ると
+    # **必ず落ちる**うえ、次段も同じ理由で落ちる。
 
     PLAN = []
     # 予算 1500s で 1 試行 600s。MTP を 2 段続けると失敗時に予算を食い潰すので、
