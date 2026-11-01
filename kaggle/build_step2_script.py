@@ -25,7 +25,7 @@ HERE = pathlib.Path(__file__).resolve().parent          # kaggle/
 ROOT = HERE.parent                                      # リポジトリ直下
 sys.path.insert(0, str(ROOT))
 import kcconfig  # noqa: E402
-from kbuild import embed, metadata, serve_script  # noqa: E402
+from kbuild import embed, metadata, serve_script, spec  # noqa: E402
 from kbuild.settings_cell import render as render_settings  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 from runtime.constants import PROXY_PORT  # noqa: E402
@@ -124,15 +124,8 @@ ENGINE = {
 }
 
 SLUG = f"step2-orcarouter-qwen38-27b-{TUNNEL}-script"
-META = metadata.base(
-    id=f"{OWNER}/{SLUG}",
-    title=SLUG.replace("-", " "),
-    code_file="main.py",
-    kernel_type="script",
-    gpu=True,
-    datasets=[f"{OWNER}/{DATASET}", f"{OWNER}/{PATCH}",
-              f"{OWNER}/my-cloudflared-bin"],
-)
+# metadata は台帳から引く（datasets も台帳側）。
+META = metadata.for_kernel(spec.find(SLUG))
 
 if __name__ == "__main__":
     serve_script.write(

@@ -48,14 +48,7 @@ HEADER = (
 
 body = pack_script.from_cells(cells, header=HEADER)
 
-META = metadata.base(
-    id=kernel.id,
-    title=kernel.title,
-    code_file="main.py",
-    kernel_type="script",
-    gpu=kernel.gpu,
-    datasets=kernel.datasets,
-)
+META = metadata.for_kernel(kernel)
 
 if __name__ == "__main__":
     pack_script.write(ROOT / OUT_REL, body, META)

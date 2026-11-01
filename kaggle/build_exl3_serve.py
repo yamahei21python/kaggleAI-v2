@@ -23,7 +23,7 @@ ROOT = HERE.parent                                      # リポジトリ直下
 OUT = HERE / "exl3-serve-kernel"
 sys.path.insert(0, str(ROOT))
 import kcconfig  # noqa: E402
-from kbuild import embed, metadata, serve_script  # noqa: E402
+from kbuild import embed, metadata, serve_script, spec  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 from runtime.constants import (  # noqa: E402
     CHAT_PORT,
@@ -185,35 +185,13 @@ def _engine(mode: str) -> dict:
 
 
 OWNER = "yamahei21python"
-EXL3_DATASET = f"{OWNER}/qwen38-27b-uncensored-exl3-4bpw"
-CLOUDFLARED_DATASET = f"{OWNER}/my-cloudflared-bin"
 
-METADATA_REAL = metadata.base(
-    id=f"{OWNER}/exl3-serve",
-    title="EXL3 serve",
-    code_file="main.py",
-    kernel_type="script",
-    gpu=True,
-    datasets=[EXL3_DATASET, CLOUDFLARED_DATASET],
-)
-
-METADATA_DRYRUN = metadata.base(
-    id=f"{OWNER}/exl3-serve-dryrun",
-    title="EXL3 serve dryrun",
-    code_file="main.py",
-    kernel_type="script",
-    gpu=False,
-    datasets=[CLOUDFLARED_DATASET],
-)
-
-METADATA_KEEPALIVE = metadata.base(
-    id=f"{OWNER}/exl3-serve-keepalive",
-    title="EXL3 serve keepalive",
-    code_file="main.py",
-    kernel_type="script",
-    gpu=False,
-    datasets=[],
-)
+# metadata は**台帳から引く**。id / title / gpu / datasets をここで手書きすると、
+# 台帳とずれても誰も気づけない（生成物を目で見比べるまで分からない）。
+# datasets は台帳側（`kbuild/spec.py`）に移した。
+METADATA_REAL = metadata.for_kernel(spec.find("exl3-serve"))
+METADATA_DRYRUN = metadata.for_kernel(spec.find("exl3-serve-dryrun"))
+METADATA_KEEPALIVE = metadata.for_kernel(spec.find("exl3-serve-keepalive"))
 
 
 def write(mode, out_dir, meta, run_minutes, smoke=False):

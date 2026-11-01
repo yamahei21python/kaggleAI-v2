@@ -135,7 +135,7 @@ kbuild/      # 梱包の共通層（spec / embed / metadata / pack_nb / pack_scr
              #   serve_notebook / serve_script / settings_cell / secrets）
 runtime/     # カーネルに埋め込む真実源（net / proc / storage / keepalive / proxy / quota / engines）
 cli/         # CLI（build / push / check / list / ask / quota）
-tests/       # pytest（114 本）
+tests/       # pytest（本数は書かない。`--collect-only` で数える）
 lib/         # ローカルランチャー共通（launcher-common.zsh）
 notes/       # 設計メモ・台帳・実測ログ（索引は notes/index.md）
 ```
@@ -315,9 +315,9 @@ python3 -m cli build                        # 全ビルダー
 python3 -m cli build --smoke                # smoke 変種も生成（別ディレクトリ）
 python3 kaggle/build_engine_serve.py        # LMDeploy / SGLang（cli build に含まれる）
 python3 -m ruff check .
-python3 -m pytest tests -q                  # 109 本
-python3 kaggle/check_notebooks.py           # 13 冊の一致
-python3 kaggle/check_scripts.py             # 18 カーネル / 46 ファイルの一致
+python3 -m pytest tests -q                  # 全テスト
+python3 kaggle/check_notebooks.py           # notebook がビルダー出力と一致
+python3 kaggle/check_scripts.py             # script がビルダー出力と一致
 python3 -m compileall -q kaggle/exl3-serve-kernel kaggle/ci-cpu kaggle/step2-script
 ```
 

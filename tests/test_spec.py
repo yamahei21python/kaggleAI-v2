@@ -3,6 +3,7 @@
 spec を唯一の真実源にするため、生成済みの kernel-metadata.json と
 突き合わせる。ズレたらどちらかを直す。
 """
+import ast
 import json
 
 import pytest
@@ -139,3 +140,51 @@ def test_find_accepts_name_and_id_and_path():
     assert spec.find("kaggle/exl3-serve-kernel/serve") is kernel
     with pytest.raises(KeyError):
         spec.find("nope")
+
+
+def test_builders_take_metadata_from_the_ledger():
+    """ビルダーは `metadata.for_kernel` で台帳から引く（手書きしない）。
+
+    2026-11-02 まで 10 本のビルダーが `metadata.base(id=..., title=...,
+    gpu=..., datasets=[...])` を手書きしていた。台帳と二重管理になるので、
+    片方だけ直しても**生成物を見比べるまで誰も気づけない**。
+
+    例外は 2 本だけで、どちらも「台帳に無いカーネル」を作る:
+      - `build_serve_url_beacon.py` … 任意の slug（`KC_BEACON_SLUG`）で掲示板を作る
+      - `build_llama_server_script.py` … llama-server 系は台帳に id が無い（退役）
+    """
+    allowed = {"build_serve_url_beacon.py", "build_llama_server_script.py"}
+    offenders = []
+    for path in sorted(spec.ROOT.glob("kaggle/build_*.py")):
+        if path.name in allowed:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "base"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "metadata"):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, (
+        "台帳を使わず metadata.base を手書きしている: " + ", ".join(offenders))
+
+
+def test_for_kernel_matches_the_ledger():
+    """`for_kernel` は台帳の値だけを使い、上書きは明示した分だけ効く。"""
+    from kbuild import metadata
+
+    kernel = spec.find("step2-vllm-qwen38-27b-cloudflared-script")
+    meta = metadata.for_kernel(kernel)
+    assert meta["id"] == kernel.id
+    assert meta["title"] == kernel.title
+    assert meta["kernel_type"] == kernel.kind
+    assert meta["enable_gpu"] is kernel.gpu
+    assert tuple(meta["dataset_sources"]) == kernel.datasets
+    metadata.validate(meta)
+
+    # script 版は `code_file` を明示で上書きできる（台帳は main.py だが、
+    # notebook 側の台帳エントリを流用する場合に要る）。
+    assert metadata.for_kernel(kernel, code_file="x.py")["code_file"] == "x.py"
+    # gpu=False は「上書きしない」と区別される（None だけが既定に落ちる）
+    assert metadata.for_kernel(kernel, gpu=False)["enable_gpu"] is False

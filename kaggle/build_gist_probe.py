@@ -19,7 +19,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 import kcconfig  # noqa: E402
-from kbuild import metadata, pack_script  # noqa: E402
+from kbuild import metadata, pack_script, spec  # noqa: E402
 from runtime import source_bundle  # noqa: E402
 
 CFG = kcconfig.load(ROOT)
@@ -124,15 +124,8 @@ if __name__ == "__main__":
     sys.exit(main())
 ''').substitute(GIST_ID=GIST_ID_DEFAULT)
 
-META = metadata.base(
-    id=f"{OWNER}/gist-probe",
-    title="gist probe",
-    code_file="main.py",
-    kernel_type="script",
-    gpu=False,
-    datasets=[],
-    internet=True,
-)
+# 台帳から引く（手書きすると台帳とずれても気づけない）。
+META = metadata.for_kernel(spec.find("gist-probe"), internet=True)
 
 if __name__ == "__main__":
     pack_script.write(

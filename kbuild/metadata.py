@@ -52,6 +52,31 @@ def base(
     }
 
 
+def for_kernel(kernel, *, code_file=None, kernel_type=None, gpu=None,
+               datasets=None, title=None, internet=True, private=True) -> dict:
+    """台帳（`kbuild/spec.py` の `Kernel`）から metadata を組み立てる。
+
+    ビルダーが id / title / kind / gpu / datasets を手書きすると、台帳と
+    ずれても**誰も気づけない**。`cli build` は台帳の env を渡すだけで、出力は
+    ビルダーが書いた値になるため。ここを通せば台帳が唯一の出どころになる。
+
+    `spec` を import しない（循環を避ける）ので、`Kernel` と同じ属性
+    （`id` / `title` / `code_file` / `kind` / `gpu` / `datasets`）を持つ
+    オブジェクトなら何でもよい。`code_file` だけは script 版で `main.py` に
+    なるなど台帳と違うことがあるので、明示で上書きできる。
+    """
+    return base(
+        id=kernel.id,
+        title=title or kernel.title,
+        code_file=code_file or kernel.code_file,
+        kernel_type=kernel_type or kernel.kind,
+        gpu=kernel.gpu if gpu is None else gpu,
+        datasets=kernel.datasets if datasets is None else datasets,
+        internet=internet,
+        private=private,
+    )
+
+
 def write(path, meta: dict, newline: bool = False) -> None:
     validate(meta)
     text = json.dumps(meta, indent=2, ensure_ascii=False)

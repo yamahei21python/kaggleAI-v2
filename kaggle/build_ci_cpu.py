@@ -11,7 +11,7 @@ from string import Template
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
-from kbuild import metadata, pack_script  # noqa: E402
+from kbuild import metadata, pack_script, spec  # noqa: E402
 
 OWNER = "yamahei21python"
 REPO = "kaggleAI-v2"
@@ -125,15 +125,8 @@ if __name__ == "__main__":
     sys.exit(main())
 ''').substitute(REF=REF)
 
-META = metadata.base(
-    id=f"{OWNER}/ci-cpu",
-    title="ci-cpu",
-    code_file="main.py",
-    kernel_type="script",
-    gpu=False,
-    datasets=[],
-    internet=True,
-)
+# 台帳から引く（手書きすると台帳とずれても気づけない）。
+META = metadata.for_kernel(spec.find("ci-cpu"), internet=True)
 
 if __name__ == "__main__":
     pack_script.write(OUT, BODY, META, newline_meta=True)

@@ -22,7 +22,8 @@ HERE = pathlib.Path(__file__).resolve().parent          # kaggle/
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 import kcconfig  # noqa: E402
-from kbuild import embed, metadata, pack_script, serve_script  # noqa: E402
+from kbuild import (embed, metadata, pack_script,  # noqa: E402
+                     serve_script, spec)
 from kbuild.settings_cell import render as render_settings  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 from runtime.constants import PROXY_PORT, VLLM_PORT  # noqa: E402
@@ -96,18 +97,10 @@ ENGINE = {
 }
 
 SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}-script"
-META = metadata.base(
-    id=f"{OWNER}/{SLUG}",
-    title=SLUG.replace("-", " "),
-    code_file="main.py",
-    kernel_type="script",
-    gpu=True,
-    # wheelhouse 2 点（本体 + cublas patch）。patch は cuda-toolkit 13.0.3 が
-    # `nvidia-cublas==13.1.1.3.*` を固定するため必要（CPU 実測 2026-10-31）。
-    # 解決に失敗しても install 側が PyPI へフォールバックする。
-    datasets=[f"{OWNER}/{DATASET_SLUG}", f"{OWNER}/my-cloudflared-bin",
-              f"{OWNER}/vllm-wheelhouse", f"{OWNER}/vllm-wheelhouse-patch"],
-)
+# metadata は台帳から引く。datasets（モデル + cloudflared + wheelhouse 2 点）も
+# 台帳側に移した。wheelhouse の patch が要る理由は `kbuild/spec.py` の当該行に
+# 書いてある（cuda-toolkit 13.0.3 が `nvidia-cublas` を固定するため）。
+META = metadata.for_kernel(spec.find(SLUG))
 
 if __name__ == "__main__":
     serve_script.write(

@@ -7,22 +7,26 @@ GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定し�
 
 ## テストの置き場所
 
-| ファイル | 役割 | 本数 |
-|---|---|---|
-| `tests/test_gpu_pitfalls.py` | **症状 → 防御**の一覧（この文書の表） | 23 |
-| `tests/test_vllm_cells.py` | vLLM の**セル内部**の契約（順序・版の出どころ・可観測性） | 27 |
-| `tests/test_serve_script_guards.py` | **全エンジン共通**の足場（`wait_http` / `find_model` / `stage_env` / `ENGINE_PATTERN` / `PIP_STEPS`） | 17 |
-| `tests/test_startup_timing.py` | **計測**（節目の解釈・timings の合流・`cli timings`） | 21 |
-| `tests/test_cpu_probes.py` | CPU プローブ（GPU 0 秒）の契約 | 25 |
-| `tests/test_spec.py` | 台帳（`kbuild/spec.py`）と生成物の一致 | 57 |
-| `tests/test_engines.py` | `runtime/engines/*` の差し替え | 20 |
-| `tests/test_cli.py` | `cli` のサブコマンド | 16 |
-| `tests/test_vllm_playground.py` | 実験カーネル（`KC_EXPERIMENT` の効き方） | 11 |
-| `tests/test_smoke_checks.py` | 疎通確認の判定（SKIP 契約・引数の整合） | 6 |
-| その他（`test_serve_notebook` / `test_step2_builder` / `test_runtime` / `test_constants` / `test_exl3_*` / `test_pinned_wheel` / `test_kbuild` / `test_secrets` / `test_notebooks` / `test_step2_proxy`） | — | 41 |
-| `tests/_cells.py` | セルから関数を切り出す共通ヘルパー（規則はここ 1 箇所） | — |
+**本数は書かない。** 以前ここに手書きしていたが、テストを足すたびに古くなり、
+README 側も「114 本」「109 本」と実態（210 本）からずれていた（2026-11-02 の棚卸し）。
+数えたいときは `pytest --collect-only -q | tail -1`（parametrize を含む実数が出る）。
 
-実行: `python3 -m pytest tests/ -q`（**261 本**）。
+| ファイル | 役割 |
+|---|---|
+| `tests/test_gpu_pitfalls.py` | **症状 → 防御**の一覧（この文書の表） |
+| `tests/test_vllm_cells.py` | vLLM の**セル内部**の契約（順序・版の出どころ・可観測性） |
+| `tests/test_serve_script_guards.py` | **全エンジン共通**の足場（`wait_http` / `find_model` / `stage_env` / `ENGINE_PATTERN` / `PIP_STEPS`） |
+| `tests/test_startup_timing.py` | **計測**（節目の解釈・timings の合流・`cli timings`） |
+| `tests/test_cpu_probes.py` | CPU プローブ（GPU 0 秒）の契約 |
+| `tests/test_spec.py` | 台帳（`kbuild/spec.py`）と生成物の一致 |
+| `tests/test_engines.py` | `runtime/engines/*` の差し替え |
+| `tests/test_cli.py` | `cli` のサブコマンド |
+| `tests/test_vllm_playground.py` | 実験カーネル（`KC_EXPERIMENT` の効き方） |
+| `tests/test_smoke_checks.py` | 疎通確認の判定（SKIP 契約・引数の整合） |
+| その他（`test_serve_notebook` / `test_step2_builder` / `test_runtime` / `test_constants` / `test_exl3_*` / `test_pinned_wheel` / `test_kbuild` / `test_secrets` / `test_notebooks` / `test_step2_proxy`） | — |
+| `tests/_cells.py` | セルから関数を切り出す共通ヘルパー（規則はここ 1 箇所） |
+
+実行: `python3 -m pytest tests/ -q`。
 落とし穴の一覧だけなら `python3 -m pytest tests/test_gpu_pitfalls.py -q`。
 
 **同じアサーションを 2 箇所に置かない**。整理のとき、`torchaudio の版` を

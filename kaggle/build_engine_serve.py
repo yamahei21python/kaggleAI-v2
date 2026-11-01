@@ -19,7 +19,7 @@ ROOT = HERE.parent                                      # リポジトリ直下
 OUT = HERE
 sys.path.insert(0, str(ROOT))
 import kcconfig  # noqa: E402
-from kbuild import embed, metadata  # noqa: E402
+from kbuild import embed, metadata, spec  # noqa: E402
 from kbuild import serve_script  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 from runtime.constants import (  # noqa: E402
@@ -81,23 +81,12 @@ ENGINES = {
     },
 }
 
+# metadata は台帳から引く（手書きすると台帳とずれても気づけない）。
+# キーは ENGINE 名、引くのは台帳の slug。
 METADATA = {
-    "lmdeploy": metadata.base(
-        id=f"{OWNER}/step2-lmdeploy-qwen38-27b-cloudflared",
-        title="Step2 LMDeploy qwen38 27b cloudflared",
-        code_file="main.py",
-        kernel_type="script",
-        gpu=True,
-        datasets=[AWQ, CLOUDFLARED],
-    ),
-    "sglang": metadata.base(
-        id=f"{OWNER}/step2-sglang-qwen38-27b-cloudflared",
-        title="Step2 SGLang qwen38 27b cloudflared",
-        code_file="main.py",
-        kernel_type="script",
-        gpu=True,
-        datasets=[AWQ, CLOUDFLARED],
-    ),
+    name: metadata.for_kernel(
+        spec.find(f"step2-{name}-qwen38-27b-cloudflared"))
+    for name in ("lmdeploy", "sglang")
 }
 
 if __name__ == "__main__":

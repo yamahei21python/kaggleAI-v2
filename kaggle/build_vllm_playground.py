@@ -49,7 +49,8 @@ HERE = pathlib.Path(__file__).resolve().parent          # kaggle/
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 import kcconfig  # noqa: E402
-from kbuild import embed, metadata, pack_script, serve_script  # noqa: E402
+from kbuild import (embed, metadata, pack_script,  # noqa: E402
+                     serve_script, spec)
 from kbuild.settings_cell import render as render_settings  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 from runtime.constants import PROXY_PORT, VLLM_PORT  # noqa: E402
@@ -58,7 +59,6 @@ CFG = kcconfig.load(ROOT)
 OWNER = "yamahei21python"
 DATASET_SLUG = "qwen38-27b-uncensored-hauhaucs-awq-mtp"
 SERVED_NAME = "qwen3.8-27b-awq"
-WARM_CACHE_SLUG = "vllm-warm-cache"
 
 CELLS = HERE / "step2-vllm" / "cells"
 # 出力先は既定でリポジトリ内。テストが一時ディレクトリへ出すために上書きできる
@@ -192,19 +192,10 @@ ENGINE = {
 }
 
 SLUG = "vllm-playground"
-META = metadata.base(
-    id=f"{OWNER}/{SLUG}",
-    title=SLUG.replace("-", " "),
-    code_file="main.py",
-    kernel_type="script",
-    gpu=True,
-    # 本番と同じモデル + wheelhouse。加えて warm-cache（復元の ON/OFF は
-    # `KC_WARM_CACHE` で切り替えるので、付けたまま対照群が取れる）。
-    datasets=[f"{OWNER}/{DATASET_SLUG}",
-              f"{OWNER}/vllm-wheelhouse",
-              f"{OWNER}/vllm-wheelhouse-patch",
-              f"{OWNER}/{WARM_CACHE_SLUG}"],
-)
+# metadata は台帳から引く。datasets も台帳側（本番と同じモデル + wheelhouse、
+# 加えて warm-cache。復元の ON/OFF は `KC_WARM_CACHE` で切るので、付けたまま
+# 対照群が取れる）。
+META = metadata.for_kernel(spec.find(SLUG))
 
 if __name__ == "__main__":
     serve_script.write(

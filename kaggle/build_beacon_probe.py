@@ -24,7 +24,7 @@ from string import Template
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
-from kbuild import metadata, pack_script  # noqa: E402
+from kbuild import metadata, pack_script, spec  # noqa: E402
 from runtime import source_bundle  # noqa: E402
 
 OWNER = "yamahei21python"
@@ -112,13 +112,10 @@ if __name__ == "__main__":
     sys.exit(main())
 ''').substitute(TARGET_SLUG=TARGET_SLUG)
 
-META = metadata.base(
-    id=f"{OWNER}/beacon-probe",
-    title="beacon probe",
-    code_file="main.py",
-    kernel_type="script",
-    gpu=False,
-    datasets=[],
+# 台帳から引く（id / title / gpu / datasets を手書きすると、台帳とずれても
+# 気づけない。`cli build` は台帳の env を渡すだけで、出力はビルダーが書いた値）。
+META = metadata.for_kernel(
+    spec.find("beacon-probe"),
     # Kaggle API を叩くのでインターネットは要る（GPU は使わない）。
     internet=True,
 )
