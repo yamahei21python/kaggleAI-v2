@@ -6,15 +6,41 @@
 *.log
 out/
 out.*/
-kaggle-dataset/
-kaggle-dataset-*/
-.DS_Store
 kaggle/wheelhouse-files/
-# exl3 の生成物（build_kernel.py が出力）
-kaggle/exl3-serve/kernel/
-kaggle/exl3-serve/dryrun/
-kaggle/exl3-serve/keepalive/
+# Dataset のローカル実体（アップロード用のステージング。中身は追跡しない）
+datasets/
+.DS_Store
+# exl3 の生成物（build_exl3_serve.py が出力）
+kaggle/exl3-serve-kernel/
+
+# LMDeploy / SGLang の生成物（build_engine_serve.py が出力）
+kaggle/lmdeploy-serve/
+kaggle/sglang-serve/
+
+# 実験用 playground（build_vllm_playground.py が出力）。
+# `KC_EXPERIMENT` ごとに中身が変わるので追跡しない（毎回ビルドし直す）。
+kaggle/vllm-playground/
 __pycache__/
 config.local.env
 .ruff_cache/
 .qoder/
+
+# kaggle CLI 2.x（`cli push --no-run` 用。1.x には --no-run が無い）
+.venv-kaggle-cli/
+
+# ルートの散らかり置き場（生成物・ログ。追跡しない）
+# 中身: probes/ = 一時プローブ出力（旧 out/ と out.*/）、logs/ = ルートに散っていた *.log
+archive/
+models/
+.benchmarks/
+.pytest_cache/
+.workbuddy-ai/
+
+# 404 MB wheel（再取得は kaggle/whl-patch/README.md）
+kaggle/whl-patch/*.whl
+
+# uzu のバックアップ置き場。ランチャーが参照する**現役**ディレクトリなので実体は
+# 消さないが、`cli`（52 MB の実行ファイル）と `tokenizer.json`（19 MB）は追跡しない。
+# 履歴は書き換えない（filter-repo は使わない）。HEAD から外すだけ。
+notes/uzu-backup/cli
+notes/uzu-backup/tokenizer.json
