@@ -31,6 +31,7 @@
 | 10 | `my-ollama-gemma3-1b` | Ollama（Gemma 3 1B・旧） | 0.8 GiB | 07-27 | 0 | 0 | **削除済み（2026-10-30）** |
 | 11 | `kawamura-finetune` | embedder/reranker 学習データ | 20 MB（実ファイル 22,030,906 B） | 08-28 | 0 | 2 | 保持（#12 と統合検討） |
 | 12 | `kawamura-ruri-ft-data` | embedder 学習データ + スクリプト | 4 MB（実ファイル 4,195,551 B） | 08-28 | 0 | 1 | 保持（#11 と統合検討） |
+| 13 | `vllm-warm-cache` | **未作成**（Triton キャッシュの tar を入れる予定） | 0（完全版なら推定 100〜200 MB） | — | 2 | 1（`vllm-playground`） | **作成待ち**。下記「#13」参照 |
 
 削除前の合計は概算 **約 100 GiB**。#8〜#10（約 31.5 GiB）は
 **2026-10-30 に削除実行済み**で、残りは **約 68.5 GiB**（9 件）。
@@ -257,3 +258,42 @@ GPU が要り、`build_capture_patch` は退役扱い）。1.4 GB なので残�
 - **確認方法**: ユーザー自身のターミナルで `df -h /` と
   `ls ~/Myproject/models` を実行する。ファイルが復活していたらサンドボックスが
   削除を巻き戻しているので、その場合は `rm` を直接やり直す。
+
+## #13 `vllm-warm-cache`（**未作成**・2026-11-01 判明）
+
+vLLM の起動に必要な Triton カーネル（GDN の `@triton.autotune`）を
+`~/.triton/cache` ごと tar にして Dataset 化する計画。狙いは起動時の
+**373 秒の無音**（`determine_available_memory` の profile run）を消すこと。
+
+### 現状: Kaggle 側に存在しない
+
+- `datasets/warm-cache/dataset-metadata.json` はローカルにあり、コミット済み。
+- しかし `kaggle datasets list --user yamahei21python` に出てこない。
+- `--no-run`（Quick Save）で `vllm-playground` を保存したときの警告:
+
+  ```
+  The following are not valid dataset sources and could not be added to the kernel:
+  ['yamahei21python/vllm-warm-cache']
+  ```
+
+### 危ない理由
+
+`KC_WARM_CACHE=1`（既定）は「あれば復元、無ければ『なし』と出して続行」なので、
+Dataset が無いまま `cache` 実験を回すと **baseline とまったく同じ数字**が出る。
+これを「キャッシュは効かない」と読むと偽陰性で、1 往復（約 40 分）を捨てる。
+→ 実験は `KC_WARM_CACHE=require`（無ければ即 `RuntimeError`）で回す。
+
+### 作るときの手順
+
+v15 が残した tar（23.9 MB）は**不完全**なので使わない。重みロード中に落ちた回の
+もので、`chunk_o` / `chunk_delta_h` が入っていない。起動に成功した回から採り直す。
+
+1. `KC_EXPERIMENT=baseline` を実行し、`warm-cache.tar` を成果物から取得
+2. 中身を検品: `chunk_o` / `chunk_delta_h` があり、エントリが 200 前後あること
+   （30 のままなら profile run に届いていない＝また不完全）
+3. `datasets/warm-cache/` に tar を置き `kaggle datasets create -p datasets/warm-cache`
+4. `--no-run` で playground を保存し直し、`not valid dataset sources` が消えたことを確認
+5. `KC_EXPERIMENT=cache` で実行
+
+キーが一致しないと**黙ってミス**する（Triton のキーは Triton の版・対象 sm・
+カーネルソースのハッシュを含む）。vLLM か Triton を上げたら作り直す。

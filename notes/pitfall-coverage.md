@@ -1,4 +1,4 @@
-# 落とし穴とテストの対応表（2026-11-01 13:30 更新）
+# 落とし穴とテストの対応表（2026-11-01 15:50 更新）
 
 GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定している。
 「同じ穴に二度落ちない」ことが目的なので、テストは**構造**を見る
@@ -7,16 +7,22 @@ GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定し�
 
 ## テストの置き場所
 
-| ファイル | 役割 |
-|---|---|
-| `tests/test_gpu_pitfalls.py` | **症状 → 防御**の一覧（この文書の表）。23 本 |
-| `tests/test_vllm_cells.py` | vLLM の**セル内部**の契約（順序・版の出どころ・可観測性）。10 本 |
-| `tests/test_serve_script_guards.py` | **全エンジン共通**の足場（`wait_http` / `find_model` / `stage_env` / `ENGINE_PATTERN` / `PIP_STEPS`）。17 本 |
-| `tests/test_startup_timing.py` | **計測**（節目の解釈・timings の合流・`cli timings`）。21 本 |
-| `tests/test_cpu_probes.py` | CPU プローブ（GPU 0 秒）の契約。25 本 |
-| `tests/_cells.py` | セルから関数を切り出す共通ヘルパー（規則はここ 1 箇所） |
+| ファイル | 役割 | 本数 |
+|---|---|---|
+| `tests/test_gpu_pitfalls.py` | **症状 → 防御**の一覧（この文書の表） | 23 |
+| `tests/test_vllm_cells.py` | vLLM の**セル内部**の契約（順序・版の出どころ・可観測性） | 22 |
+| `tests/test_serve_script_guards.py` | **全エンジン共通**の足場（`wait_http` / `find_model` / `stage_env` / `ENGINE_PATTERN` / `PIP_STEPS`） | 17 |
+| `tests/test_startup_timing.py` | **計測**（節目の解釈・timings の合流・`cli timings`） | 21 |
+| `tests/test_cpu_probes.py` | CPU プローブ（GPU 0 秒）の契約 | 25 |
+| `tests/test_spec.py` | 台帳（`kbuild/spec.py`）と生成物の一致 | 57 |
+| `tests/test_engines.py` | `runtime/engines/*` の差し替え | 20 |
+| `tests/test_cli.py` | `cli` のサブコマンド | 15 |
+| `tests/test_vllm_playground.py` | 実験カーネル（`KC_EXPERIMENT` の効き方） | 9 |
+| `tests/test_smoke_checks.py` | 疎通確認の判定（SKIP 契約・引数の整合） | 6 |
+| その他（`test_serve_notebook` / `test_step2_builder` / `test_runtime` / `test_constants` / `test_exl3_*` / `test_kbuild` / `test_secrets` / `test_notebooks` / `test_step2_proxy`） | — | 37 |
+| `tests/_cells.py` | セルから関数を切り出す共通ヘルパー（規則はここ 1 箇所） | — |
 
-実行: `python3 -m pytest tests/ -q`（**228 本**）。
+実行: `python3 -m pytest tests/ -q`（**252 本**）。
 落とし穴の一覧だけなら `python3 -m pytest tests/test_gpu_pitfalls.py -q`。
 
 **同じアサーションを 2 箇所に置かない**。整理のとき、`torchaudio の版` を
@@ -51,6 +57,7 @@ GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定し�
 | 24 | **名前の付いた warmup を「コストの場所」と読み違えた**。`Warming up Qwen GDN Triton kernels` は 3 秒で、373 秒はその手前の profile run（`determine_available_memory`）で起きていた | ログの**行番号と時刻**で区間を確定してから施策を決める（`init engine ... took 376.24s` の内訳を割る） | `test_vllm_cells.py::test_triton_snapshot_happens_before_the_budget_starts` ほか |
 | 25 | キャッシュ退避を**後片付け（キープアライブ終了時）に置いた**ため、v14 で一度も走らなかった（成果物に tar が無い） | 退避は「成功・失敗の合流点」に置く。失敗した回のカーネルもディスクに残っている | `test_vllm_cells.py::test_warm_cache_is_captured_on_both_paths` |
 | 26 | キャッシュを「入れた」で終わらせると、**キー不一致で黙ってミス**していても気づけない（373 秒が戻るだけ） | 「ファイルがある」ではなく**エントリの増分**（`new_entries` / `reused_pct`）で判定する | `test_vllm_cells.py::test_triton_measurement_counts_new_entries` |
+| 27 | **存在しない Dataset を `dataset_sources` に入れても実行は止まらない**。`/kaggle/input/<slug>` が無いだけなので、`KC_WARM_CACHE=1` が「なし」と出して続行し、`cache` 実験が **baseline とまったく同じ数字**を出す（＝偽陰性）。実測 2026-11-01: `vllm-warm-cache` は未作成だった | `KC_WARM_CACHE` を 3 値にし、実験は `require`（無ければ `RuntimeError`）。`--no-run` で push すると `not valid dataset sources` の警告が出るので、Quick Save を警告チェックに使う | `test_vllm_cells.py::test_warm_cache_require_fails_instead_of_silently_degrading` / `test_vllm_playground.py::test_cache_experiment_requires_the_dataset` |
 
 
 ## 既に別ファイルで固定済みのもの
