@@ -30,7 +30,9 @@ REQUIRED = {
         "NGROK_TOKEN", "NGROK_DOMAIN",
     }),
     # vLLM は起動の進捗を Gist に流す（起動に失敗しても外から見えるように）。
-    "kaggle/step2-vllm/cells/03_vllm_serve.py": frozenset({
+    # 実装は runtime/gist.py に寄せた（2026-11-01）。セル側は kc_gist_write を
+    # 呼ぶだけなので、Secret の参照はこの 1 箇所になる。
+    "runtime/gist.py": frozenset({
         "GITHUB_TOKEN",
     }),
     # ── script カーネル（main.py を base64 で埋め込む系統）──

@@ -184,6 +184,10 @@ kaggle kernels output __SLUG__ -p out/
 cat out/verify_result.txt out/connection_info.txt
 ```
 """.replace("__SLUG__", f"{OWNER}/step2-vllm-qwen38-27b-{TUNNEL}"),
+    # `03_vllm_serve.py` は起動待ちの進捗を Gist へ流す（`kc_gist_write`）。
+    # 既定の束に無いので明示する。vLLM 系だけに足すのは、他エンジンは
+    # この経路を使わないため（生成物に死んだコードを増やさない）。
+    runtime=("net", "proc", "storage", "keepalive", "proxy", "gist"),
 )
 
 if SMOKE:

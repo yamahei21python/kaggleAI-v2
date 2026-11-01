@@ -29,6 +29,9 @@ GENERATED = {
     # keepalive を丸ごと飛ばすので、GIST_ID / NGROK_TOKEN 等の参照は
     # テンプレートに残っているが**到達しない**。二重に数えない。
     ROOT / "kaggle" / "vllm-playground",
+    # gist-probe は runtime/gist.py をそのまま埋め込んだ生成物。参照は
+    # 真実源（runtime/gist.py）側で台帳に載っている。
+    ROOT / "kaggle" / "cpu-tests" / "gist",
 }
 
 
@@ -59,6 +62,13 @@ def test_secrets_match_ledger():
     for path in (ROOT / "kbuild").rglob("*.py"):
         if "archive" in path.parts:
             continue
+        names = _names(path)
+        if names:
+            seen[path.relative_to(ROOT).as_posix()] = names
+    # `runtime/` は**生成コードへ埋め込まれる真実源**。ここを外すと、
+    # セルから実装を runtime へ移した瞬間に Secret の参照が台帳から消える
+    # （2026-11-01 に `_gist_status` を runtime/gist.py へ移した）。
+    for path in (ROOT / "runtime").rglob("*.py"):
         names = _names(path)
         if names:
             seen[path.relative_to(ROOT).as_posix()] = names

@@ -627,35 +627,45 @@ started = False
 # 起動中の進捗を Gist に流す。Kaggle の UI ログは長大で貼りにくく、
 # `kaggle kernels output` は完了まで何も返さないため、外から見える場所が要る。
 _GIST_ID = (os.environ.get("GIST_ID") or GIST_ID_DEFAULT)
-_GH_TOKEN = [None]
+# 書けたかどうかを数える。**黙って落ちるのが一番高い**——2026-11-01 の
+# vllm-playground は Gist を 10/28 から一度も更新しておらず、理由
+# （トークン無し / 401 / 404）はログにも result.json にも残っていなかった。
+# 外からは「何も起きていない」と区別がつかず、起動待ち 30 分を
+# 目視で追うことになる。
+_GIST_STATE = {"gist_id": _GIST_ID, "attempts": 0, "ok": 0, "last_error": ""}
+_GIST_SAID = [False]
 
 
 def _gist_status(text):
-    """起動状況を Gist（vllm_status.txt）に書く。失敗しても握りつぶす。"""
-    if _GH_TOKEN[0] is None:
-        _GH_TOKEN[0] = os.environ.get("GITHUB_TOKEN", "")
-        if not _GH_TOKEN[0]:
-            try:
-                from kaggle_secrets import UserSecretsClient
-                _GH_TOKEN[0] = (UserSecretsClient()
-                                .get_secret("GITHUB_TOKEN") or "")
-            except Exception:
-                _GH_TOKEN[0] = ""
-    if not _GH_TOKEN[0]:
-        return
-    body = json.dumps(
-        {"files": {"vllm_status.txt": {"content": text}}}).encode()
-    req = urllib.request.Request(
-        "https://api.github.com/gists/" + _GIST_ID,
-        data=body, method="PATCH",
-        headers={"Authorization": "Bearer " + _GH_TOKEN[0],
-                 "Accept": "application/vnd.github+json",
-                 "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            r.read()
-    except Exception:
-        pass
+    """起動状況を Gist（vllm_status.txt）に書く。失敗は**1 回だけ**声に出す。
+
+    毎回出すと 30 秒ごとに同じ行が並んでログが埋まるので、初回だけ警告し、
+    以降は `_GIST_STATE` に数える。呼び出し側は戻り値を見ない（進捗書き込みで
+    起動を止めない）が、結果は `_gist_summary()` で 1 行にできる。
+    """
+    _GIST_STATE["attempts"] += 1
+    ok, detail = kc_gist_write(_GIST_ID, "vllm_status.txt", text)
+    if ok:
+        _GIST_STATE["ok"] += 1
+        return True
+    _GIST_STATE["last_error"] = detail
+    if not _GIST_SAID[0]:
+        _GIST_SAID[0] = True
+        print(f"⚠ Gist 進捗を書けません: {detail}")
+        print("   以降は黙って続行し、最後にまとめて出します"
+              "（CPU で確かめるには gist-probe カーネル）")
+    return False
+
+
+def _gist_summary():
+    """書き込みの成否を 1 行にする。0 件なら**それ自体**が異常。"""
+    s = _GIST_STATE
+    if s["attempts"] == 0:
+        return "ℹ Gist 進捗: 一度も呼ばれていない（待機ループに到達していない）"
+    if s["ok"] == 0:
+        return (f"⚠ Gist 進捗: 0/{s['attempts']} 成功 — 外から見えていない。"
+                f" 理由: {s['last_error']}")
+    return f"ℹ Gist 進捗: {s['ok']}/{s['attempts']} 成功"
 # GPU クォータは有限。ラダーを全部試すと 1 時間超になり、途中で打ち切られると
 # 成果物が残らない。総予算を切って、必ずログを残して終わるようにする。
 # クォータ残 39 分（2,395s）で pip install に 5 分前後かかる前提の値。
@@ -1190,6 +1200,7 @@ for idx, (label, spec, maxlen, env_extra, use_opt, extra_args,
         time.sleep(5)
 
     smoke_fail = ""
+    print(_gist_summary())      # 外から見えていたか（0 件は異常）
     if started:
         # 起動できても初回 forward でカーネルが落ちる領域（sm75 + 量子化 +
         # GDN Triton）があるため、1 回生成させて通ったときだけ成功とする。

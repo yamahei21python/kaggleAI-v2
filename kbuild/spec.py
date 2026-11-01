@@ -179,6 +179,18 @@ KERNELS = (
            "yamahei21python/vllm-wheelhouse-patch",
            "yamahei21python/vllm-warm-cache"),
        builder="build_vllm_playground", status=SEMI),
+    # ---- 観測系（CPU・無料）----
+    # Gist への進捗書き込みが通るかを、GPU を使わずに確かめる。2026-11-01 の
+    # vllm-playground は 10/28 から Gist を一度も更新しておらず、その理由が
+    # どこにも残っていなかった。起動待ちは 30 分あるので、外から見えないまま
+    # 待つと**その 30 分が丸ごと無駄になる**。往復は CPU で 1 分で試せる。
+    #
+    # `status=SEMI` の理由は playground と同じ（常用ではない）。ただし
+    # こちらは環境変数で出力が変わらないので、`check_scripts` に載せても
+    # 生成物は安定する。GPU を使わない点だけが違う。
+    _K("gist-probe", "gist probe", "script",
+       "kaggle/cpu-tests/gist", "main.py", gpu=False,
+       ds=(), builder="build_gist_probe", status=SEMI),
     # ---- llama-server / script 版（notebook 版と並走）----
     _K("llama-server-ngrok-script",
        "llama-server ngrok script", "script",

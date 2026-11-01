@@ -611,6 +611,116 @@ def kc_assert_no_auth(port, path="/api/tags", fail=None, timeout=10):
             fail(msg)
         raise
 
+# ── runtime/gist.py ───────────────────────────────────────
+"""Gist への進捗書き込み（生成コードへ埋め込む）。
+
+Kaggle の UI ログは長大で貼りにくく、`kaggle kernels output` は**完了まで
+何も返さない**。起動に失敗した回は「どこで止まったか」を外から見る手段が
+要るので、待機中は 30 秒ごとに Gist へ流している。
+
+ところが 2026-11-01 の `vllm-playground` は Gist を 10/28 から一度も
+更新していなかった。理由（トークン無し / 401 / 404）はどこにも残らず、
+外からは「何も起きていない」と区別がつかなかった。**黙って落ちるのが
+一番高い**ので、この層は必ず理由を返す。
+
+`kc_` 接頭辞は生成コードの名前空間で衝突しないため（runtime/__init__.py）。
+"""
+import json
+import os
+import time
+import urllib.error
+import urllib.request
+
+_GIST_API = "https://api.github.com/gists/"
+
+
+def kc_gh_token():
+    """GITHUB_TOKEN を env → Kaggle Secrets の順で解決する。無ければ空文字。"""
+    tok = os.environ.get("GITHUB_TOKEN", "").strip()
+    if tok:
+        return tok
+    try:
+        from kaggle_secrets import UserSecretsClient
+        return (UserSecretsClient().get_secret("GITHUB_TOKEN") or "").strip()
+    except Exception:
+        return ""
+
+
+def kc_gist_write(gist_id, filename, text, token=None, timeout=10):
+    """Gist の 1 ファイルを更新する。戻り値は `(ok, detail)`。
+
+    `detail` は**失敗の理由**（成功なら空文字）。呼び出し側が 1 回だけ声に
+    出すために使う。HTTP の本文も拾うのは、401（トークン不正）と
+    404（Gist ID 違い / 権限なし）を取り違えないため。
+
+    `token` を明示できるのはテストの口。省略時は env → Secrets の順で解決する。
+    """
+    if not gist_id:
+        return False, "GIST_ID が空（settings の GIST_ID_DEFAULT も未設定）"
+    tok = kc_gh_token() if token is None else token
+    if not tok:
+        return False, "GITHUB_TOKEN が無い（Secrets 未登録、または gist 権限なし）"
+    body = json.dumps({"files": {filename: {"content": text}}}).encode()
+    req = urllib.request.Request(
+        _GIST_API + gist_id, data=body, method="PATCH",
+        headers={"Authorization": "Bearer " + tok,
+                 "Accept": "application/vnd.github+json",
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            r.read()
+        return True, ""
+    except urllib.error.HTTPError as e:
+        try:
+            msg = e.read().decode("utf-8", "replace")[:200]
+        except Exception:
+            msg = ""
+        return False, f"HTTP {e.code}: {msg}"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+def kc_gist_selftest(gist_id, filename="vllm_status.txt", token=None,
+                     timeout=10):
+    """PATCH して GET で**読み返す**。往復が通ったときだけ ok=True。
+
+    書けたつもりで読めない（別 Gist を指している / 権限が片方だけ）を
+    分けるため、書き込みだけで判定しない。CPU だけで完結するので、
+    GPU を使う前に Kaggle のコンテナから 1 回走らせておく。
+    """
+    stamp = "selftest " + time.strftime("%Y-%m-%d %H:%M:%S")
+    tok = kc_gh_token() if token is None else token
+    out = {"ok": False, "gist_id": gist_id, "filename": filename,
+           "token_present": bool(tok), "stamp": stamp,
+           "write_ok": False, "write_detail": "", "read_ok": False,
+           "read_detail": "", "matched": False, "files": []}
+    ok, detail = kc_gist_write(gist_id, filename, stamp + "\n",
+                              token=tok, timeout=timeout)
+    out["write_ok"], out["write_detail"] = ok, detail
+    if not ok:
+        return out
+    req = urllib.request.Request(
+        _GIST_API + gist_id,
+        headers={"Accept": "application/vnd.github+json",
+                 "Authorization": "Bearer " + tok})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.loads(r.read() or b"{}")
+        out["read_ok"] = True
+        files = d.get("files") or {}
+        out["files"] = sorted(files)
+        content = (files.get(filename) or {}).get("content") or ""
+        out["matched"] = stamp in content
+        if not out["matched"]:
+            out["read_detail"] = (f"{filename} が読めない、または中身が違う"
+                                  f"（Gist 内: {sorted(files)}）")
+    except urllib.error.HTTPError as e:
+        out["read_detail"] = f"HTTP {e.code}"
+    except Exception as e:
+        out["read_detail"] = f"{type(e).__name__}: {e}"
+    out["ok"] = out["read_ok"] and out["matched"]
+    return out
+
 
 
 # ── エンジン固有の定数（旧 settings セル）──────────────────────
@@ -2792,35 +2902,45 @@ def launch(model_dir):
     # 起動中の進捗を Gist に流す。Kaggle の UI ログは長大で貼りにくく、
     # `kaggle kernels output` は完了まで何も返さないため、外から見える場所が要る。
     _GIST_ID = (os.environ.get("GIST_ID") or GIST_ID_DEFAULT)
-    _GH_TOKEN = [None]
+    # 書けたかどうかを数える。**黙って落ちるのが一番高い**——2026-11-01 の
+    # vllm-playground は Gist を 10/28 から一度も更新しておらず、理由
+    # （トークン無し / 401 / 404）はログにも result.json にも残っていなかった。
+    # 外からは「何も起きていない」と区別がつかず、起動待ち 30 分を
+    # 目視で追うことになる。
+    _GIST_STATE = {"gist_id": _GIST_ID, "attempts": 0, "ok": 0, "last_error": ""}
+    _GIST_SAID = [False]
 
 
     def _gist_status(text):
-        """起動状況を Gist（vllm_status.txt）に書く。失敗しても握りつぶす。"""
-        if _GH_TOKEN[0] is None:
-            _GH_TOKEN[0] = os.environ.get("GITHUB_TOKEN", "")
-            if not _GH_TOKEN[0]:
-                try:
-                    from kaggle_secrets import UserSecretsClient
-                    _GH_TOKEN[0] = (UserSecretsClient()
-                                    .get_secret("GITHUB_TOKEN") or "")
-                except Exception:
-                    _GH_TOKEN[0] = ""
-        if not _GH_TOKEN[0]:
-            return
-        body = json.dumps(
-            {"files": {"vllm_status.txt": {"content": text}}}).encode()
-        req = urllib.request.Request(
-            "https://api.github.com/gists/" + _GIST_ID,
-            data=body, method="PATCH",
-            headers={"Authorization": "Bearer " + _GH_TOKEN[0],
-                     "Accept": "application/vnd.github+json",
-                     "Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                r.read()
-        except Exception:
-            pass
+        """起動状況を Gist（vllm_status.txt）に書く。失敗は**1 回だけ**声に出す。
+
+        毎回出すと 30 秒ごとに同じ行が並んでログが埋まるので、初回だけ警告し、
+        以降は `_GIST_STATE` に数える。呼び出し側は戻り値を見ない（進捗書き込みで
+        起動を止めない）が、結果は `_gist_summary()` で 1 行にできる。
+        """
+        _GIST_STATE["attempts"] += 1
+        ok, detail = kc_gist_write(_GIST_ID, "vllm_status.txt", text)
+        if ok:
+            _GIST_STATE["ok"] += 1
+            return True
+        _GIST_STATE["last_error"] = detail
+        if not _GIST_SAID[0]:
+            _GIST_SAID[0] = True
+            print(f"⚠ Gist 進捗を書けません: {detail}")
+            print("   以降は黙って続行し、最後にまとめて出します"
+                  "（CPU で確かめるには gist-probe カーネル）")
+        return False
+
+
+    def _gist_summary():
+        """書き込みの成否を 1 行にする。0 件なら**それ自体**が異常。"""
+        s = _GIST_STATE
+        if s["attempts"] == 0:
+            return "ℹ Gist 進捗: 一度も呼ばれていない（待機ループに到達していない）"
+        if s["ok"] == 0:
+            return (f"⚠ Gist 進捗: 0/{s['attempts']} 成功 — 外から見えていない。"
+                    f" 理由: {s['last_error']}")
+        return f"ℹ Gist 進捗: {s['ok']}/{s['attempts']} 成功"
     # GPU クォータは有限。ラダーを全部試すと 1 時間超になり、途中で打ち切られると
     # 成果物が残らない。総予算を切って、必ずログを残して終わるようにする。
     # クォータ残 39 分（2,395s）で pip install に 5 分前後かかる前提の値。
@@ -3355,6 +3475,7 @@ def launch(model_dir):
             time.sleep(5)
 
         smoke_fail = ""
+        print(_gist_summary())      # 外から見えていたか（0 件は異常）
         if started:
             # 起動できても初回 forward でカーネルが落ちる領域（sm75 + 量子化 +
             # GDN Triton）があるため、1 回生成させて通ったときだけ成功とする。

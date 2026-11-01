@@ -17,6 +17,7 @@ MODULES = {
     "keepalive": "keepalive.py",
     "proxy": "proxy.py",
     "quota": "quota.py",
+    "gist": "gist.py",
     "ollama": "engines/ollama.py",
     "lmdeploy": "engines/lmdeploy.py",
     "sglang": "engines/sglang.py",
