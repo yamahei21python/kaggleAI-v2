@@ -404,7 +404,12 @@ def test_warm_cache_is_captured_on_both_paths():
 # v15 が残した不完全な tar に入っていた 4 家族。**373 秒の主役が欠けている**。
 _INCOMPLETE_KERNELS = ("_fused_post_conv", "_prepare_rope_positions",
                        "chunk_local_cumsum_scalar", "chunk_scaled_dot_kkt_fwd")
-_COMPLETE_KERNELS = _INCOMPLETE_KERNELS + ("chunk_o", "chunk_delta_h")
+# 2026-11-01 の v4 が残した**完全な tar に実在した名前**（推測ではなく実測）。
+# tar を数えた内訳: 2,077 エントリ / 195 MB / カーネル名 140 種、
+# `chunk_fwd_kernel_o` x252、`chunk_gated_delta_rule_fwd_kernel_h_blockdim64` x84。
+_MEASURED_TAR_KERNELS = ("chunk_fwd_kernel_o",
+                         "chunk_gated_delta_rule_fwd_kernel_h_blockdim64")
+_COMPLETE_KERNELS = _INCOMPLETE_KERNELS + _MEASURED_TAR_KERNELS
 
 
 def _exec_warm_cache_block(tmp_path, mode, kernels=None):
@@ -524,19 +529,40 @@ def test_warm_cache_require_raises_on_an_empty_dataset(tmp_path):
 def test_warm_cache_require_rejects_a_tar_without_the_profile_run_kernels(tmp_path):
     """復元はできるが**373 秒の主役が欠けている** tar も `require` では落とす。
 
-    実測 2026-11-01: 重みロード中に落ちた回の tar は 30 エントリ / 23.9 MB で、
-    `chunk_o` / `chunk_delta_h` が入っていなかった（profile run に未到達）。
-    復元すると一部だけ当たって「少し効いた」ように見えるので、件数ではなく
-    **名前**で判定する（件数は Triton の版で変わり、しきい値を置くと正当な tar を
-    弾くほうに倒れる）。
+    実測 2026-11-01: 重みロード中に落ちた回の tar は 30 エントリ / 70 KB で、
+    `chunk_fwd_kernel_o` / `chunk_gated_delta_rule_fwd_kernel_h_blockdim64` が
+    入っていなかった（profile run に未到達）。復元すると一部だけ当たって
+    「少し効いた」ように見えるので、件数ではなく**名前**で判定する
+    （件数は Triton の版で変わり、しきい値を置くと正当な tar を弾くほうに倒れる）。
     """
     with pytest.raises(RuntimeError) as e:
         _exec_warm_cache_block(tmp_path, "require",
                                kernels=_INCOMPLETE_KERNELS)
     msg = str(e.value)
-    assert "chunk_o" in msg and "chunk_delta_h" in msg, \
+    assert "chunk_fwd_kernel_o" in msg and "chunk_gated_delta_rule_fwd_kernel_h" in msg, \
         f"何が欠けているか書いていない: {msg}"
     assert "偽陰性" in msg, f"落ちる理由がメッセージに無い: {msg}"
+
+
+def test_warm_cache_guard_uses_the_measured_kernel_names():
+    """ガードの条件は**実測のファイル名に一致**していること。
+
+    最初 `chunk_o` / `chunk_delta_h` で書いたが、実際の名前は
+    `chunk_fwd_kernel_o` / `chunk_gated_delta_rule_fwd_kernel_h_blockdim64` で
+    部分一致しない。そのまま `require` で走らせると、**このリポジトリが
+    出した中で最良の tar を弾く**（v4 の 195 MB を落としかけた）。
+    定数と実測名を直接突き合わせて、書き戻しを止める。
+    """
+    src = _cells.cell(*INSTALL)
+    m = re.search(r"_WC_REQUIRED_KERNELS = \(([^)]*)\)", src)
+    assert m, "_WC_REQUIRED_KERNELS の定義が見つからない"
+    required = tuple(x.strip().strip("\"'")
+                     for x in m.group(1).split(",") if x.strip())
+    assert required, "条件が空（＝何でも通る）"
+    for name in required:
+        assert any(name in real for real in _MEASURED_TAR_KERNELS), (
+            f"{name!r} は実測のカーネル名に一致しない: {_MEASURED_TAR_KERNELS}。"
+            "実測の tar を弾いてしまう")
 
 
 def test_warm_cache_require_accepts_a_complete_tar_and_records_the_count(tmp_path):
@@ -562,7 +588,8 @@ def test_warm_cache_default_mode_warns_but_continues_on_an_incomplete_tar(tmp_pa
     """
     info = _exec_warm_cache_block(tmp_path, "1", kernels=_INCOMPLETE_KERNELS)
     assert info["restored"] is True, info
-    assert info["missing"] == ["chunk_o", "chunk_delta_h"], info
+    assert info["missing"] == ["chunk_fwd_kernel_o",
+                               "chunk_gated_delta_rule_fwd_kernel_h"], info
 
 
 def test_warm_cache_restore_count_reaches_timings():

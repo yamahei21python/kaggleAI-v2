@@ -148,9 +148,20 @@ _WC_INFO = {"mode": _KC_WC_MODE, "restored": False, "tar": "",
             "mib": 0.0, "entries": 0, "seconds": 0.0, "missing": []}
 # 「完全な tar か」の判定に**件数を使わない**。件数は Triton の版で変わるし、
 # しきい値を置くと「正当な tar を弾く」ほうに倒れる。代わりに**名前で見る**。
-# 373 秒の主役は `chunk_o` / `chunk_delta_h`（この 2 つが無い tar は
-# profile run に到達していない回のもの。実測 2026-11-01 の 30 エントリの tar）。
-_WC_REQUIRED_KERNELS = ("chunk_o", "chunk_delta_h")
+#
+# 実測 2026-11-01（`vllm-playground` の 2 本の tar を数えた）:
+#   不完全: 30 エントリ / 70 KB   … profile run に到達していない
+#   完全  : 2,077 エントリ / 195 MB / カーネル名 140 種
+# 差は GDN（gated delta net）の chunked カーネル群が入っているか。
+# 373 秒の主役はこの 2 つ（名前は vLLM の fla 実装にハードコードされている）:
+#   chunk_fwd_kernel_o                                 x252
+#   chunk_gated_delta_rule_fwd_kernel_h_blockdim64      x84
+# **`chunk_o` / `chunk_delta_h` で探してはいけない**。実際のファイル名は
+# 上のように長く、部分一致しないので「完全な tar を不完全と誤判定」する
+# （最初にこの 2 つで書いて、v4 の tar を弾きかけた）。
+# 末尾の `_blockdim64` は head dim を名前に含めたもので、版が変わると
+# 変わりうる。だから**前側だけ**を条件にする。
+_WC_REQUIRED_KERNELS = ("chunk_fwd_kernel_o", "chunk_gated_delta_rule_fwd_kernel_h")
 _wc = kc_find_dataset("vllm-warm-cache")
 # `kc_find_dataset` は**見つからなくても既定パスを返す**（`/kaggle/input/<slug>`）。
 # そのため `if _wc:` だけでは常に真になり、tar が 1 本も無いときに**何も
