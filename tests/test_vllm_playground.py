@@ -105,11 +105,41 @@ def test_every_experiment_declares_both_knobs():
     """
     mod = _module()
     assert set(mod.EXPERIMENTS) == {
-        "baseline", "prewarm_on", "cache", "force_first"}, mod.EXPERIMENTS
+        "baseline", "prewarm_on", "cache", "force_first",
+        "baseline_long"}, mod.EXPERIMENTS
     for name, (desc, env) in mod.EXPERIMENTS.items():
         assert "KC_PREWARM" in env, f"{name} が KC_PREWARM を明示していない"
         assert "KC_WARM_CACHE" in env, f"{name} が KC_WARM_CACHE を明示していない"
         assert desc, f"{name} に説明が無い"
+
+
+def test_baseline_long_only_moves_the_budget():
+    """`baseline_long` は予算だけ動かす（構成は `baseline` と同一）。
+
+    2026-11-01 の `cache` は復元に成功したのに、試行 1 が重みロードだけで
+    4,200 秒を使い切り、Triton キャッシュが効くはずのコンパイル段に届かな
+    かった。予算を上げずに `cache` を回し直しても同じ場所で切れるので、
+    「重みロードが遅い」を先に単独で解くための実験。
+
+    ここが 2 ノブになると、通ったときに「予算のおかげ」と「構成のおかげ」が
+    区別できない（v14 と同じ轍）。
+    """
+    mod = _module()
+    base = mod.EXPERIMENTS["baseline"][1]
+    long_ = mod.EXPERIMENTS["baseline_long"][1]
+
+    budget_keys = {"VLLM_STARTUP_BUDGET", "VLLM_ATTEMPT_TIMEOUT"}
+    assert set(long_) - set(base) == budget_keys, (
+        f"予算以外のノブが増えている: {set(long_) - set(base) - budget_keys}")
+    assert {k: v for k, v in long_.items() if k not in budget_keys} == base
+
+    # 試行の上限は `min(ATTEMPT_TIMEOUT, 残予算)`。総予算だけ上げて
+    # ATTEMPT_TIMEOUT を据え置くと、試行 1 は同じ秒数で切られる。
+    assert int(long_["VLLM_STARTUP_BUDGET"]) == 7000
+    assert int(long_["VLLM_ATTEMPT_TIMEOUT"]) == int(long_["VLLM_STARTUP_BUDGET"])
+
+    # 4,200 の側は動かしていないこと（比較表が壊れない）
+    assert "VLLM_STARTUP_BUDGET" not in base
 
 
 def test_baseline_is_the_out2g_configuration():

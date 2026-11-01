@@ -5,6 +5,17 @@
     KC_EXPERIMENT=cache python3 kaggle/build_vllm_playground.py
     python3 -m cli push vllm-playground --yes
 
+## ⚠ `cli push` はビルダーを**再実行**する
+
+`cli push` は「古い生成物を本番投入しない」ために push 直前にビルダーを
+走らせる（`cli/push.py`）。つまり **`KC_EXPERIMENT` は push のときにも渡す**:
+
+    KC_EXPERIMENT=baseline_long python3 -m cli push vllm-playground --yes
+
+渡さないと既定の `baseline` で上書きされ、**別の実験が走る**。実測 2026-11-02
+00:48、`baseline_long` をビルドした直後の push が `baseline`（予算 4,200 秒）を
+積んだ。生成ログの 1 行目（`実験: ...`）だけが頼りなので、push 後に確認する。
+
 ## なぜ本番と分けるか
 
 これまで実験は `--smoke` で本番カーネルに push していた。smoke 変種は
@@ -86,6 +97,26 @@ EXPERIMENTS = {
         "autotune を飛ばす（373 秒の正体の判定）",
         {"KC_PREWARM": "0", "KC_WARM_CACHE": "0",
          "VLLM_TRITON_FORCE_FIRST_CONFIG": "1"},
+    ),
+    # 構成は `baseline` と同一で、**起動予算だけ** 4,200 → 7,000 秒。
+    #
+    # なぜ要るか（2026-11-01 22:43 の `cache` 実測）:
+    #   復元は成功した（restored=true / entries=236 / 191.1 MiB / 190 秒）が、
+    #   試行 1 が重みロードだけで 4,200 秒を使い切り（12:31:13 → 13:39:28、
+    #   `layers.34` に到達しただけ）、**コンパイル段に一度も届かなかった**。
+    #   つまり `cache` の結果は「効かない」ではなく「未測定」。予算が
+    #   「キャッシュが効くか」の交絡因子になっている。
+    #   先に「重みロードが遅い」を単独で解かないと、`cache` を何回回しても
+    #   同じところで切れる。
+    #
+    # 2 つの env を同時に動かすのは 2 ノブではなく **1 ノブの裏表**:
+    #   試行の上限は `min(ATTEMPT_TIMEOUT, 残予算)` なので、総予算だけ上げて
+    #   `ATTEMPT_TIMEOUT` を 4,200 に残すと、試行 1 は**まったく同じ秒数**で
+    #   切られる（`03_vllm_serve.py` の `_tmo`）。
+    "baseline_long": (
+        "baseline と同構成・起動予算だけ 7,000 秒",
+        {"KC_PREWARM": "0", "KC_WARM_CACHE": "0",
+         "VLLM_STARTUP_BUDGET": "7000", "VLLM_ATTEMPT_TIMEOUT": "7000"},
     ),
 }
 

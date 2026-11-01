@@ -1,4 +1,4 @@
-# 落とし穴とテストの対応表（2026-11-01 20:55 更新）
+# 落とし穴とテストの対応表（2026-11-02 01:00 更新）
 
 GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定している。
 「同じ穴に二度落ちない」ことが目的なので、テストは**構造**を見る
@@ -65,6 +65,7 @@ GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定し�
 | 32 | **予算を「重みロード」だけで決めてしまう**。2700 秒に上げた v3 は全 62 層を読み終えた **t=2890s** のあと t=2972s で打ち切られた。重み 2,640 秒 + profile run 373 秒 = **3,013 秒が下限**で、2700 では 300 秒足りない | 予算は「重み + profile run + 余裕」で決める。下限を 3600 としてテストで固定（実測 3,013 秒の 1.2 倍） | `test_vllm_cells.py::test_attempt_timeout_covers_the_whole_startup_budget`（`b >= 3600`） |
 | 33 | **Kaggle Secrets の「未紐付け」は `ConnectionError` として出る**。`get_secret()` が `Connection error trying to communicate with service.` を投げるので、ネットワーク障害を疑って時間を溶かす。実際は「このカーネルに Secret が 1 つも付いていない」で、アカウントへの登録だけでは読めない | 例外を握りつぶさず**理由ごと返す**（`kc_gh_token_detail`）。`""` の 1 語では「登録漏れ」と「紐付け漏れ」を分けられない | `test_runtime.py::test_gist`（理由が空にならないこと）+ `cpu-tests/gist`（実機で `token_detail` を確認） |
 | 34 | **Dataset に上げた `.tar` は展開されて保持される**。195 MB の tar を `datasets create` したら、マウント側は `root/.triton/cache/<hash>/...` の木になり `*.tar` は 1 本も無かった。`*.tar` だけを探す復元は「Dataset が空」と誤判定し、`require` が**正当な Dataset を落とす** | tar と展開済みの木の両方を受ける（`_kc_wc_tree` が `.triton/cache` を探す）。`timings.warm_cache_restore.source` にどちらから復元したかを残す | `test_vllm_cells.py::test_warm_cache_restores_an_expanded_dataset` |
+| 35 | **`cli push` はビルダーを再実行する**ので、env を push のときにも渡さないと**別の設定**が積まれる。`KC_EXPERIMENT=baseline_long`（予算 7,000 秒）でビルドした直後にenv 無しで push し、既定の `baseline`（4,200 秒）で上書きされた（実測 2026-11-02 00:48）。生成ログの 1 行目を読まないと気づけず、そのまま 2 時間走る | push 直前に生成物の指紋を取り、再生成で変わったら警告する（`_artifact_warning`）。ビルダーの docstring にも「push のときにも env を渡す」と書く | `test_cli.py::test_push_warns_when_the_rebuild_changes_the_artifact` |
 
 
 ## 既に別ファイルで固定済みのもの

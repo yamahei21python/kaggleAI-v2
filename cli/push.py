@@ -85,6 +85,37 @@ def _rel(path):
         return pathlib.Path(path)
 
 
+def _fingerprint(src_dir, code_file):
+    """push 直前の再生成で**中身が変わったか**を見るための指紋。
+
+    バイト比較で足りる（生成物は数百 KB）。読めなければ `None`。
+    """
+    p = pathlib.Path(src_dir) / code_file
+    try:
+        return (p.stat().st_size, p.read_bytes())
+    except OSError:
+        return None
+
+
+def _artifact_warning(before, after, src_dir, code_file):
+    """再生成で生成物が変わったときの警告（変わらなければ ""）。
+
+    2026-11-02 00:48 の実測: `KC_EXPERIMENT=baseline_long`（予算 7,000 秒）で
+    ビルドした直後に、env を付けずに `python3 -m cli push vllm-playground --yes`
+    を叩いた。push は「古い生成物を投入しない」ためにビルダーを再実行するので、
+    **既定の `baseline`（4,200 秒）で上書きされ、別の実験が積まれた**。
+    ビルダーの 1 行目（`実験: ...`）を読まないと気づけない。
+    """
+    if before is None or after is None or before == after:
+        return ""
+    where = _rel(pathlib.Path(src_dir) / code_file)
+    return (
+        "⚠ push 直前に生成物が変わった（手元の生成物と**違う設定**で積もうとしている）\n"
+        f"   {where}: {before[0]:,} B → {after[0]:,} B\n"
+        "   ビルダーの env（`KC_EXPERIMENT` など）は **push のときにも**渡すこと。\n"
+        "   例: KC_EXPERIMENT=baseline_long python3 -m cli push <name> --yes")
+
+
 def _stage(kernel, tmp, src_dir=None):
     """code_file とメタデータを push 用の一時ディレクトリに揃える。
 
@@ -148,10 +179,16 @@ def push(name, yes=False, dry_run=False, smoke=False, no_run=False):
             print("kaggle CLI が見つからない（PATH を確認）")
         return 1
     # 古い生成物を本番投入しないよう、push 直前に再生成する。
+    # ここで**中身が変わる**なら、手元の生成物と違う設定（env）で積もうとしている。
+    before = _fingerprint(src_dir, kernel.code_file)
     rc = build_mod.run([kernel.name], extra_args=["--smoke"] if smoke else [])
     if rc != 0:
         print("生成に失敗したため push を中止")
         return rc
+    warn = _artifact_warning(before, _fingerprint(src_dir, kernel.code_file),
+                             src_dir, kernel.code_file)
+    if warn:
+        print(warn)
     with tempfile.TemporaryDirectory(prefix="kc-push-") as tmp:
         _stage(kernel, tmp, src_dir)
         cmd = [exe, "kernels", "push", "-p", str(tmp)]

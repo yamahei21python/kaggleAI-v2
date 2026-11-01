@@ -1097,3 +1097,45 @@ v13 の 135 分を溶かしたのと同じ間違いになるので、実測だ�
 > ただし楽観はできない。prewarm で 15.5 GiB を cache に載せても、そのあと
 > ワーカーが 24 GB の RSS を確保するので cache は押し出される（v3 の
 > `free=437 MiB`）。**部分的にしか当たらない可能性が高い**。測るまで分からない。
+
+## 21. `baseline_long`（2026-11-02 00:50）— 予算だけ 7,000 秒に上げた回
+
+§18.3 の `cache` は**復元に成功して落ちた**。`warm_cache_restore` は
+`restored=true / entries=236 / 191.1 MiB / 190 秒 / source=.../root/.triton/cache`
+だったのに、試行 1 が重みロードだけで 4,200 秒を使い切り（12:31:13 → 13:39:28、
+`layers.34` に到達しただけ）、**コンパイル段に一度も届かなかった**。
+つまり `cache` の結果は「効かない」ではなく「未測定」で、予算が
+「キャッシュが効くか」の交差因子になっている。
+
+そこで**構成は `baseline` と同一**のまま、起動予算だけ上げた回を 1 回だけ回す。
+
+| 項目 | 値 |
+|---|---|
+| 実験名 | `baseline_long` |
+| 構成 | `KC_PREWARM=0` / `KC_WARM_CACHE=0`（`baseline` と同じ） |
+| 予算 | `VLLM_STARTUP_BUDGET=7000` / `VLLM_ATTEMPT_TIMEOUT=7000` |
+| 投入 | version 8（2026-11-02 00:50 JST 開始） |
+| 消費見込み | 最大 約 2.1 時間（残クォータ 9h56m の 21%） |
+
+**2 つの env を動かすのは 1 ノブの裏表**。試行の上限は
+`min(ATTEMPT_TIMEOUT, 残予算)` なので、総予算だけ上げて `ATTEMPT_TIMEOUT` を
+4,200 に残すと、試行 1 は**まったく同じ秒数**で切られる（`03_vllm_serve.py` の
+`_tmo`）。片方だけ上げる実験は無意味。
+
+### 読み方（終わったら見る場所）
+
+`timings.json` の `startup_attempts`（各試行の `load_seconds` / `profile_seconds`）
+と `result.json` の `ok` / `elapsed`。分岐は 2 つだけ:
+
+| 結果 | 意味 | 次 |
+|---|---|---|
+| 重みロードが終わり、profile run（373 秒）まで走った | 予算が唯一の壁だった | `cache` を同じ予算で回す（キャッシュの効果が初めて測れる） |
+| 7,000 秒でも重みロードが終わらない | 壁は予算ではなく**ノードの I/O**（実効 11.8 MiB/s） | 予算を上げても無駄。§20 の 1 本読み（`KC_PREWARM` のスレッド 1 本化）へ移る |
+
+### 投入時に踏んだ罠
+
+`cli push` は push 直前にビルダーを再実行する。`KC_EXPERIMENT` を**push の
+ときにも**渡さないと既定の `baseline`（4,200 秒）で上書きされる。実際に
+version 7 はそれで `baseline` になった（`QUEUED` のうちに version 8 で
+上書きしたので GPU は消費していない）。`cli/push.py` に指紋比較の警告を入れ、
+`notes/pitfall-coverage.md` #35 に固定した。

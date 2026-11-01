@@ -121,6 +121,46 @@ def test_stage_renames_metadata(tmp_path):
     assert (tmp_path / kernel.code_file).is_file()
 
 
+def test_push_warns_when_the_rebuild_changes_the_artifact(
+        monkeypatch, capsys, tmp_path):
+    """push 直前にビルダーが走るので、env を渡し忘れると**別の設定**が積まれる。
+
+    2026-11-02 00:48 の実測: `KC_EXPERIMENT=baseline_long`（予算 7,000 秒）で
+    ビルドした直後に、env を付けずに push したら既定の `baseline`（4,200 秒）で
+    上書きされ、別の実験が積まれた。生成ログの 1 行目を読まないと気づけない。
+    """
+    kernel = spec.find("llama-server-cpu-check")
+    fake = tmp_path / "out"
+    fake.mkdir()
+    (fake / kernel.code_file).write_text("# 手元: 予算 7,000 秒\n", encoding="utf-8")
+    (fake / kernel.metadata_file).write_text(json.dumps({
+        "id": kernel.id, "title": "x", "code_file": kernel.code_file,
+        "language": "python", "kernel_type": "script",
+        "is_private": True, "enable_gpu": False}), encoding="utf-8")
+    fake_kernel = type(kernel)(**{**kernel.__dict__, "out": str(fake)})
+
+    monkeypatch.setattr(push_mod.spec, "find", lambda name: fake_kernel)
+    monkeypatch.setattr(push_mod, "_quota_lines", lambda: [])
+    monkeypatch.setattr(push_mod, "kaggle_exe",
+                        lambda need_no_run=False: "/bin/true")
+
+    def rebuild(targets=None, dry_run=False, extra_args=None):
+        # push が既定の env でビルダーを走らせた＝中身が戻る
+        (fake / kernel.code_file).write_text("# 既定: 予算 4,200 秒\n",
+                                             encoding="utf-8")
+        return 0
+    monkeypatch.setattr(build_mod, "run", rebuild)
+
+    class _Done:
+        returncode = 0
+    monkeypatch.setattr(push_mod.subprocess, "run", lambda *a, **kw: _Done())
+
+    assert push_mod.push(kernel.name, yes=True) == 0
+    out = capsys.readouterr().out
+    assert "生成物が変わった" in out
+    assert "KC_EXPERIMENT" in out, "env を push のときにも渡す旨が出ていない"
+
+
 def test_stage_requires_generated_code(tmp_path):
     kernel = spec.find("exl3-serve")
     fake = pathlib.Path(tmp_path) / "serve"
