@@ -328,8 +328,8 @@ CT_Q = ["--quantization", "compressed-tensors"]  # 明示（pack-quantized）
 # --quantization awq / auto は config の compressed-tensors と不一致で
 # ModelConfig の検証に落ちる（cfgresolve 実測）。試行段からは外した。
 
-STARTUP_BUDGET = int(os.environ.get("VLLM_STARTUP_BUDGET", "2700"))   # 45 分
-ATTEMPT_TIMEOUT = int(os.environ.get("VLLM_ATTEMPT_TIMEOUT", "2700"))  # 1 試行に総予算を渡す
+STARTUP_BUDGET = int(os.environ.get("VLLM_STARTUP_BUDGET", "4200"))   # 70 分
+ATTEMPT_TIMEOUT = int(os.environ.get("VLLM_ATTEMPT_TIMEOUT", "4200"))  # 1 試行に総予算を渡す
 # 10/31 のリセット後（30h）前提の値。install は wheelhouse Dataset で
 # 60〜120s になる見込み（未実測）。短い予算で回すときは環境変数で下げる。
 # 注意: 残クォータが 30 分未満のときにこの設定で push しないこと。
@@ -346,6 +346,19 @@ ATTEMPT_TIMEOUT = int(os.environ.get("VLLM_ATTEMPT_TIMEOUT", "2700"))  # 1 試�
 # そのあとの profile run（373 秒）に絶対に届かない。
 # 実測の幅は 103 MiB/s（out2g: 18.21 GiB / 181s）〜 20 MiB/s と 5 倍ある。
 # 予算は**速い回**に合わせると遅い回が必ず落ちるので、遅い側に合わせる。
+#
+# **なぜ 2700 でも足りなかったか（2026-11-01 の v3 実測）**
+# 2700 に上げた回は「切られる」のではなく、**最後の層まで届いてから**切られた:
+#   t=250s   attempt 1 開始（install は 222s で完了していた）
+#   t=2890s  layers.61 の最後のテンソル（= 全 62 層ぶんの読み込みが終わった）
+#   t=2722s  ← ここで予算超過を判定し、残り 8 段を打ち切り
+# つまり**重みだけで約 2,640 秒**。15.5 GiB を TP=2 の 2 ワーカーが
+# それぞれ読むので実 I/O は約 31 GB、実効 11.8 MiB/s。まだ profile run
+# （373 秒）が残るので、2,640 + 373 ≒ 3,013 秒が下限。2,700 では 300 秒足りない。
+# ホスト RAM は `avail=25,071 free=437 cache=23,455 MiB`、ワーカー RSS が
+# 12.1 GB × 2。空きが 500 MiB を割ったまま読み続けており、ページキャッシュが
+# 追い出されて GCSFUSE を読み直している疑いがある（→ notes §20）。
+# 4,200 は 3,013 秒に対して約 1,180 秒の余裕。ノードが 1.4 倍遅くても届く。
 #
 # `ATTEMPT_TIMEOUT` を総予算と同値にしてあるのは、「遅い」失敗と
 # 「非対応」失敗を区別するため。非対応は即座に落ちる（SGLang の sm80 など）ので
@@ -666,6 +679,20 @@ def _gist_summary():
         return (f"⚠ Gist 進捗: 0/{s['attempts']} 成功 — 外から見えていない。"
                 f" 理由: {s['last_error']}")
     return f"ℹ Gist 進捗: {s['ok']}/{s['attempts']} 成功"
+
+
+# 待機ループへ入る**前に** 1 回だけ往復を試す。理由は 2 つ:
+#  - ログの先頭は残る。30 分待って落ちた回でも「トークンが無かった」が読める
+#  - 進捗ファイル（vllm_status.txt）とは**別名**にする。前回の最終状態を
+#    起動直後に消さないため（Gist 側に「最後に通った時刻」も残る）
+_GIST_SELFTEST = kc_gist_selftest(_GIST_ID, "vllm_selftest.txt")
+if _GIST_SELFTEST["ok"]:
+    print(f"Gist 往復: OK（{_GIST_SELFTEST['token_detail']}）")
+else:
+    _why = (_GIST_SELFTEST.get("write_detail")
+            or _GIST_SELFTEST.get("read_detail") or "理由不明")
+    print(f"Gist 往復: NG — {_why}")
+    print(f"  トークン解決: {_GIST_SELFTEST.get('token_detail', '')}")
 # GPU クォータは有限。ラダーを全部試すと 1 時間超になり、途中で打ち切られると
 # 成果物が残らない。総予算を切って、必ずログを残して終わるようにする。
 # クォータ残 39 分（2,395s）で pip install に 5 分前後かかる前提の値。
@@ -1328,6 +1355,11 @@ if _WARM_CACHE.get("path"):
 elif _WARM_CACHE.get("skipped"):
     print(f"  ⏭ キャッシュ退避なし: {_WARM_CACHE['skipped']}")
 kc_save_timings({"warm_cache": _WARM_CACHE})
+# Gist の往復結果も残す。ログを貼らずに `kaggle kernels output` だけで
+# 「外から見えていたか」を判定できるようにする（timings と二重化）。
+save_output("gist_selftest.json",
+            json.dumps(_GIST_SELFTEST, ensure_ascii=False, indent=2))
+kc_save_timings({"gist_selftest": _GIST_SELFTEST})
 
 if not started:
     save_output("vllm_startup.log", tail)

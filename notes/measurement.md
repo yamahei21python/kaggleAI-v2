@@ -29,6 +29,7 @@ GPU を回すたびに「速くなった / 遅くなった」を**数字で**言
 | `warm_cache` | 退避した tar（`path` / `bytes` / `seconds` / `skipped` の理由） | 0.1s |
 | `warm_cache_restore` | 復元の結果（`mode` / `restored` / `tar` / `mib` / **`entries`** / `seconds`） | 0.1s |
 | `load_watch` | 起動待ちの間の観測（30 秒ごとの `rss_mib` / `read_mib` / `char_mib` / `vram_mib`） | 30s |
+| `gist_selftest` | 進捗 Gist の往復（`ok` / `token_present` / **`token_detail`** / `write_ok` / `read_ok` / `matched`） | — |
 
 `triton_cache.new_entries` は**「キャッシュが当たったか」の判定値**。
 「ファイルがある」ではない（キーが違えば黙ってミスし、373 秒が戻るだけ）。
@@ -38,6 +39,12 @@ GPU を回すたびに「速くなった / 遅くなった」を**数字で**言
 `/kaggle/working/ram_trace.txt` も**成功・失敗どちらでも**残る（5 秒ごとの
 `avail / free / cache / shm` + RSS 上位 3）。`timings` は 1 行の要約だが、
 こちらは推移なので「いつ何が起きたか」を後から追える。
+
+`gist_selftest.json` は**起動待ちに入る直前**の 1 回きりの往復結果。ログの
+先頭に `Gist 往復: OK / NG — <理由>` としても出る。`token_detail` が
+`ConnectionError ...` なら、アカウントに Secret はあっても**このカーネルに
+紐付いていない**（`notes/pitfall-coverage.md` の 33）。30 分待ってから
+「外から何も見えない」に気づくのを防ぐためのもの。
 
 ### キャッシュ実験を読むときの前提（2026-11-01 追記）
 
@@ -152,6 +159,23 @@ vllm (out2h)  4637.4    271.3      706.5    977.8       mtp+dd  65536  2.13.0+cu
 
 旧基準（v9 / PyPI 経路）は install 259.9s + 起動 642.4s = 915.5s。
 v10 の価値は数字ではなく**内訳が機械で埋まったこと**。
+
+### 重みロードの実測（2026-11-01 18:30 / `baseline` v3）
+
+上の表は「起動」を 1 つの数字として扱っているが、v3 で**中身が割れた**。
+
+| 区間 | 実測 | 備考 |
+|---|---|---|
+| install | 222.3s | wheelhouse `--no-index` |
+| **重みロード** | **約 2,640s** | t=250 → 2,890（`layers.61` の最後） |
+| profile run | 373s | §19 / `notes/vllm-startup-speedup.md` §20 |
+| 合計（下限） | **3,013s** | 予算 2,700 では 300 秒足りなかった |
+
+15.5 GiB を TP=2 の 2 ワーカーがそれぞれ読むので実 I/O は約 31 GB、
+**11.8 MiB/s**。速い回（103 MiB/s）とは 9 倍の開きがある。
+**「起動 486 秒」のような数字は、速いノードに当たった回の値**であって
+再現する値ではない。比較表を作るときは `warm_cache_restore` と
+`ram_trace.txt` の `free` を必ず並べる。
 
 ## 施策を入れたら必ず 3 つ揃える
 

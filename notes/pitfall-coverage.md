@@ -1,4 +1,4 @@
-# 落とし穴とテストの対応表（2026-11-01 16:30 更新）
+# 落とし穴とテストの対応表（2026-11-01 18:40 更新）
 
 GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定している。
 「同じ穴に二度落ちない」ことが目的なので、テストは**構造**を見る
@@ -62,6 +62,8 @@ GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定し�
 | 29 | **1 回の成功を「動く」と読まない**。ExLlamaV3 は同じモデル・同じ wheel・同じ T4 x2 で v2 が 229 秒、v3 が 1800 秒超（起動せず）。1 回の成功は再現性の証拠にならない | 台帳には「T4 で動くのは確実／安定性は未確定」と分けて書く。**同じ条件で 2 回通るまで既定に昇格しない** | テストにしない（実行の履歴。`notes/engine-rollout.md`） |
 | 30 | **tar はあるが中身が薄い**ケースを「キャッシュは効かない」と誤読する。v15 の tar は 30 エントリで `chunk_o` / `chunk_delta_h` が無い（profile run に未到達）。復元すると一部だけ当たって「少し効いた」ように見える | `require` では**復元したファイル名**に `chunk_o` / `chunk_delta_h` が無ければ落とす。件数で判定しない（Triton の版で変わり、しきい値を置くと正当な tar を弾く）。内訳は `timings.warm_cache_restore` にも残す | `test_vllm_cells.py::test_warm_cache_require_rejects_a_tar_without_the_profile_run_kernels` / `..._accepts_a_complete_tar_and_records_the_count` |
 | 31 | **「遅い」失敗を「壊れた」失敗として扱う**。`baseline` は 2 試行とも重みロードの途中で切られた（900 秒 / 806 秒）。重み 17.41 GiB を 20 MiB/s で読むと 900 秒で、そのあとに profile run 373 秒が乗る。速い回（103 MiB/s）に合わせた予算は遅い回で必ず落ちる | 1 試行の上限を総予算と同値にし、遅い回に予算を全部渡す。「非対応」は即座に落ちるので予算を食わない | `test_vllm_cells.py::test_attempt_timeout_covers_the_whole_startup_budget` |
+| 32 | **予算を「重みロード」だけで決めてしまう**。2700 秒に上げた v3 は全 62 層を読み終えた **t=2890s** のあと t=2972s で打ち切られた。重み 2,640 秒 + profile run 373 秒 = **3,013 秒が下限**で、2700 では 300 秒足りない | 予算は「重み + profile run + 余裕」で決める。下限を 3600 としてテストで固定（実測 3,013 秒の 1.2 倍） | `test_vllm_cells.py::test_attempt_timeout_covers_the_whole_startup_budget`（`b >= 3600`） |
+| 33 | **Kaggle Secrets の「未紐付け」は `ConnectionError` として出る**。`get_secret()` が `Connection error trying to communicate with service.` を投げるので、ネットワーク障害を疑って時間を溶かす。実際は「このカーネルに Secret が 1 つも付いていない」で、アカウントへの登録だけでは読めない | 例外を握りつぶさず**理由ごと返す**（`kc_gh_token_detail`）。`""` の 1 語では「登録漏れ」と「紐付け漏れ」を分けられない | `test_runtime.py::test_gist`（理由が空にならないこと）+ `cpu-tests/gist`（実機で `token_detail` を確認） |
 
 
 ## 既に別ファイルで固定済みのもの

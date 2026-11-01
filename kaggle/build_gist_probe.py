@@ -65,22 +65,26 @@ def main():
     data = {"ok": False, "stage": "start", "python": sys.version.split()[0]}
     try:
         data["stage"] = "resolve"
-        tok = kc_gh_token()
+        tok, tok_why = kc_gh_token_detail()
         gist_id = (os.environ.get("GIST_ID") or GIST_ID_DEFAULT or "").strip()
         data["token_present"] = bool(tok)
+        data["token_detail"] = tok_why
         data["gist_id"] = gist_id
-        print(f"token={'あり' if tok else 'なし'} gist_id={gist_id!r}")
+        print(f"token={'あり' if tok else 'なし'} ({tok_why}) gist_id={gist_id!r}")
 
         # ── 1〜3: 本番と同じ経路で往復する ──
+        # `token=tok` を**渡さない**。空文字を明示すると selftest 側の
+        # token_detail が「引数で明示」に潰れ、解決に失敗した理由
+        # （ConnectionError = このカーネルに Secret が紐付いていない）が消える。
         data["stage"] = "selftest"
-        r = kc_gist_selftest(gist_id, STATUS_FILE, token=tok)
+        r = kc_gist_selftest(gist_id, STATUS_FILE)
         data["selftest"] = r
         print("selftest: " + json.dumps(r, ensure_ascii=False))
 
         # ── 4: 陰性対照。失敗が理由つきで返らなければ、成功の判定も信用できない ──
         data["stage"] = "negative"
         nok, ndetail = kc_gist_write(BOGUS_GIST, STATUS_FILE, "probe\n",
-                                     token=tok)
+                                     token=tok or None)
         data["negative"] = {"write_ok": nok, "detail": ndetail}
         # トークンが無い回は 1 で既に落ちているので、ここは「拒否されたか」を見る。
         data["negative_ok"] = (not nok) and bool(ndetail)
@@ -89,8 +93,10 @@ def main():
         data["ok"] = bool(r.get("ok")) and data["negative_ok"]
         if not data["ok"]:
             if not r.get("token_present"):
-                data["advice"] = ("Kaggle Secrets に GITHUB_TOKEN を登録する"
-                                  "（scope は gist のみでよい）")
+                data["advice"] = ("GITHUB_TOKEN を Secrets に登録し、"
+                                  "**このカーネル（gist-probe）に紐付ける**。"
+                                  "登録だけでは読めず、`ConnectionError` に"
+                                  "なる（scope は gist でよい）")
             elif not r.get("write_ok"):
                 data["advice"] = ("書き込みが拒否された。トークンの scope が "
                                   "gist か、GIST_ID が本人の Gist かを確認する")

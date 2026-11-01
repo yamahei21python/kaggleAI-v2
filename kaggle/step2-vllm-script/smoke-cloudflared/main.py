@@ -636,14 +636,36 @@ _GIST_API = "https://api.github.com/gists/"
 
 def kc_gh_token():
     """GITHUB_TOKEN を env → Kaggle Secrets の順で解決する。無ければ空文字。"""
+    return kc_gh_token_detail()[0]
+
+
+def kc_gh_token_detail():
+    """`(token, detail)`。detail は**どこで解決したか / どこで転んだか**。
+
+    `detail` を返すのは、`""` の 1 語では対処が決まらないため。Kaggle の
+    Secret は**アカウントに登録するだけでは足りず、カーネルごとに紐付ける**
+    必要がある。2026-11-01 に新しく push した `gist-probe` は
+    `token_present=false` で、登録漏れなのか紐付け漏れなのかを
+    `""` からは読み取れなかった（Kaggle は「この notebook には無い」を
+    例外で返すので、そこまで拾わないと区別できない）。
+    """
     tok = os.environ.get("GITHUB_TOKEN", "").strip()
     if tok:
-        return tok
+        return tok, "env:GITHUB_TOKEN"
     try:
         from kaggle_secrets import UserSecretsClient
-        return (UserSecretsClient().get_secret("GITHUB_TOKEN") or "").strip()
-    except Exception:
-        return ""
+    except Exception as e:
+        return "", f"kaggle_secrets を import できない（{type(e).__name__}: {e}）"
+    try:
+        tok = (UserSecretsClient().get_secret("GITHUB_TOKEN") or "").strip()
+    except Exception as e:
+        # ここに来る典型は「このカーネルに Secret が紐付いていない」。
+        return "", (f"Secret を読めない（{type(e).__name__}: {e}）"
+                    " — アカウントに登録済みでも、カーネルごとの紐付けが"
+                    "無いと読めない")
+    if not tok:
+        return "", "Secret は読めたが中身が空"
+    return tok, "secrets:GITHUB_TOKEN"
 
 
 def kc_gist_write(gist_id, filename, text, token=None, timeout=10):
@@ -657,9 +679,14 @@ def kc_gist_write(gist_id, filename, text, token=None, timeout=10):
     """
     if not gist_id:
         return False, "GIST_ID が空（settings の GIST_ID_DEFAULT も未設定）"
-    tok = kc_gh_token() if token is None else token
-    if not tok:
-        return False, "GITHUB_TOKEN が無い（Secrets 未登録、または gist 権限なし）"
+    if token is None:
+        tok, why = kc_gh_token_detail()
+        if not tok:
+            return False, why
+    else:
+        tok = token
+        if not tok:
+            return False, "トークンが空（引数で明示された）"
     body = json.dumps({"files": {filename: {"content": text}}}).encode()
     req = urllib.request.Request(
         _GIST_API + gist_id, data=body, method="PATCH",
@@ -689,11 +716,20 @@ def kc_gist_selftest(gist_id, filename="vllm_status.txt", token=None,
     GPU を使う前に Kaggle のコンテナから 1 回走らせておく。
     """
     stamp = "selftest " + time.strftime("%Y-%m-%d %H:%M:%S")
-    tok = kc_gh_token() if token is None else token
+    if token is None:
+        tok, token_why = kc_gh_token_detail()
+    else:
+        tok, token_why = token, "引数で明示"
     out = {"ok": False, "gist_id": gist_id, "filename": filename,
-           "token_present": bool(tok), "stamp": stamp,
+           "token_present": bool(tok), "token_detail": token_why, "stamp": stamp,
            "write_ok": False, "write_detail": "", "read_ok": False,
            "read_detail": "", "matched": False, "files": []}
+    if not tok:
+        # 解決に失敗した**理由**をそのまま write_detail に置く。ここで
+        # kc_gist_write に空トークンを渡すと「引数で明示された」という
+        # 無意味な理由に潰れて、紐付け漏れが分からなくなる。
+        out["write_detail"] = token_why
+        return out
     ok, detail = kc_gist_write(gist_id, filename, stamp + "\n",
                               token=tok, timeout=timeout)
     out["write_ok"], out["write_detail"] = ok, detail
@@ -2603,8 +2639,8 @@ def launch(model_dir):
     # --quantization awq / auto は config の compressed-tensors と不一致で
     # ModelConfig の検証に落ちる（cfgresolve 実測）。試行段からは外した。
 
-    STARTUP_BUDGET = int(os.environ.get("VLLM_STARTUP_BUDGET", "2700"))   # 45 分
-    ATTEMPT_TIMEOUT = int(os.environ.get("VLLM_ATTEMPT_TIMEOUT", "2700"))  # 1 試行に総予算を渡す
+    STARTUP_BUDGET = int(os.environ.get("VLLM_STARTUP_BUDGET", "4200"))   # 70 分
+    ATTEMPT_TIMEOUT = int(os.environ.get("VLLM_ATTEMPT_TIMEOUT", "4200"))  # 1 試行に総予算を渡す
     # 10/31 のリセット後（30h）前提の値。install は wheelhouse Dataset で
     # 60〜120s になる見込み（未実測）。短い予算で回すときは環境変数で下げる。
     # 注意: 残クォータが 30 分未満のときにこの設定で push しないこと。
@@ -2621,6 +2657,19 @@ def launch(model_dir):
     # そのあとの profile run（373 秒）に絶対に届かない。
     # 実測の幅は 103 MiB/s（out2g: 18.21 GiB / 181s）〜 20 MiB/s と 5 倍ある。
     # 予算は**速い回**に合わせると遅い回が必ず落ちるので、遅い側に合わせる。
+    #
+    # **なぜ 2700 でも足りなかったか（2026-11-01 の v3 実測）**
+    # 2700 に上げた回は「切られる」のではなく、**最後の層まで届いてから**切られた:
+    #   t=250s   attempt 1 開始（install は 222s で完了していた）
+    #   t=2890s  layers.61 の最後のテンソル（= 全 62 層ぶんの読み込みが終わった）
+    #   t=2722s  ← ここで予算超過を判定し、残り 8 段を打ち切り
+    # つまり**重みだけで約 2,640 秒**。15.5 GiB を TP=2 の 2 ワーカーが
+    # それぞれ読むので実 I/O は約 31 GB、実効 11.8 MiB/s。まだ profile run
+    # （373 秒）が残るので、2,640 + 373 ≒ 3,013 秒が下限。2,700 では 300 秒足りない。
+    # ホスト RAM は `avail=25,071 free=437 cache=23,455 MiB`、ワーカー RSS が
+    # 12.1 GB × 2。空きが 500 MiB を割ったまま読み続けており、ページキャッシュが
+    # 追い出されて GCSFUSE を読み直している疑いがある（→ notes §20）。
+    # 4,200 は 3,013 秒に対して約 1,180 秒の余裕。ノードが 1.4 倍遅くても届く。
     #
     # `ATTEMPT_TIMEOUT` を総予算と同値にしてあるのは、「遅い」失敗と
     # 「非対応」失敗を区別するため。非対応は即座に落ちる（SGLang の sm80 など）ので
@@ -2941,6 +2990,20 @@ def launch(model_dir):
             return (f"⚠ Gist 進捗: 0/{s['attempts']} 成功 — 外から見えていない。"
                     f" 理由: {s['last_error']}")
         return f"ℹ Gist 進捗: {s['ok']}/{s['attempts']} 成功"
+
+
+    # 待機ループへ入る**前に** 1 回だけ往復を試す。理由は 2 つ:
+    #  - ログの先頭は残る。30 分待って落ちた回でも「トークンが無かった」が読める
+    #  - 進捗ファイル（vllm_status.txt）とは**別名**にする。前回の最終状態を
+    #    起動直後に消さないため（Gist 側に「最後に通った時刻」も残る）
+    _GIST_SELFTEST = kc_gist_selftest(_GIST_ID, "vllm_selftest.txt")
+    if _GIST_SELFTEST["ok"]:
+        print(f"Gist 往復: OK（{_GIST_SELFTEST['token_detail']}）")
+    else:
+        _why = (_GIST_SELFTEST.get("write_detail")
+                or _GIST_SELFTEST.get("read_detail") or "理由不明")
+        print(f"Gist 往復: NG — {_why}")
+        print(f"  トークン解決: {_GIST_SELFTEST.get('token_detail', '')}")
     # GPU クォータは有限。ラダーを全部試すと 1 時間超になり、途中で打ち切られると
     # 成果物が残らない。総予算を切って、必ずログを残して終わるようにする。
     # クォータ残 39 分（2,395s）で pip install に 5 分前後かかる前提の値。
@@ -3603,6 +3666,11 @@ def launch(model_dir):
     elif _WARM_CACHE.get("skipped"):
         print(f"  ⏭ キャッシュ退避なし: {_WARM_CACHE['skipped']}")
     kc_save_timings({"warm_cache": _WARM_CACHE})
+    # Gist の往復結果も残す。ログを貼らずに `kaggle kernels output` だけで
+    # 「外から見えていたか」を判定できるようにする（timings と二重化）。
+    save_output("gist_selftest.json",
+                json.dumps(_GIST_SELFTEST, ensure_ascii=False, indent=2))
+    kc_save_timings({"gist_selftest": _GIST_SELFTEST})
 
     if not started:
         save_output("vllm_startup.log", tail)

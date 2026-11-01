@@ -22,14 +22,36 @@ _GIST_API = "https://api.github.com/gists/"
 
 def kc_gh_token():
     """GITHUB_TOKEN を env → Kaggle Secrets の順で解決する。無ければ空文字。"""
+    return kc_gh_token_detail()[0]
+
+
+def kc_gh_token_detail():
+    """`(token, detail)`。detail は**どこで解決したか / どこで転んだか**。
+
+    `detail` を返すのは、`""` の 1 語では対処が決まらないため。Kaggle の
+    Secret は**アカウントに登録するだけでは足りず、カーネルごとに紐付ける**
+    必要がある。2026-11-01 に新しく push した `gist-probe` は
+    `token_present=false` で、登録漏れなのか紐付け漏れなのかを
+    `""` からは読み取れなかった（Kaggle は「この notebook には無い」を
+    例外で返すので、そこまで拾わないと区別できない）。
+    """
     tok = os.environ.get("GITHUB_TOKEN", "").strip()
     if tok:
-        return tok
+        return tok, "env:GITHUB_TOKEN"
     try:
         from kaggle_secrets import UserSecretsClient
-        return (UserSecretsClient().get_secret("GITHUB_TOKEN") or "").strip()
-    except Exception:
-        return ""
+    except Exception as e:
+        return "", f"kaggle_secrets を import できない（{type(e).__name__}: {e}）"
+    try:
+        tok = (UserSecretsClient().get_secret("GITHUB_TOKEN") or "").strip()
+    except Exception as e:
+        # ここに来る典型は「このカーネルに Secret が紐付いていない」。
+        return "", (f"Secret を読めない（{type(e).__name__}: {e}）"
+                    " — アカウントに登録済みでも、カーネルごとの紐付けが"
+                    "無いと読めない")
+    if not tok:
+        return "", "Secret は読めたが中身が空"
+    return tok, "secrets:GITHUB_TOKEN"
 
 
 def kc_gist_write(gist_id, filename, text, token=None, timeout=10):
@@ -43,9 +65,14 @@ def kc_gist_write(gist_id, filename, text, token=None, timeout=10):
     """
     if not gist_id:
         return False, "GIST_ID が空（settings の GIST_ID_DEFAULT も未設定）"
-    tok = kc_gh_token() if token is None else token
-    if not tok:
-        return False, "GITHUB_TOKEN が無い（Secrets 未登録、または gist 権限なし）"
+    if token is None:
+        tok, why = kc_gh_token_detail()
+        if not tok:
+            return False, why
+    else:
+        tok = token
+        if not tok:
+            return False, "トークンが空（引数で明示された）"
     body = json.dumps({"files": {filename: {"content": text}}}).encode()
     req = urllib.request.Request(
         _GIST_API + gist_id, data=body, method="PATCH",
@@ -75,11 +102,20 @@ def kc_gist_selftest(gist_id, filename="vllm_status.txt", token=None,
     GPU を使う前に Kaggle のコンテナから 1 回走らせておく。
     """
     stamp = "selftest " + time.strftime("%Y-%m-%d %H:%M:%S")
-    tok = kc_gh_token() if token is None else token
+    if token is None:
+        tok, token_why = kc_gh_token_detail()
+    else:
+        tok, token_why = token, "引数で明示"
     out = {"ok": False, "gist_id": gist_id, "filename": filename,
-           "token_present": bool(tok), "stamp": stamp,
+           "token_present": bool(tok), "token_detail": token_why, "stamp": stamp,
            "write_ok": False, "write_detail": "", "read_ok": False,
            "read_detail": "", "matched": False, "files": []}
+    if not tok:
+        # 解決に失敗した**理由**をそのまま write_detail に置く。ここで
+        # kc_gist_write に空トークンを渡すと「引数で明示された」という
+        # 無意味な理由に潰れて、紐付け漏れが分からなくなる。
+        out["write_detail"] = token_why
+        return out
     ok, detail = kc_gist_write(gist_id, filename, stamp + "\n",
                               token=tok, timeout=timeout)
     out["write_ok"], out["write_detail"] = ok, detail

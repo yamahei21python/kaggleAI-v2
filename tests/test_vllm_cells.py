@@ -500,9 +500,13 @@ def test_attempt_timeout_covers_the_whole_startup_budget():
     assert a >= b, (
         f"1 試行の上限 {a}s が総予算 {b}s より小さい。遅い回は必ず切られる"
         "（実測 2026-11-01: 重みだけで 900 秒 + profile run 373 秒）")
-    assert b >= 2400, (
-        f"総予算 {b}s は実測の遅い側に足りない。重み 900s + profile 373s + "
-        "compile 60s + smoke に余裕を持たせること")
+    # 下限は**実測の遅い側**で決める。2026-11-01 の v3 は 2700 でも足りず、
+    # 全 62 層を読み終えた t=2890s のあと t=2972s で打ち切られた
+    # （重み 2,640s + profile 373s = 3,013s が下限）。2400 に戻すと
+    # 「最後まで読んでから切る」を再現するだけになる。
+    assert b >= 3600, (
+        f"総予算 {b}s は実測の遅い側に足りない。重み 2,640s + profile 373s "
+        "= 3,013s に余裕を持たせること")
 
 
 def test_warm_cache_require_raises_on_an_empty_dataset(tmp_path):
