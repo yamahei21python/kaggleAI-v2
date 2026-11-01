@@ -136,7 +136,8 @@ flow = Flow(
     launch_md="---\n### 🔥 Ollama サーバー起動\n",
     verify_md="---\n### ✅ 公開URL経由の疎通確認（UI / chat / streaming / OpenAI互換 / GPU常駐）\n",
     # runtime/engines/ollama.py の kc_unload_model / kc_wait_vram_free を使う
-    runtime=("net", "proc", "storage", "keepalive", "proxy", "ollama"),
+    runtime=("net", "proc", "storage", "keepalive", "proxy",
+             "ollama", "beacon"),
 )
 flow.write(OUT)
 

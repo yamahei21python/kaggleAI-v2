@@ -662,3 +662,150 @@ def test_gist():
         g._GIST_API = base
         srv.shutdown()
         srv.server_close()
+
+
+# --------------------------------------------------------------------------
+# beacon（カーネルのコードを掲示板にする。ネットワークに出ない範囲だけ）
+# --------------------------------------------------------------------------
+def test_beacon():
+    print("\n=== beacon ===")
+    import runtime.beacon as b
+
+    check("束に kc_beacon_publish が入る",
+          "def kc_beacon_publish" in runtime.source_bundle("beacon"))
+
+    # ── 掲示板のメタデータ。**実行しない**ので GPU もネットも要らない ──
+    m = b.kc_beacon_meta("someone/serve-url-beacon")
+    check("id がそのまま入る", m["id"] == "someone/serve-url-beacon")
+    check("title は slug に一致", m["title"] == "serve-url-beacon")
+    check("GPU を使わない", m["enable_gpu"] is False)
+    check("ネットを使わない", m["enable_internet"] is False)
+    check("非公開（URL が入口なので）", m["is_private"] is True)
+
+    # ── 書いたものが読み戻せる（本文とパーサの契約） ──
+    body = b.kc_beacon_body("https://x.trycloudflare.com", "serving", 1762051200.5)
+    got = b.kc_beacon_parse(body)
+    check("URL が戻る", got["url"] == "https://x.trycloudflare.com", got)
+    check("STAGE が戻る", got["stage"] == "serving")
+    check("UPDATED が float で戻る", got["updated"] == 1762051200.5)
+
+    # 引用符が混ざっても壊れない（repr で埋めている）
+    weird = b.kc_beacon_body('https://a/"b".example', "serving", 1.0)
+    check("引用符入りでも戻る", b.kc_beacon_parse(weird)["url"] == 'https://a/"b".example')
+
+    # ── 鮮度。古い値を掴む事故（2026-11-01）の防波堤 ──
+    d = {"url": "u", "stage": "serving", "updated": 1000.0}
+    check("push 前のスタンプなら本物", b.kc_beacon_is_fresh(d, 990) is True)
+    check("1 時間後なら偽物", b.kc_beacon_is_fresh(d, 1000 + 3600) is False)
+    check("UPDATED が無ければ偽物", b.kc_beacon_is_fresh({}, 0) is False)
+    check("文字列の UPDATED は偽物",
+          b.kc_beacon_is_fresh({"updated": "1000"}, 0) is False)
+
+    # ── 失敗は必ず理由を持つ ──
+    ok, why = b.kc_beacon_publish("u", slug="")
+    check("slug 空は失敗", ok is False and "slug" in why, why)
+    ok, why = b.kc_beacon_publish("u", slug="noowner")
+    check("owner/name でない slug は失敗", ok is False and "owner/name" in why, why)
+
+    saved = os.environ.pop("KC_BEACON_SLUG", None)
+    try:
+        os.environ["KC_BEACON_SLUG"] = "env/beacon"
+        check("env から slug を読む", b.kc_beacon_slug() == "env/beacon")
+        check("引数が env より優先", b.kc_beacon_slug("arg/x") == "arg/x")
+    finally:
+        os.environ.pop("KC_BEACON_SLUG", None)
+        if saved is not None:
+            os.environ["KC_BEACON_SLUG"] = saved
+
+
+def test_beacon_cli_rejects_stale_and_probe(monkeypatch):
+    """`cli beacon` は**古い値と検証用の値を返さない**。
+
+    2026-11-01 に古いテスト URL を本物として掴む事故が出ている。ここが
+    素通りすると、VM は存在しない URL に繋ぎに行って原因不明のタイムアウトになる。
+    """
+    print("\n=== cli beacon ===")
+    import time
+
+    from cli import beacon as cb
+    from runtime import beacon as b
+
+    now = time.time()
+    cases = [
+        ({"url": "https://ok", "stage": "serving", "updated": now}, 0, False),
+        ({"url": "https://old", "stage": "serving", "updated": now - 99999}, 1, False),
+        ({"url": "https://probe", "stage": "probe", "updated": now}, 1, False),
+        ({"url": "https://probe", "stage": "probe", "updated": now}, 0, True),
+        ({"url": "", "stage": "placeholder", "updated": 0.0}, 1, False),
+    ]
+    for data, want_rc, allow_probe in cases:
+        monkeypatch.setattr(b, "kc_beacon_pull",
+                            lambda *a, **k: (True, "pulled", dict(data)))
+        argv = ["--json"] + (["--allow-probe"] if allow_probe else [])
+        rc = cb.main(argv)
+        check(f"{data['stage']}/{data['url'][:12]} → rc={want_rc}", rc == want_rc, rc)
+
+
+def test_beacon_pull_falls_back_to_cli(tmp_path, monkeypatch):
+    """Python パッケージが import できなくても CLI で引ける。
+
+    手元の `python3` には `kaggle` が入っておらず（3.9 の user site にしか
+    無い）、`cli beacon` が `No module named 'kaggle'` で死んでいた（実測）。
+    逃げ道が無いと、掲示板を読む手段がカーネルの中だけになる。
+    """
+    print("\n=== beacon: CLI へのフォールバック ===")
+    from runtime import beacon as b
+
+    def boom():
+        raise ModuleNotFoundError("No module named 'kaggle'")
+
+    def fake_cli(slug, dest, exe="", timeout=180):
+        with open(os.path.join(dest, "serve-url-beacon.py"), "w",
+                  encoding="utf-8") as f:
+            f.write(b.kc_beacon_body("https://cli.example", "serving", 1234.0))
+        return True, "kaggle CLI"
+
+    monkeypatch.setattr(b, "kc_kaggle_api", boom)
+    monkeypatch.setattr(b, "kc_beacon_pull_cli", fake_cli)
+    ok, detail, data = b.kc_beacon_pull("someone/board", dest=str(tmp_path))
+    check("CLI 経由でも読める", ok is True, detail)
+    check("URL が戻る", data["url"] == "https://cli.example", data)
+    check("STAGE が戻る", data["stage"] == "serving", data)
+
+    # 両方失敗したら、**両方の理由**を出す（片方だけだと原因を追えない）
+    def fail_cli(slug, dest, exe="", timeout=180):
+        return False, "kaggle CLI が 1 で終了"
+
+    monkeypatch.setattr(b, "kc_beacon_pull_cli", fail_cli)
+    ok, detail, data = b.kc_beacon_pull("someone/board", dest=str(tmp_path))
+    check("両方失敗なら失敗", ok is False and data == {}, detail)
+    check("API 側の理由も残る", "No module named" in detail, detail)
+    check("CLI 側の理由も残る", "1 で終了" in detail, detail)
+
+
+def test_beacon_kaggle_path_ignores_repo_dir(tmp_path):
+    """リポジトリ直下の `kaggle/` がインストール済みパッケージを隠さない。
+
+    `kaggle/`（カーネルのビルド元）は `__init__.py` を持たないので名前空間
+    パッケージとして `import kaggle` を横取りし、`kaggle.api` が無いため
+    `No module named 'kaggle.api'` になる（実測）。
+    """
+    print("\n=== beacon: kaggle パッケージの影を避ける ===")
+    from runtime import beacon as b
+
+    shadow = tmp_path / "repo"
+    (shadow / "kaggle" / "cells").mkdir(parents=True)      # api が無い＝影
+    real = tmp_path / "site"
+    (real / "kaggle" / "api").mkdir(parents=True)          # 本物
+    other = tmp_path / "stdlib"
+    other.mkdir()
+
+    keep = b.kc_kaggle_path([str(shadow), str(other), str(real)])
+    check("影のパスは落ちる", str(shadow) not in keep, keep)
+    check("本物は残る", str(real) in keep, keep)
+    check("無関係なパスは残る", str(other) in keep, keep)
+
+    entries = [str(shadow)]
+    b.kc_kaggle_path(entries)
+    check("引数のリストを書き換えない", entries == [str(shadow)], entries)
+

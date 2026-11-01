@@ -191,6 +191,24 @@ KERNELS = (
     _K("gist-probe", "gist probe", "script",
        "kaggle/cpu-tests/gist", "main.py", gpu=False,
        ds=(), builder="build_gist_probe", status=SEMI),
+    # ---- 公開 URL のビーコン（カーネルのコードを掲示板にする）----
+    # **実行しないカーネル**。配信カーネルが `kernels_push` で main.py を
+    # 書き換え、読み手は `kernels pull` で URL を読む。Secrets も外部
+    # サービスも要らないので、専用アカウント運用と両立する
+    # （notes/url-publishing.md）。
+    #
+    # 2 本あるのは、検証が本番の掲示板を上書きしないため。2026-11-01 に
+    # 「古いテスト URL を掴む」事故が出ているので、置き場を分ける。
+    _K("serve-url-beacon", "serve-url-beacon", "script",
+       "kaggle/serve-url-beacon", "main.py", gpu=False,
+       ds=(), builder="build_serve_url_beacon", status=SEMI),
+    _K("serve-url-beacon-test", "serve-url-beacon-test", "script",
+       "kaggle/cpu-tests/beacon-target", "main.py", gpu=False,
+       ds=(), builder="build_serve_url_beacon", status=SEMI),
+    # ビーコンの往復を CPU だけで確かめる（GPU 0 秒）。
+    _K("beacon-probe", "beacon probe", "script",
+       "kaggle/cpu-tests/beacon", "main.py", gpu=False,
+       ds=(), builder="build_beacon_probe", status=SEMI),
     # ---- llama-server / script 版（notebook 版と並走）----
     _K("llama-server-ngrok-script",
        "llama-server ngrok script", "script",

@@ -15,6 +15,11 @@ if not GIST_ID:
 if not GIST_ID:
     GIST_ID = GIST_ID_DEFAULT
 
+# 公開 URL を置く掲示板カーネルの名前（owner は GIST_OWNER と同じ）。
+# カーネルから push できるのは自分のカーネルだけなので、配信カーネルと
+# 同じアカウントに置く。settings で `BEACON_NAME` を定義すれば上書きできる。
+BEACON_NAME = globals().get("BEACON_NAME") or "serve-url-beacon"
+
 
 def _gh_token():
     tok = os.environ.get("GITHUB_TOKEN", "")
@@ -28,11 +33,35 @@ def _gh_token():
 
 
 def publish_url(u):
-    """現在の公開URL を Gist に書く（quick tunnel は URL が毎回変わるため）。
+    """現在の公開URL を Gist とビーコンに書く（URL が毎回変わるため）。
 
     Gist は secret（非公開URL）だが、URL を知れば誰でも読める。
     認証は付けていないので、実質この URL 自体が入口になる。
+
+    ビーコン（`kc_beacon_publish`）は**Secrets を使わない**経路で、カーネルの
+    コードを掲示板にする。Gist がスキップされる環境（Secret 未紐付け・
+    専用アカウント運用）でも URL を外から読めるようにするため、Gist の
+    成否に関わらず**必ず**呼ぶ。`notes/url-publishing.md`。
     """
+    ok_gist = _publish_gist(u)
+    _publish_beacon(u)
+    return ok_gist
+
+
+def _publish_beacon(u):
+    """ビーコンを更新する。失敗しても配信は止めない（理由は必ず出す）。"""
+    slug = f"{GIST_OWNER}/{BEACON_NAME}" if GIST_OWNER else ""
+    try:
+        ok, why = kc_beacon_publish(u, stage="serving", slug=slug)
+    except NameError:
+        # beacon を束ねていないビルド（移行前の notebook）。
+        print("ℹ ビーコン未同梱 → URL 配布は Gist のみ")
+        return False
+    print(("📡 ビーコン更新: " + why) if ok else ("⚠ ビーコン更新失敗（続行）: " + why))
+    return ok
+
+
+def _publish_gist(u):
     tok = _gh_token()
     if not tok:
         print("ℹ GITHUB_TOKEN 未設定 → 固定URL配布はスキップ（接続情報セルを使う）")
@@ -61,3 +90,5 @@ def publish_url(u):
 publish_url(public_url)
 print("📌 固定取得先: https://gist.githubusercontent.com/"
       + GIST_OWNER + "/" + GIST_ID + "/raw/url.txt")
+print("📡 ビーコン取得先: kaggle kernels pull "
+      + GIST_OWNER + "/" + BEACON_NAME)

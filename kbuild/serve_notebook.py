@@ -93,7 +93,7 @@ class Flow:
     warmup_md: str = MD_WARMUP
     verify_md: str = MD_VERIFY
     keepalive_md: str = MD_KEEPALIVE
-    runtime: tuple = ("net", "proc", "storage", "keepalive", "proxy")
+    runtime: tuple = ("net", "proc", "storage", "keepalive", "proxy", "beacon")
 
     def cells(self):
         if self.tunnel not in MD_TUNNEL:

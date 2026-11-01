@@ -18,6 +18,9 @@ MODULES = {
     "proxy": "proxy.py",
     "quota": "quota.py",
     "gist": "gist.py",
+    # 公開 URL の置き場。Gist の代わりにカーネル自体を掲示板にする
+    # （Secrets 不要・専用アカウントで完結）。notes/url-publishing.md。
+    "beacon": "beacon.py",
     "ollama": "engines/ollama.py",
     "lmdeploy": "engines/lmdeploy.py",
     "sglang": "engines/sglang.py",
@@ -31,13 +34,22 @@ HEADER = (
 )
 
 
+def module_source(name):
+    """1 モジュールのソースだけ（HEADER 無し）。
+
+    骨格（`kbuild/serve_script.py` / `serve_notebook.py`）が、呼び出し側から
+    渡された束に**後から 1 本だけ足す**ときに使う。HEADER を二重にしない。
+    """
+    rel = MODULES[name]
+    body = (HERE / rel).read_text(encoding="utf-8").rstrip()
+    return f"# ── runtime/{rel} " + "─" * max(0, 46 - len(rel)) + "\n" + body + "\n\n"
+
+
 def source_bundle(*names):
     """指定モジュールのソースを連結した 1 セル分の文字列を返す。"""
     parts = [HEADER]
     for name in names:
-        rel = MODULES[name]
-        parts.append(f"# ── runtime/{rel} " + "─" * max(0, 46 - len(rel)) + "\n")
-        parts.append((HERE / rel).read_text(encoding="utf-8").rstrip() + "\n\n")
+        parts.append(module_source(name))
     return "".join(parts)
 
 

@@ -42,6 +42,11 @@ def _parser():
     p_timings = sub.add_parser(
         "timings", help="result.json から起動時間の内訳を比べる")
     p_timings.add_argument("paths", nargs="*", help="result.json のパス（複数可）")
+
+    p_beacon = sub.add_parser(
+        "beacon", help="ビーコン（掲示板カーネル）から公開 URL を読む")
+    p_beacon.add_argument("rest", nargs=argparse.REMAINDER,
+                          help="--slug / --json / --max-age / --allow-probe")
     return ap
 
 
@@ -65,6 +70,9 @@ def main(argv=None):
     if argv[:1] == ["timings"]:
         from cli.timings import main as timings_main
         return timings_main(argv[1:])
+    if argv[:1] == ["beacon"]:
+        from cli.beacon import main as beacon_main
+        return beacon_main(argv[1:])
 
     args = _parser().parse_args(argv)
     if args.cmd in (None, "build"):

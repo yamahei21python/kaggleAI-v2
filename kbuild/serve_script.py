@@ -17,6 +17,7 @@ proxy / トンネル / keepalive / 検証 / Gist 配布は `runtime/` の kc_* �
 from string import Template
 
 from kbuild import pack_script
+from runtime import module_source
 
 # Secret 名の既定値（外部エンジンを起動するカーネル）。
 # エンジン辞書の `secret_user` / `secret_pass` で上書きする。
@@ -87,6 +88,10 @@ WORK = "$WORK"
 CONF = "/tmp/keepalive.conf"
 GIST_ID_DEFAULT = "$GIST_ID"
 GIST_OWNER = "$GIST_OWNER"
+# 公開 URL を置く掲示板カーネルの名前（owner は GIST_OWNER と同じ）。
+# カーネルから push できるのは自分のカーネルだけなので、配信カーネルと
+# 同じアカウントに置く。中身はビルダーが生成する（kaggle/serve-url-beacon/）。
+BEACON_NAME = "serve-url-beacon"
 PROXY_B64 = "$PROXY_B64"
 HTML_B64 = "$HTML_B64"
 # (ファイル名, base64) を WORK へ展開する。proxy / UI / 同梱サーバの実体。
@@ -493,12 +498,24 @@ def start_tunnel():
 
 
 def publish_url(url):
-    """公開 URL を url.txt と Gist に書く（ask.py が Gist を読む）。
+    """公開 URL を url.txt / Gist / ビーコンに書く。**失敗しても配信は続ける。**
 
-    GIST_ID / GITHUB_TOKEN が無ければスキップ。失敗しても配信は続ける。
+    3 経路あるのは移行途中だから:
+      - `url.txt` … 同じカーネルの中から読む用（従来どおり）
+      - Gist      … 個人アカウント時代の読み手。Secrets が無ければスキップ
+      - ビーコン  … カーネルのコードを掲示板にする方式。**Secrets 不要**なので
+                    専用アカウント運用でも使える（`notes/url-publishing.md`）
+
+    Gist の分岐で早期 return しないこと。以前ここが `return` だったので、
+    Secrets が無い環境ではビーコンまで届かなかった。
     """
     with open(URL_FILE, "w") as f:
         f.write(url + "\n")
+    _publish_gist(url)
+    _publish_beacon(url)
+
+
+def _publish_gist(url):
     gist_id = (secret("GIST_ID") or GIST_ID_DEFAULT or "").strip()
     token = (secret("GITHUB_TOKEN") or "").strip()
     if not gist_id or not token:
@@ -519,6 +536,14 @@ def publish_url(url):
     except Exception as e:
         data["publish"] = f"gist failed: {type(e).__name__}: {e}"
         print(f"Gist 公開 失敗（続行）: {e}")
+
+
+def _publish_beacon(url):
+    """ビーコン（掲示板カーネル）を更新する。成否は `data["beacon"]` に残す。"""
+    slug = f"{GIST_OWNER}/{BEACON_NAME}" if GIST_OWNER else ""
+    ok, why = kc_beacon_publish(url, stage="serving", slug=slug)
+    data["beacon"] = why
+    print(("ビーコン公開: " + why) if ok else ("ビーコン公開 失敗（続行）: " + why))
 
 
 def wait_public(url):
@@ -892,6 +917,11 @@ def render(engine: dict, *, run_minutes: int, runtime: str, proxy_b64: str,
         LAUNCH_ARGV=engine["launch_argv"],
         READY_URL=engine["ready_url"],
     )
+    # ビーコンは骨格側で必ず足す。各ビルダーに `"beacon"` を書かせると
+    # 1 本書き忘れただけで「URL が更新されないのに配信は続く」状態になる
+    # （2026-11-01 に Gist で同じ穴を踏んだ）。公開しない構成でも、束ねて
+    # おけば `publish_url` が NameError にならない。
+    runtime = runtime + module_source("beacon")
     return TEMPLATE.substitute(
         BUILDER=builder,
         ENGINE=engine["name"],
