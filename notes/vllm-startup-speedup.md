@@ -734,8 +734,9 @@ kernel id なので、実験のたびに本番のバージョン履歴が埋ま�
 |---|---|---|---|---|
 | `baseline` | 0 | 0 | — | **out2g の再現**（181 s / 31.7 t/s が出るか） |
 | `prewarm_on` | 1 | 0 | — | 先読みの対照（v14 の再現） |
-| `cache` | 0 | 1 | — | キャッシュの効果 |
+| `cache` | 0 | **`require`** | — | キャッシュの効果（Dataset が無ければ**落とす**。`1` だと空振りして baseline と同じ数字が出る） |
 | `force_first` | 0 | 0 | `VLLM_TRITON_FORCE_FIRST_CONFIG=1` | 373 秒が autotune かの判定 |
+| `baseline_long` | 0 | 0 | `VLLM_STARTUP_BUDGET=7000` / `VLLM_ATTEMPT_TIMEOUT=7000` | 予算だけ上げる（§21。予算が「キャッシュが効くか」の交差因子になっていたため） |
 
 どれも**1 変数だけ**動かす。2 つ同時だと、効いたときにどちらが効いたか分からず、
 v14 の先読みと同じ轍を踏む。各実験は `KC_PREWARM` と `KC_WARM_CACHE` を
@@ -1139,3 +1140,55 @@ v13 の 135 分を溶かしたのと同じ間違いになるので、実測だ�
 version 7 はそれで `baseline` になった（`QUEUED` のうちに version 8 で
 上書きしたので GPU は消費していない）。`cli/push.py` に指紋比較の警告を入れ、
 `notes/pitfall-coverage.md` #35 に固定した。
+
+## 22. 未検証のノブが wheel に実在した（2026-11-02 01:25・GPU 0 秒）
+
+GPU を使わずに、固定 wheel（`.wheel/vllm-0.32.0-cp38-abi3-manylinux_2_28_x86_64.whl`）
+の中を読んで確認した。§19 の「auto-prefetch は GCSFUSE では常に切れる」は
+**既定の話**で、明示指定する口が別にあった。
+
+### 実在する CLI フラグ（`vllm/engine/arg_utils.py`）
+
+| フラグ | 既定 | 意味 |
+|---|---|---|
+| `--safetensors-load-strategy` | `None` | `lazy` / `eager` / `prefetch` / `torchao` |
+| `--safetensors-prefetch-num-threads` | **8** | prefetch のスレッド数 |
+| `--safetensors-prefetch-block-size` | 16 MiB | 1 回の read サイズ |
+
+既定 `None` は「mmap（lazy）＋ **NFS を検出してチェックポイントが RAM の 90% に
+収まるときだけ**自動 prefetch」。Kaggle は §19 のとおり収まらないので
+自動では効かない＝いまは純粋な lazy mmap。
+
+### `prefetch` が TP の二重読みを消せる理由
+
+`vllm/model_executor/model_loader/weight_utils.py`:
+
+```python
+paths_to_prefetch = sorted_files[rank::world_size]
+```
+
+prefetch は **rank ごとにファイルを分担**する。TP=2 でも総読みは
+**チェックポイント 1 回分（15.5 GiB）**で、いまの「2 ワーカーが各自 mmap して
+31 GB 読む」（§20 の実効 11.8 MiB/s）を半分にできる計算になる。
+
+### ただし既定の 8 スレッドは**実測で一番遅い形**
+
+§20 の `vllm-io-bench`（CPU・GPU 0 秒）は 8 本並列で **2.2〜2.3 MiB/s**、
+1 本で **110〜130 MiB/s** だった。既定値はちょうど悪い側なので、
+`--safetensors-prefetch-num-threads 1` が唯一まだ試していない形。
+
+### 楽観できない点
+
+- prefetch は**バックグラウンドスレッド**で走る（`_prefetch_all_checkpoints`）。
+  ワーカーの RSS が 24 GB まで育つ過程と競合するので、§20 の
+  `free=437 MiB` と同じ追い出しに遭う可能性がある
+- `KC_PREWARM`（§15）は 8 スレッドで 152.5 秒の**純コスト**だった。同じ形を
+  vLLM の内蔵 prefetch でやっても同じ結末になりうる。差は「rank で分担する」
+  ことと「ワーカーが読み始める前に走る」ことの 2 点だけ
+
+### 次の実験（予算の結論が出てから）
+
+`prefetch1` を 1 行足す（`KC_PREWARM=0` / `KC_WARM_CACHE=0` のまま、
+`safetensors-load-strategy=prefetch` と `num-threads=1` の 2 つだけ）。
+**`03_vllm_serve.py` の PLAN にフラグを足す必要がある**ので、セル変更になる
+（＝playground の「env だけ変える」原則から外れる。だから今は実装しない）。

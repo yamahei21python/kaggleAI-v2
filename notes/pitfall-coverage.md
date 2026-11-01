@@ -16,8 +16,8 @@ GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定し�
 | `tests/test_cpu_probes.py` | CPU プローブ（GPU 0 秒）の契約 | 25 |
 | `tests/test_spec.py` | 台帳（`kbuild/spec.py`）と生成物の一致 | 57 |
 | `tests/test_engines.py` | `runtime/engines/*` の差し替え | 20 |
-| `tests/test_cli.py` | `cli` のサブコマンド | 15 |
-| `tests/test_vllm_playground.py` | 実験カーネル（`KC_EXPERIMENT` の効き方） | 9 |
+| `tests/test_cli.py` | `cli` のサブコマンド | 16 |
+| `tests/test_vllm_playground.py` | 実験カーネル（`KC_EXPERIMENT` の効き方） | 11 |
 | `tests/test_smoke_checks.py` | 疎通確認の判定（SKIP 契約・引数の整合） | 6 |
 | その他（`test_serve_notebook` / `test_step2_builder` / `test_runtime` / `test_constants` / `test_exl3_*` / `test_pinned_wheel` / `test_kbuild` / `test_secrets` / `test_notebooks` / `test_step2_proxy`） | — | 41 |
 | `tests/_cells.py` | セルから関数を切り出す共通ヘルパー（規則はここ 1 箇所） | — |

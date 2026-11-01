@@ -174,6 +174,26 @@ def test_playground_runs_without_a_tunnel(tmp_path):
     py_compile.compile(str(out / "main.py"), doraise=True)
 
 
+def test_smoke_returns_before_the_keepalive_loop(tmp_path):
+    """smoke は `loop()` に入る**前**に return する。
+
+    `RUN_MINUTES=60` は keepalive ループの予算で、`loop()` は
+    `started = time.time()` を**入った時点**で取る。もし smoke の return が
+    `loop()` より後ろへ動くと、起動に 7,000 秒かける実験（`baseline_long`）が
+    サーブ段で 60 分待たされ、合計が Kaggle の上限に近づく。
+    2026-11-02 01:20 に「7,000 秒が別の上限に殺されないか」を確認した記録。
+    """
+    out, p = _build(tmp_path, "baseline_long")
+    assert p.returncode == 0, (p.stdout + p.stderr)[-900:]
+    src = (out / "main.py").read_text(encoding="utf-8")
+    # `reason = loop(procs)` は keepalive シナリオ側にもあるので、**本番経路**
+    # （最後の出現）と比べる。最初の出現と比べると常に「後ろ」に見える。
+    assert src.index('return "smoke"') < src.rindex("reason = loop(procs)"), (
+        "smoke の return が本番経路の keepalive ループより後ろにある")
+    # 予算が実際に効いていること（表に書いただけになっていない）
+    assert "os.environ.setdefault('VLLM_STARTUP_BUDGET', '7000')" in src
+
+
 def test_tunnel_none_is_rejected_outside_smoke():
     """本番（smoke=False）で `tunnel="none"` を渡すのは設定ミス。弾く。
 
