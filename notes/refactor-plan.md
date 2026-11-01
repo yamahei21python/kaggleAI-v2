@@ -1228,7 +1228,8 @@ llama-server 直起動の一族から `step2-` を落とした。`step2` は Oll
   スナップショット・追跡する）とは別物。生の計測データを残すなら `notes/archive/`。
 - `llama-chat.html` は**動かさない** — 複数のビルダーが読み込んでカーネルへ埋め込む
   原本なので、ルート直下が正しい置き場。
-- `kcconfig.py` は `kaggle/build_*.py` が `import kcconfig` するので**必須**。
+- ~~`kcconfig.py` は `kaggle/build_*.py` が `import kcconfig` するので**必須**。~~
+  → 2026-11-02 に解消: ビルダー 9 本を `from cli import config` に寄せ、シムは削除。
   `ask.py` / `kaggle-quota.py` は好みのシム（消しても `python3 -m cli …` で同じ）。
 - `kaggle-dataset-*/`（17 GB + 1.4 GB + 38 MB）は `datasets/` へ集約した（下記 E-2）。
 

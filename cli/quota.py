@@ -84,10 +84,10 @@ def show(label, q, unit_note=""):
     print()
 
 
-def main():
-    ap = argparse.ArgumentParser()
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="cli quota")
     ap.add_argument("--json", action="store_true", help="生 JSON を出力")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     data = fetch()
 

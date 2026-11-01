@@ -5,6 +5,8 @@
 import json
 import pathlib
 
+import pytest
+
 from cli import __main__ as cli_main
 from cli import build as build_mod
 from cli import check as check_mod
@@ -19,6 +21,50 @@ def test_default_is_build(monkeypatch, capsys):
                         calls.update(targets=targets, dry_run=dry_run) or 0)
     assert cli_main.main([]) == 0
     assert calls == {"targets": None, "dry_run": False}
+
+
+def _subparsers():
+    """`{name: サブパーサ}` を返す（argparse の内部構造に 1 か所だけ触る）。"""
+    action = next(a for a in cli_main._parser()._actions
+                  if getattr(a, "choices", None) and isinstance(a.choices, dict))
+    return action.choices
+
+
+def test_every_subcommand_has_a_handler():
+    """サブコマンドは `set_defaults(func=...)` を持つこと。
+
+    以前は quota / ask / timings / beacon のサブパーサが `--help` に名前を
+    出すだけで、実際の分岐は `main()` の `argv[:1]` 比較だった。定義と実行が
+    別の場所にあると、片方だけ足したときに静かに無視される。
+    """
+    missing = [name for name, p in _subparsers().items()
+               if "func" not in p._defaults]
+    assert not missing, f"func を持たないサブコマンド: {missing}"
+
+
+def test_main_does_not_rewrite_sys_argv():
+    """`main()` が `sys.argv` を書き換えないこと（委譲先へ argv で渡す）。"""
+    src = pathlib.Path(cli_main.__file__).read_text(encoding="utf-8")
+    assert "sys.argv = " not in src
+
+
+def test_passthrough_gets_the_remaining_args(monkeypatch):
+    """`ask` / `quota` / `beacon` は自前のオプションごと受け取る。
+
+    `--help` をこちらで食わないので、各コマンドの help がそのまま出る。
+    """
+    from cli import ask as ask_mod
+    got = {}
+    monkeypatch.setattr(ask_mod, "main",
+                        lambda argv=None: got.update(argv=argv) or 0)
+    assert cli_main.main(["ask", "--url", "http://x", "hi"]) == 0
+    assert got["argv"] == ["--url", "http://x", "hi"]
+
+
+def test_unknown_option_is_an_error():
+    with pytest.raises(SystemExit) as e:
+        cli_main.main(["list", "--nope"])
+    assert e.value.code == 2
 
 
 def test_push_requires_yes(monkeypatch, capsys):

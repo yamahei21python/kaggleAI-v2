@@ -143,15 +143,15 @@ def ask(url, user, pw, model, messages, temperature, max_tokens,
     return msg, url
 
 
-def main():
-    ap = argparse.ArgumentParser()
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="cli ask")
     ap.add_argument("prompt", nargs="*", help="空なら対話モード")
     ap.add_argument("--url", help="公開URL（Gist を介さない）")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--system", default="日本語で簡潔に答える。")
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--max-tokens", type=int, default=512)
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     fixed = fixed_url(a.url) is not None
     try:
