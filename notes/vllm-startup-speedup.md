@@ -467,11 +467,19 @@ Loading safetensors checkpoint shards:  50% Completed | 1/2 [00:02<00:02]
 ```
 
 vLLM は **checkpoint が空き RAM の 90% を超えると auto-prefetch を切る**。
+
+> ⚠ **この因果は 2026-11-01 に半分撤回した。** GCSFUSE では**空き RAM に関係なく
+> auto-prefetch は常に切れる**（§19）。RAM の数字は「どちらのメッセージが出るか」
+> を選ぶだけで、prefetch の可否を決めていない。以下の「v10 は prefetch が
+> 有効だった」という推定も成立しない。
+
 切ると GCSFUSE の safetensors を頁単位で mmap するしかない。
 
 v10 は同じ symlink ステージング・同じ FUSE で重み 133 秒だった
-（= 18.21 GiB / 133s = 140 MiB/s）。**v10 は prefetch が有効だった**と推定できる。
-差を決めているのは起動時点の `MemAvailable` だけ。
+（= 18.21 GiB / 133s = 140 MiB/s）。~~**v10 は prefetch が有効だった**と推定できる。
+差を決めているのは起動時点の `MemAvailable` だけ。~~
+→ 上の ⚠ の通り、prefetch は当時も無効だった。v10 の 133 秒は**ホスト側の
+読みが速かった**としか言えない（同じ構成で 20 MiB/s の回がある。§19）。
 
 **分からないこと**: v12 は試行開始の 4 分前に `空き RAM: 30315 MiB` と出ていた。
 その 24 GiB がどこへ消えたかは特定できていない。空き 1 個の数字では
@@ -884,3 +892,66 @@ The following are not valid dataset sources and could not be added to the kernel
 `configs=` の合計が「autotune が何個の候補を持っていたか」＝ 373 秒の上限の目安。
 `force_first` の回でこの行を数えれば、**キャッシュで何個潰せるか**が分かる。
 `grep -c triton-autotune-disabled` と `grep -o 'configs=[0-9]*'` で足りる。
+
+## 19. auto-prefetch は GCSFUSE では**常に切れる**（2026-11-01・§14.2 の訂正）
+
+`baseline` が 2 試行とも重みロードで切られた回（v3）のログを追って、固定 wheel
+（`.wheel/vllm-0.32.0-...whl`）の `weight_utils.py` を読んだ。分岐はこうなっている。
+
+```python
+fs_type  = _get_fs_type(sorted_files)
+is_net_fs = fs_type in ("nfs", "nfs4", "lustre")
+total_bytes = _get_checkpoints_size_bytes(sorted_files)
+avail_bytes = _get_available_ram_bytes()
+fits_in_ram = total_bytes <= 0.9 * avail_bytes
+
+should_prefetch = safetensors_load_strategy == "prefetch"
+if safetensors_load_strategy is None:
+    if is_net_fs and fits_in_ram:            should_prefetch = True
+    elif is_net_fs and not fits_in_ram:      warn(...)      # 切る
+    elif not is_net_fs and fits_in_ram:      info(...)      # 切る
+    elif not is_net_fs and not fits_in_ram:  info(...)      # 切る
+```
+
+**GCSFUSE は `nfs` / `nfs4` / `lustre` のどれでもない。** つまり `is_net_fs=False`
+で、4 分岐のうち下 2 つに入る。**どちらでも prefetch は切れる。**
+空き RAM は「どちらの文言が出るか」を選ぶだけで、可否を決めていない。
+
+こちらがずっと見ていた文言は下の 2 つ目（`not is_net_fs and not fits_in_ram`）で、
+「RAM が足りないから切られた」と読めてしまう形だったのが誤読の元。
+
+### `Available RAM: 5.85 GiB` の正体
+
+`ram_trace.txt` は同じ回に `avail=30,131 … 最小 22,767 MiB` と言っている。
+vLLM の数字と 4 倍違うのは、vLLM が**cgroup を見ている**から:
+
+```python
+def _get_available_ram_bytes():
+    host_available = psutil.virtual_memory().available
+    cgroup_limit = get_cgroup_memory_limit()
+    if cgroup_limit is None:
+        return host_available
+    cgroup_usage = get_cgroup_memory_usage()
+    return min(host_available, cgroup_limit - cgroup_usage)
+```
+
+`cgroup_usage` は **page cache を含む**。checkpoint を 17 GiB 読むと、その分だけ
+「空き」が減る。つまり **読むほどに数字が悪くなる**自己言及的な指標で、
+ホストの `MemAvailable` とは別物。`ram_trace` と並べるときは混同しないこと。
+
+### 未検証のノブ: `--safetensors-load-strategy=prefetch`
+
+明示指定すれば `should_prefetch=True` になり、RAM が足りなくても**警告だけ出して
+先読みする**（`elif should_prefetch and not fits_in_ram:` の枝）。このリポジトリは
+このフラグを**一度も渡していない**（`grep` で 0 件）。したがって:
+
+- これまでの全実行で prefetch は無効。v10 の 133 秒を「prefetch のおかげ」と
+  説明することはできない
+- 逆に言えば、**試していないノブが 1 つ残っている**
+
+ただし期待しすぎないこと。自前の先読み（`KC_PREWARM`）は**4.4 倍遅く**なった
+（§18）。機構は違う（vLLM のは読みながら投げる、自前のは先に全部読む）が、
+「GCSFUSE に投げると遅くなる」という同じ土台の話なので、測るまでは分からない。
+
+実験にするときは `baseline` と**混ぜない**こと。重みロードの速度が変わると
+373 秒の profile run の測定条件も変わる。

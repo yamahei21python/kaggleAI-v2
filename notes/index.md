@@ -22,7 +22,7 @@
 |---|---|
 | `measurement.md` | 何をどう測るか（`timings` の意味・節目の取り方） |
 | `cpu-test-results.md` | **GPU 0 秒**で回した計器の結果（`vllm-install-bench` / `vllm-io-bench` / `sglang-install-probe`）と、そこから訂正した誤読 |
-| `pitfall-coverage.md` | **症状 → 防御 → テスト**の対応表（30 項目）。実バグ 2 件の記録つき |
+| `pitfall-coverage.md` | **症状 → 防御 → テスト**の対応表（31 項目）。実バグ 2 件の記録つき |
 
 CPU プローブは `kaggle/cpu-tests/`（`vllm-flags` / `tiny-llama` / `tiny-ollama` /
 `install-bench` / `io-bench` / `sglang-probe`）。**GPU クォータを 1 秒も使わない**ので、
