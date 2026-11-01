@@ -15,13 +15,13 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-import kcconfig  # noqa: E402
+from cli import config  # noqa: E402
 from kbuild import embed, metadata  # noqa: E402
 from kbuild.settings_cell import render as render_settings  # noqa: E402
 from kbuild.serve_notebook import Flow  # noqa: E402
 from runtime import proxy_source  # noqa: E402
 
-CFG = kcconfig.load()
+CFG = config.load()
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 MODEL_DISPLAY = "Qwen3.8-27B-Uncensored"

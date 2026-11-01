@@ -48,14 +48,14 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent          # kaggle/
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
-import kcconfig  # noqa: E402
+from cli import config  # noqa: E402
 from kbuild import (embed, metadata, pack_script,  # noqa: E402
                      serve_script, spec)
 from kbuild.settings_cell import render as render_settings  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 from runtime.constants import PROXY_PORT, VLLM_PORT  # noqa: E402
 
-CFG = kcconfig.load(ROOT)
+CFG = config.load(ROOT)
 OWNER = "yamahei21python"
 DATASET_SLUG = "qwen38-27b-uncensored-hauhaucs-awq-mtp"
 SERVED_NAME = "qwen3.8-27b-awq"

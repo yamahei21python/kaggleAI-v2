@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # ビルダーが必要とするもの（kbuild/ runtime/ cli/ を import する）
-COPY_FILES = ("llama-chat.html", "kcconfig.py", "config.env")
+COPY_FILES = ("llama-chat.html", "config.env")
 COPY_DIRS = ("kaggle", "kbuild", "runtime", "cli")
 IGNORE = shutil.ignore_patterns("archive", "__pycache__")
 

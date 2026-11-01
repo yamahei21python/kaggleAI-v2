@@ -25,12 +25,12 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
-import kcconfig  # noqa: E402
+from cli import config  # noqa: E402
 from kbuild import embed, metadata  # noqa: E402
 from kbuild.serve_notebook import Flow  # noqa: E402
 from runtime import proxy_source  # noqa: E402
 
-CFG = kcconfig.load()
+CFG = config.load()
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 MODEL_DISPLAY = "Qwen3.8-27B-Uncensored (直起動)"

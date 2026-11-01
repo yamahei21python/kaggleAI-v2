@@ -18,7 +18,7 @@ HERE = pathlib.Path(__file__).resolve().parent          # kaggle/
 ROOT = HERE.parent                                      # リポジトリ直下
 OUT = HERE
 sys.path.insert(0, str(ROOT))
-import kcconfig  # noqa: E402
+from cli import config  # noqa: E402
 from kbuild import embed, metadata, spec  # noqa: E402
 from kbuild import serve_script  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
@@ -29,7 +29,7 @@ from runtime.constants import (  # noqa: E402
     VLLM_PORT,
 )
 
-CFG = kcconfig.load(ROOT)
+CFG = config.load(ROOT)
 OWNER = "yamahei21python"
 AWQ = f"{OWNER}/qwen38-27b-uncensored-hauhaucs-awq-mtp"
 CLOUDFLARED = f"{OWNER}/my-cloudflared-bin"

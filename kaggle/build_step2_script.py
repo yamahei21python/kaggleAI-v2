@@ -24,13 +24,13 @@ import textwrap
 HERE = pathlib.Path(__file__).resolve().parent          # kaggle/
 ROOT = HERE.parent                                      # リポジトリ直下
 sys.path.insert(0, str(ROOT))
-import kcconfig  # noqa: E402
+from cli import config  # noqa: E402
 from kbuild import embed, metadata, serve_script, spec  # noqa: E402
 from kbuild.settings_cell import render as render_settings  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 from runtime.constants import PROXY_PORT  # noqa: E402
 
-CFG = kcconfig.load(ROOT)
+CFG = config.load(ROOT)
 OWNER = "yamahei21python"
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"

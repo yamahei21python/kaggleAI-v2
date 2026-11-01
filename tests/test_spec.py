@@ -170,6 +170,39 @@ def test_builders_take_metadata_from_the_ledger():
         "台帳を使わず metadata.base を手書きしている: " + ", ".join(offenders))
 
 
+def test_no_module_imports_the_kcconfig_shim():
+    """`kcconfig` シムを import しているモジュールが無いこと。
+
+    `kcconfig.py` は `cli/config.py` への後方互換シムで、ビルダー 9 本が
+    `import kcconfig` していた。シムがあると「実体はどちらか」が読むたびに
+    必要になるので、ビルダー側を `from cli import config` に寄せてシムを消した。
+    戻ってきたら気づけるよう、import の有無だけ見る。
+
+    走査は**リポジトリのコードが入っている場所だけ**。ルート全体を `**/*.py`
+    で舐めると `.venv-kaggle-cli/` まで入り、Python 3.10 以降の構文
+    （`match`）で `ast.parse` が落ちる（実測: 3.9 で SyntaxError）。
+    """
+    paths = list(spec.ROOT.glob("*.py"))
+    for name in ("kaggle", "kbuild", "runtime", "cli", "tests"):
+        paths += (spec.ROOT / name).rglob("*.py")
+    offenders = []
+    for path in sorted(paths):
+        if "archive" in path.parts or "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+            if any(n == "kcconfig" or n.startswith("kcconfig.")
+                   for n in names):
+                offenders.append(f"{path.relative_to(spec.ROOT)}:{node.lineno}")
+    assert not offenders, "kcconfig シムを import している: " + ", ".join(offenders)
+
+
 def test_for_kernel_matches_the_ledger():
     """`for_kernel` は台帳の値だけを使い、上書きは明示した分だけ効く。"""
     from kbuild import metadata

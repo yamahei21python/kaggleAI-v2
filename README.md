@@ -90,7 +90,7 @@ python3 -m cli ask --url https://xxx.trycloudflare.com "..."
 README.md / ruff.toml / config.env   # 設定（個人値は config.local.env、gitignore）
 run-{ai,kaggle-chat,llama-server,uzu-server}.command   # ダブルクリック起動
 llama-chat.html             # カーネルに埋め込むチャット UI の原本（build_* が読む）
-ask.py kcconfig.py kaggle-quota.py   # 後方互換シム（実体は cli/）
+ask.py kaggle-quota.py      # 後方互換シム（実体は cli/）
 opencode.json / opencode-llama-local.json  # opencode 用の設定
 models/                     # ローカル GGUF の置き場（gitignore・現在は空）
 datasets/                   # Dataset のアップロード用ステージング（gitignore）
@@ -140,7 +140,7 @@ lib/         # ローカルランチャー共通（launcher-common.zsh）
 notes/       # 設計メモ・台帳・実測ログ（索引は notes/index.md）
 ```
 
-`kcconfig.py` / `ask.py` / `kaggle-quota.py` は後方互換シム（実体は `cli/`）。
+`ask.py` / `kaggle-quota.py` は後方互換シム（実体は `cli/`）。
 
 `archive/` は**追跡しない退避先**（`.gitignore` 済み）。ルート直下が散らからないよう、
 一時プローブの出力とログだけをここへ集めてある。中身は消しても再生成できる。

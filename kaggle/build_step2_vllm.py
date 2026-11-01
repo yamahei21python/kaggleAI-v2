@@ -38,12 +38,12 @@ if TUNNEL != "cloudflared":
 HERE = pathlib.Path(__file__).resolve().parent
 
 sys.path.insert(0, str(HERE.parent))
-import kcconfig  # noqa: E402
+from cli import config  # noqa: E402
 from kbuild import embed, metadata, pack_nb  # noqa: E402
 from kbuild.serve_notebook import Flow  # noqa: E402
 from runtime import proxy_source  # noqa: E402
 
-CFG = kcconfig.load()
+CFG = config.load()
 
 # smoke 版は通常版と干渉しない別ディレクトリへ。
 # （push --smoke が通常生成物を上書きしないため。実稼働時は通常版を使う）

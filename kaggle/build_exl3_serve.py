@@ -22,7 +22,7 @@ HERE = pathlib.Path(__file__).resolve().parent          # kaggle/
 ROOT = HERE.parent                                      # リポジトリ直下
 OUT = HERE / "exl3-serve-kernel"
 sys.path.insert(0, str(ROOT))
-import kcconfig  # noqa: E402
+from cli import config  # noqa: E402
 from kbuild import embed, metadata, serve_script, spec  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 from runtime.constants import (  # noqa: E402
@@ -32,7 +32,7 @@ from runtime.constants import (  # noqa: E402
     PROXY_PORT,
 )
 
-CFG = kcconfig.load(ROOT)
+CFG = config.load(ROOT)
 GIST_ID_DEFAULT = CFG.get("GIST_ID", "")
 GIST_OWNER = CFG.get("GIST_OWNER", "")
 
