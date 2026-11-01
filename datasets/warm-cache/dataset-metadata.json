@@ -1,0 +1,11 @@
+{
+  "title": "vllm-warm-cache",
+  "id": "yamahei21python/vllm-warm-cache",
+  "subtitle": "Triton JIT cache for vLLM startup (T4 / sm75) - cuts the 373s silence",
+  "description": "~/.triton produced by a successful vLLM 0.32 startup on Kaggle T4 (sm_75). vLLM spends 373 s (54% of startup) JIT-compiling Qwen3.5 GDN Triton kernels inside determine_available_memory's profile run. Restoring this cache turns that into cache hits. Keys include the Triton version, target sm and kernel source hashes, so a mismatch is a silent miss: the measurement therefore asserts new_entries/reused_pct rather than 'files present'. Regenerate whenever vLLM or Triton changes.",
+  "licenses": [
+    {
+      "name": "other"
+    }
+  ]
+}

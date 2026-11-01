@@ -1,0 +1,11 @@
+{
+  "title": "my-ollama-orcarouter-qwen38-27b",
+  "id": "yamahei21python/my-ollama-orcarouter-qwen38-27b",
+  "subtitle": "Ollama model: orcarouter/Qwen3.8-27B-Uncensored for API serving",
+  "description": "Ollama model blobs + manifest for orcarouter/Qwen3.8-27B-Uncensored:latest (Q4_K_M, 16.52 GiB). Step2 restores these to skip the 2.6-minute registry pull. Contents: blobs/ (5 blobs), manifests/registry.ollama.ai/orcarouter/Qwen3.8-27B-Uncensored/latest.",
+  "licenses": [
+    {
+      "name": "other"
+    }
+  ]
+}

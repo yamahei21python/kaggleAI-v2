@@ -7,8 +7,17 @@
 out/
 out.*/
 kaggle/wheelhouse-files/
-# Dataset のローカル実体（アップロード用のステージング。中身は追跡しない）
-datasets/
+# Dataset のローカル実体（アップロード用のステージング。重い中身は追跡しない）。
+# ただし `dataset-metadata.json` は「何という Dataset を、何のために上げたか」の
+# 唯一の記録なので追跡する。
+# git の制約: 除外したディレクトリの中は `!` で復活できない。だから
+#   1) 中身を除外 → 2) ディレクトリだけ復活 → 3) さらに中身を除外
+#   4) metadata だけ復活
+# の順に書く必要がある。`datasets/` の 1 行で済ませると metadata も消える。
+datasets/*
+!datasets/*/
+datasets/*/*
+!datasets/*/dataset-metadata.json
 .DS_Store
 # exl3 の生成物（build_exl3_serve.py が出力）
 kaggle/exl3-serve-kernel/

@@ -1,0 +1,11 @@
+{
+  "title": "my-cloudflared-bin",
+  "id": "yamahei21python/my-cloudflared-bin",
+  "subtitle": "cloudflared Linux binary (40 MB) for Step2 quick tunnel",
+  "description": "cloudflared-linux-amd64 (statically linked ELF, 40.2 MB) used by Step2 to publish the Ollama API via a cloudflare quick tunnel. Step2 restores bin/cloudflared from here to skip the 40 MB GitHub download on every run (single point of failure when GitHub is unreachable). Source: https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
+  "licenses": [
+    {
+      "name": "other"
+    }
+  ]
+}

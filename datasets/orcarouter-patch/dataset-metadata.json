@@ -1,0 +1,11 @@
+{
+  "title": "Ollama Qwen3.8-27B Runtime Patch",
+  "id": "yamahei21python/my-ollama-orcarouter-qwen38-27b-patch",
+  "subtitle": "ollama + llama-server + CUDA libs + config blob",
+  "description": "Ollama runtime for Step2 (Qwen3.8-27B). Contents: bin/ollama, lib/ollama/ (llama-server, *.so, cuda_v12/*, licenses), blobs/sha256-cbe6ad4... (config blob required by the model manifest; not present in the model dataset). With llama-server included, Step2 no longer runs install.sh, so the ollama version is pinned to this capture. Version: 0.40.12",
+  "licenses": [
+    {
+      "name": "other"
+    }
+  ]
+}
