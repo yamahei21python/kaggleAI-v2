@@ -75,9 +75,26 @@ def test_experiment_env_is_set_before_the_settings_cell(tmp_path):
     out, p = _build(tmp_path, "cache")
     assert p.returncode == 0, (p.stdout + p.stderr)[-900:]
     src = (out / "main.py").read_text(encoding="utf-8")
-    env_at = src.index("os.environ.setdefault('KC_WARM_CACHE', '1')")
+    # 値は実験表から引く（直書きすると、ノブの値を変えるたびにテストが腐る）。
+    value = _module().EXPERIMENTS["cache"][1]["KC_WARM_CACHE"]
+    env_at = src.index(f"os.environ.setdefault('KC_WARM_CACHE', {value!r})")
     cell_at = src.index("Step 2 (vLLM): 配信カーネルの設定")
     assert env_at < cell_at, "設定セルより後に環境変数を入れている"
+
+
+def test_cache_experiment_requires_the_dataset():
+    """`cache` は `KC_WARM_CACHE=require`（無ければ落ちる）で走らせる。
+
+    `1` のままだと、Dataset が未作成／空でも続行し、**baseline とまったく同じ
+    数字**が出る。すると「キャッシュは効かない」という偽陰性になり、1 往復
+    （約 40 分）を使って間違った結論に到達する。実測 2026-11-01 時点で
+    `vllm-warm-cache` は未作成なので、この設定が無いと実際に踏んでいた。
+    """
+    mod = _module()
+    assert mod.EXPERIMENTS["cache"][1]["KC_WARM_CACHE"] == "require", (
+        "cache 実験が require でない。Dataset 未作成でも走って偽陰性になる。")
+    # 対照群（baseline）は 0 のままであること＝A/B が成立する
+    assert mod.EXPERIMENTS["baseline"][1]["KC_WARM_CACHE"] == "0"
 
 
 def test_every_experiment_declares_both_knobs():

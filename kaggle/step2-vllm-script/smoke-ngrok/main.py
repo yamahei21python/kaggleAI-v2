@@ -1644,7 +1644,20 @@ def stage_install():
     # 復元の ON/OFF を外から切り替えられるようにしてある（`KC_WARM_CACHE=0`）。
     # Dataset を付けたまま「復元しない」比較を playground で取りたいため。
     # これが無いと、Dataset を付けた瞬間に A/B の対照群が消える。
-    _USE_WARM_CACHE = os.environ.get("KC_WARM_CACHE", "1") != "0"
+    #
+    # 3 値にしてある:
+    #   "0"       … 復元しない（対照群）
+    #   "1"       … あれば復元。無ければ「なし」と出して続行（本番の既定）
+    #   "require" … **無ければ失敗**。実験用
+    #
+    # `require` が要る理由: `1` のままだと Dataset を付け忘れた実験が
+    # **baseline とまったく同じ結果を出し**、「キャッシュは効かない」という
+    # 偽陰性になる。1 往復（約 40 分）を捨てるより、その場で落ちたほうが安い。
+    # 実測 2026-11-01: `vllm-warm-cache` はまだ Kaggle に存在せず、playground の
+    # push が `not valid dataset sources` で落としていた（＝気づかないまま走る）。
+    _KC_WC_MODE = os.environ.get("KC_WARM_CACHE", "1").strip().lower()
+    _USE_WARM_CACHE = _KC_WC_MODE not in ("0", "off", "no", "false")
+    _WC_REQUIRED = _KC_WC_MODE in ("require", "required")
     _wc = kc_find_dataset("vllm-warm-cache")
     # `kc_find_dataset` は**見つからなくても既定パスを返す**（`/kaggle/input/<slug>`）。
     # そのため `if _wc:` だけでは常に真になり、tar が 1 本も無いときに**何も
@@ -1673,6 +1686,15 @@ def stage_install():
                       f" / Triton エントリ {_n}（{_tc}）")
             except Exception as _e:
                 print(f"⚠ キャッシュ復元をスキップ: {_e}")
+    elif _WC_REQUIRED:
+        # ここで落とす。続行すると baseline と同じ数字が出て、効かなかったのか
+        # Dataset が無かったのか区別できないログだけが残る。
+        raise RuntimeError(
+            f"KC_WARM_CACHE=require なのに tar が 1 本も無い: {_wc}"
+            f"（exists={os.path.isdir(_wc)}）。"
+            "Dataset `vllm-warm-cache` が未作成か、空のまま push している。"
+            "このまま走らせると baseline と同じ結果になり、"
+            "「キャッシュは効かない」という偽陰性になるので中断する。")
     else:
         # 「Dataset を付け忘れ」と「tar が入っていない」を切り分ける。
         print(f"ℹ warm cache なし（compile をやり直す）: {_wc}"

@@ -73,9 +73,13 @@ EXPERIMENTS = {
         {"KC_PREWARM": "1", "KC_WARM_CACHE": "0"},
     ),
     # 先読み OFF のまま、Triton キャッシュだけ足す。
+    # `require` にしてある: Dataset が無い／空のまま走ると **baseline と
+    # まったく同じ結果**が出て「キャッシュは効かない」という偽陰性になる。
+    # 実測 2026-11-01 時点で `vllm-warm-cache` は未作成なので、この実験は
+    # 今は必ず「tar が 1 本も無い」で落ちる（それが正しい）。
     "cache": (
-        "先読み OFF + Triton キャッシュ復元",
-        {"KC_PREWARM": "0", "KC_WARM_CACHE": "1"},
+        "先読み OFF + Triton キャッシュ復元（Dataset 必須）",
+        {"KC_PREWARM": "0", "KC_WARM_CACHE": "require"},
     ),
     # 373 秒が autotune なのか compile なのかの判定。キャッシュ無しで測る。
     "force_first": (

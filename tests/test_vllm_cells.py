@@ -393,3 +393,23 @@ def test_warm_cache_is_captured_on_both_paths():
     assert "_WARM_CACHE = _capture_warm_cache()" in after_loop, (
         "失敗経路でキャッシュが退避されない")
 
+
+
+def test_warm_cache_require_fails_instead_of_silently_degrading():
+    """`KC_WARM_CACHE=require` は tar が無ければ**落ちる**。
+
+    `1`（本番の既定）のままだと、Dataset を付け忘れた実験が baseline と
+    まったく同じ数字を出し、「キャッシュは効かない」という偽陰性になる。
+    実測 2026-11-01: `vllm-warm-cache` はまだ Kaggle に存在せず、
+    playground の push が `not valid dataset sources` で落としていた。
+    1 往復（約 40 分）を捨てるより、その場で落ちたほうが安い。
+
+    3 値の契約も固定する: 0=復元しない / 1=あれば復元して続行 / require=無ければ失敗。
+    """
+    src = _cells.cell(*INSTALL)
+    assert '_KC_WC_MODE in ("require", "required")' in src, "require モードが無い"
+    # require の分岐が「なし」の分岐より**前**にあること（後だと到達しない）
+    assert src.index("elif _WC_REQUIRED:") < src.index('print(f"ℹ warm cache なし'), \
+        "require の判定が「なし」の表示より後ろにある"
+    # 落とす理由がログに残ること（次に見た人が「なぜ落ちたか」で悩まない）
+    assert "偽陰性" in src, "失敗メッセージに理由が無い"
