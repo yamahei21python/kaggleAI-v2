@@ -728,3 +728,48 @@ def test_prefetch_is_applied_to_every_attempt():
     # 足したあとに「7 要素」の検査を通っていること（タプルを壊していない）
     assert src.index("_f + LOAD_ARGS") > src.index(
         'assert all(len(p) == 7 for p in PLAN)')
+
+
+def test_prefetch_decline_is_detected_and_recorded():
+    """vLLM が prefetch を辞退した回を、成果物だけで判別できること。
+
+    実測 2026-11-02（本番 v16）: 同じコード・同じフラグで、`prefetch1` は
+    重み 1,081 秒（層あたり 14 秒）、本番は層あたり 47 秒だった。差は
+    vLLM の `weight_utils.py:1148` の警告——
+
+        safetensors_load_strategy='prefetch' was explicitly specified, but
+        checkpoint total size (18.21 GiB) exceeds 90% of available RAM (6.x GiB)
+
+    ——が出ていたこと。チェックポイント 18.21 GiB に対して RAM 32 GB は
+    余裕が無く、**同じ設定でも載るノードと辞退されるノードがある**。
+    この警告は 140 KiB のワーカーログの途中に 1 行だけ出るので、拾う側を
+    用意しないと「prefetch を付けたのに遅い」を毎回読み違える。
+    """
+    src = _cells.cell(*SERVE)
+    assert '_PF_GUARD = "exceeds 90% of available RAM"' in src, \
+        "vLLM の辞退文言を定数にしていない（文言が変わったら気づけるように）"
+    assert "if _PF_GUARD in _ln:" in src, "ポーリングで辞退を拾っていない"
+    # 記録は result.json（timings）に載せる。ログを落とさないと分からない形は不可。
+    assert 'kc_save_timings({"prefetch": _PF_STATE})' in src
+    # 「辞退された」ことを起動失敗の文言にも入れる（次に読む人が最初に見る行）
+    assert "prefetch={'辞退された' if _PF_GUARD_HIT else '効いていた'}" in src
+
+
+def test_budget_exhaustion_is_not_reported_as_a_startup_failure():
+    """予算切れを「起動に失敗しました」と報告しない。
+
+    実測 2026-11-02（本番 v16）: 予算 4,200 秒で切られたのに result.json の
+    error は「vLLM の起動に失敗しました」だった。設定の誤りを疑って
+    ログを 1 時間掘ることになった（実際は 62 層中 56 層まで読めていた）。
+    待つのをやめた理由を `_why` に残し、文言を分ける。
+    """
+    src = _cells.cell(*SERVE)
+    for branch in ('_why = "started"', '_why = "died"', '_why = "budget"'):
+        assert branch in src, f"待機の終了理由 {branch} を残していない"
+    # 予算切れの枝が先にあり、そこでは「失敗」と言わない
+    i_budget = src.index('if _why == "budget":')
+    i_fail = src.index('fail("vLLM の起動に失敗しました', i_budget)
+    assert i_budget < i_fail
+    budget_msg = src[i_budget:i_fail]
+    assert "予算" in budget_msg and "設定の誤りではない" in budget_msg
+    assert "起動に失敗" not in budget_msg

@@ -36,7 +36,7 @@ CPU プローブは `kaggle/cpu-tests/`（`vllm-flags` / `tiny-llama` / `tiny-ol
 |---|---|
 | `exllamav3-kaggle-decisions.md` | EXL3 版の決定事項ログ |
 | `vllm-cpu-findings.md` | vLLM を Kaggle で動かすまでの実測・失敗ログ |
-| `vllm-startup-speedup.md` | vLLM 起動時間の短縮策。**§23 が最新**: 重み prefetch（`num-threads=1`）で重みロード 2,877 → 1,186 秒・起動全体 3,820 → 2,011 秒。§23 は本番の既定にも入れた（`Kernel.bake_env`）。§18 の「先読みは退行」は `KC_PREWARM`（自前実装）の話で、vLLM 内蔵 prefetch は別物 |
+| `vllm-startup-speedup.md` | vLLM 起動時間の短縮策。**§24 が最新**: 本番 v16 では prefetch が **vLLM 側の RAM 判定で辞退され**、重みロードが lazy と同じ 47 秒/層に戻り、予算 4,200 秒で切られた（§23 の playground 実測 1,186 秒は再現せず）。§23 は prefetch の機構と `bake_env` の入れ方。§18 の「先読みは退行」は `KC_PREWARM`（自前実装）の話で、vLLM 内蔵 prefetch は別物 |
 | `tpu-llm-plan.md` | TPU で LLM を動かす検討 |
 
 ## ローカル uzu / Qwen3.5-9B

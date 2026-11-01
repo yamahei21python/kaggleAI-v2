@@ -73,6 +73,8 @@ README 側も「114 本」「109 本」と実態（210 本）からずれてい�
 | 36 | **`**/*.py` を `ast.parse` で舐めると `.venv-kaggle-cli/` まで入る**。3.9 では venv 内の `match` 構文で SyntaxError、ディレクトリが重いのでプロセスごと SIGKILL される（実測 137） | 走査先を `kaggle/ kbuild/ runtime/ cli/ tests/` + ルート直下に限定する | `test_spec.py::test_no_module_imports_the_kcconfig_shim` |
 | 37 | **サブパーサの `nargs=REMAINDER` は先頭の `--help` を取りこぼす**（`unrecognized arguments` になる）。委譲先の help が出せない | `add_help=False` + `parse_known_args` の余りを渡す | `test_cli.py::test_passthrough_gets_the_remaining_args` |
 | 38 | **テストの関数切り出しが「上から最初の `def`」**だと、同名の関数があるとき黙って別物を掴んで緑になる（`reason = loop(procs)` が 2 箇所あった） | `tests/_cells.py` が `ast` で切り出し、同名が複数なら例外にする | `test_cells_helper.py::test_slice_def_refuses_ambiguous_names` |
+| 39 | **vLLM は prefetch を自分で辞退する**（`checkpoint total size (18.21 GiB) exceeds 90% of available RAM (6.x GiB)`）。辞退しても起動は続くので、遅いだけの回が「効かなかった回」として静かに混ざる | ポーリングで警告 1 行を拾い、`timings.prefetch.declined` に残す | `test_vllm_cells.py::test_prefetch_decline_is_detected_and_recorded` |
+| 40 | **予算で切った回を「起動に失敗しました」と報告する**。設定の誤りを疑ってログを 1 時間掘ることになる（実測 2026-11-02） | 待機の終了理由を `_why`（`started`/`died`/`budget`）に残し、`budget` は別の文言にする | `test_vllm_cells.py::test_budget_exhaustion_is_not_reported_as_a_startup_failure` |
 
 
 ## 既に別ファイルで固定済みのもの

@@ -384,6 +384,14 @@ if _PF_STRATEGY:
         # 黙って落とすと「prefetch は効かなかった」という偽陰性になる
         print("⚠ --safetensors-load-strategy 非対応 → 重み prefetch は付けない")
 
+# vLLM 側が prefetch を**辞退した**ときの文言（`weight_utils.py` の warning）。
+# チェックポイント 18.21 GiB に対して RAM 32 GB は余裕が無く、同じコードでも
+# 「載せる」ノードと「辞退する」ノードがある（実測 2026-11-02: 片方 1,081 秒 /
+# 片方 47 秒per層）。辞退した回を同じ表に混ぜると施策の効果を読み違えるので、
+# 見つけたら記録して警告を出す。**辞退しても起動は続く**（遅い経路に落ちるだけ）。
+_PF_GUARD = "exceeds 90% of available RAM"
+_PF_GUARD_HIT = ""
+
 PLAN = []
 # 予算 1500s で 1 試行 600s。MTP を 2 段続けると失敗時に予算を食い潰すので、
 # 「MTP+draft dir」→ 失敗したら MTP を一旦あきらめて素の起動を優先する。
@@ -1199,6 +1207,7 @@ for idx, (label, spec, maxlen, env_extra, use_opt, extra_args,
     _t_print = 0.0
     _sz_prev = 0
     _poll_marks = {}
+    _mark_last = "(節目なし)"
     while time.time() - t0 < _tmo:
         d = _models(timeout=3)
         if d and d.get("data"):
@@ -1230,6 +1239,18 @@ for idx, (label, spec, maxlen, env_extra, use_opt, extra_args,
                 # 60 秒分解能の控え。tqdm の行（graph capture）は**ログに時刻が
                 # 無い**ので、ログ時刻だけでは拾えない。ポーリング側で補完する。
                 _poll_marks[_hit] = round(_now, 1)
+            if _hit:
+                _mark_last = _mark
+            # prefetch を辞退されたかを見る。ここを見ないと「prefetch を付けたのに
+            # 遅い」を延々と読み違える（実測 2026-11-02）。ログ全体を毎回走査して
+            # いるので追加コストはほぼ無い。
+            if LOAD_ARGS and not _PF_GUARD_HIT:
+                for _ln in _lns:
+                    if _PF_GUARD in _ln:
+                        _PF_GUARD_HIT = _ln.strip()[:300]
+                        print("  ⚠ vLLM が prefetch を辞退した（RAM 判定）: "
+                              + _PF_GUARD_HIT)
+                        break
             _grow = _sz - _sz_prev
             _sz_prev = _sz
             _gpu = subprocess.run(
@@ -1251,6 +1272,24 @@ for idx, (label, spec, maxlen, env_extra, use_opt, extra_args,
                 f"milestone: {_mark}\n"
                 f"{_mem_line()}\n")
         time.sleep(5)
+
+    # **なぜ待つのをやめたか**を残す。これが無いと、予算で切った回も
+    # 「起動に失敗しました」と報告され、設定の誤りを疑って何時間も溶かす
+    # （実測 2026-11-02: 予算切れを起動失敗と読んで原因究明に 1 時間）。
+    if started:
+        _why = "started"
+    elif proc.poll() is not None:
+        _why = "died"
+    else:
+        _why = "budget"
+    _PF_STATE = {"requested": bool(LOAD_ARGS),
+                 "args": LOAD_ARGS,
+                 "declined": bool(_PF_GUARD_HIT),
+                 "declined_line": _PF_GUARD_HIT}
+    if _PF_STATE["requested"]:
+        print(("⚠ prefetch は辞退された（この回の重みロードは遅い経路）"
+               if _PF_STATE["declined"] else "ℹ prefetch は辞退されていない"))
+        kc_save_timings({"prefetch": _PF_STATE})
 
     smoke_fail = ""
     print(_gist_summary())      # 外から見えていたか（0 件は異常）
@@ -1390,6 +1429,16 @@ kc_save_timings({"gist_selftest": _GIST_SELFTEST})
 if not started:
     save_output("vllm_startup.log", tail)
     save_output("vllm_attempts.txt", "\n\n".join(_attempts) + "\n")
+    if _why == "budget":
+        # 予算切れは**設定の誤りではない**。ここを「起動失敗」と報告すると、
+        # 次の回にフラグを疑って同じ 70 分を無駄にする。最後の節目を添えて、
+        # 「どこまで進んで切られたか」だけを言う。
+        fail(f"起動が予算 {STARTUP_BUDGET}s 内に終わらなかった（設定の誤りでは"
+             f"ない。遅いノードで重みロードが間に合わなかった）。"
+             f"最後に越えた節目: {_mark_last}。"
+             f"prefetch={'辞退された' if _PF_GUARD_HIT else '効いていた'}"
+             f"（vllm_startup.log / vllm_attempts.txt 参照）",
+             last_log or "/tmp/vllm_1.log")
     fail("vLLM の起動に失敗しました（vllm_startup.log / vllm_*.log 参照）",
          last_log or "/tmp/vllm_1.log")
 

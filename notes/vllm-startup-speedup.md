@@ -1346,4 +1346,77 @@ env 2 つを消すだけで、コードは変わらない（`03_vllm_serve.py` �
 2. Kaggle の環境変数で `VLLM_SAFETENSORS_STRATEGY=lazy` を入れる（`setdefault` なので負ける）
 3. `VLLM_SAFETENSORS_PREFETCH_THREADS` だけ変える（例 `8`）
 
+## 24. 本番 v16（2026-11-02 03:14）— prefetch は**再現しなかった**
+
+### 結果
+
+| | `prefetch1`（playground・02:16） | 本番 v16（script・03:14） |
+|---|---|---|
+| `ok` | true | **false** |
+| 重みロード | 1,081 秒（層あたり 14 秒） | 62 層中 56 層で **47 秒/層** |
+| 起動 | 1,733 秒 | **4,222 秒で予算切れ** |
+| `elapsed_seconds` | 2,010.8 | 4,513.8 |
+| install | 230.6 | 256.8 |
+
+同じセル・同じフラグ・同じステージング（13 ファイル）・同じ
+`/kaggle/tmp/vllm-model`。違うのはノードだけ。
+
+### 何が起きたか（ワーカーログの時刻）
+
+- 18:19 試行 1（`mtp+dd` / 65,536）開始
+- 18:21:21 `weight_utils.py:1148` — **vLLM が prefetch を辞退**
+  ```
+  safetensors_load_strategy='prefetch' was explicitly specified, but
+  checkpoint total size (18.21 GiB) exceeds 90% of available RAM (6.x GiB)
+  ```
+- 18:21:33 TP0 の prefetch 完了（12.91 秒。`prefetch1` は 7.89 秒）
+- 18:33:10 重みロード開始（`embed_tokens`）
+- 19:29:28 `layers.55` まで来たところで 4,222 秒 → 打ち切り
+
+### 分かったこと
+
+1. **vLLM は prefetch を自分で辞退する。** チェックポイント 18.21 GiB に対して
+   RAM 32 GB は余裕が無く、同じフラグでも「載せるノード」と「辞退するノード」が
+   ある。辞退しても起動は続く（遅い経路に落ちるだけ）ので**失敗はしない**。
+   つまり「効いた回」と「効かなかった回」が静かに混ざる。
+   こちらの事前検査（`🧮 重み 18.21 GiB / prefetch に必要な空き 21754 MiB`）は
+   通っていた。RAM の実測は同時刻で 25,060 MiB 空き。vLLM 側の判定だけが
+   6.x GiB を見ている。**判定基準が違うので、こちらからは制御できない。**
+2. **47 秒/層は `baseline_long` の 45 秒/層と同じ。** この回の重みロードは
+   lazy と同じ速度で、prefetch の効果は出ていない。
+3. **予算 4,200 秒では足りない。** この回は 4,650 秒前後で完走していた計算
+   （重み 3,008 + compile 62 + capture 389 + init 35 + install 257）。
+4. **失敗の報告が嘘だった。** 予算で切ったのに `error` は
+   「vLLM の起動に失敗しました（vllm_startup.log / vllm_*.log 参照）」。
+   設定の誤りを疑ってログを 1 時間掘ることになった。
+
+### 直したこと（GPU 0 秒）
+
+| 変更 | 内容 |
+|---|---|
+| 辞退の検出 | ポーリングで `exceeds 90% of available RAM` を拾い、`timings.prefetch` に `requested` / `declined` / `declined_line` を残す |
+| 終了理由の区別 | `_why`（`started` / `died` / `budget`）を残し、予算切れは「設定の誤りではない・最後の節目はここ」と書く |
+
+これで次回は、140 KiB のログを落とさずに `result.json` だけで
+「予算で切れたのか / prefetch が辞退されたのか」が分かる。
+
+### 判断できないこと
+
+TP0 のログは「prefetch 完了 12.91 秒」と言っているので、**辞退の警告が出ても
+prefetch 自体は走っている**可能性がある。TP1 側のログが残っておらず、
+どちらとも言えない。次回は `timings.prefetch.declined` で判別できる。
+
+### 次の一手
+
+| 案 | 根拠 | コスト |
+|---|---|---|
+| **予算を 7,000 秒にする**（`VLLM_STARTUP_BUDGET` と `VLLM_ATTEMPT_TIMEOUT` の**両方**） | この回は 4,650 秒前後で完走していた。片方だけ上げても `_tmo = min(ATTEMPT_TIMEOUT, …)` で 4,200 に切られる | 0（遅いノードのときだけ最大 +47 分） |
+| `prefetch1` をもう 1 回 | ノード差の切り分け | 1 往復 |
+| `bake_env` を空に戻す | prefetch を諦める。4,200 でも遅いノードは落ちる | 0 |
+
+**推奨は予算 7,000。** prefetch は「載れば 1,200 秒・辞退されれば lazy と同じ」で
+**損をしない**（辞退時は遅い経路に落ちるだけ）。落ちている原因は予算のほうで、
+`baseline_long` が 7,000 で完走した実績もある。
+
+
 
