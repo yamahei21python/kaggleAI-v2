@@ -9,6 +9,10 @@
 - 計測（timings / 節目の解析）は `tests/test_startup_timing.py`
 - ここは「セルの順序・版の出どころ」など**セル内部の契約**だけ
 """
+import glob as _glob  # noqa: E402
+
+import pytest  # noqa: E402
+
 import _cells  # noqa: E402
 
 INSTALL = ("kaggle", "step2-vllm", "cells", "01_install_vllm.py")
@@ -395,21 +399,84 @@ def test_warm_cache_is_captured_on_both_paths():
 
 
 
-def test_warm_cache_require_fails_instead_of_silently_degrading():
-    """`KC_WARM_CACHE=require` は tar が無ければ**落ちる**。
+def _exec_warm_cache_block(tmp_path, mode):
+    """install セルの warm cache ブロックだけを exec して、結果を返す。
 
-    `1`（本番の既定）のままだと、Dataset を付け忘れた実験が baseline と
-    まったく同じ数字を出し、「キャッシュは効かない」という偽陰性になる。
-    実測 2026-11-01: `vllm-warm-cache` はまだ Kaggle に存在せず、
-    playground の push が `not valid dataset sources` で落としていた。
-    1 往復（約 40 分）を捨てるより、その場で落ちたほうが安い。
-
-    3 値の契約も固定する: 0=復元しない / 1=あれば復元して続行 / require=無ければ失敗。
+    ブロックは `os` / `_glob` / `kc_find_dataset` にしか依存しないので、この 3 つを
+    差し替えれば単体で動く。Dataset を**空のディレクトリ**に見せかけることで
+    「Dataset はあるが tar が無い」＝実際に起きる最悪の形を再現する。
     """
+    import os as _os
+
     src = _cells.cell(*INSTALL)
-    assert '_KC_WC_MODE in ("require", "required")' in src, "require モードが無い"
-    # require の分岐が「なし」の分岐より**前**にあること（後だと到達しない）
-    assert src.index("elif _WC_REQUIRED:") < src.index('print(f"ℹ warm cache なし'), \
-        "require の判定が「なし」の表示より後ろにある"
-    # 落とす理由がログに残ること（次に見た人が「なぜ落ちたか」で悩まない）
-    assert "偽陰性" in src, "失敗メッセージに理由が無い"
+    start = src.index("# ---- warm cache（任意 Dataset）----")
+    end = src.index("# ---- torch を「消してから入れる」ための道具 ----")
+    block = src[start:end]
+
+    empty = tmp_path / "empty-dataset"
+    empty.mkdir(exist_ok=True)
+
+    ns = {"os": _os, "_glob": _glob, "print": lambda *a, **k: None,
+          "kc_find_dataset": lambda slug: str(empty)}
+    old = _os.environ.get("KC_WARM_CACHE")
+    _os.environ["KC_WARM_CACHE"] = mode
+    try:
+        exec(compile(block, "cell:01_install_vllm:warm_cache", "exec"), ns)
+    finally:
+        if old is None:
+            _os.environ.pop("KC_WARM_CACHE", None)
+        else:
+            _os.environ["KC_WARM_CACHE"] = old
+
+
+def test_warm_cache_require_raises_on_an_empty_dataset(tmp_path):
+    """`require` は tar が 1 本も無ければ**実行時に**落ちる（テキストでなく挙動）。
+
+    これを落とさないと、cache 実験が baseline と同じ数字を出し、
+    「キャッシュは効かない」という偽陰性になる。
+    """
+    with pytest.raises(RuntimeError) as e:
+        _exec_warm_cache_block(tmp_path, "require")
+    assert "require" in str(e.value)
+    assert "偽陰性" in str(e.value), "落ちる理由がメッセージに無い"
+
+
+def test_warm_cache_default_mode_continues_on_an_empty_dataset(tmp_path):
+    """既定 `1` は落ちない（本番が Dataset 未作成でも起動できること）。
+
+    `require` を既定にすると、Dataset を作る前の本番が全部止まる。
+    """
+    _exec_warm_cache_block(tmp_path, "1")      # 例外が出なければよい
+
+
+def test_warm_cache_off_never_searches_for_tars(tmp_path):
+    """`0` は tar を探しにも行かない（対照群の条件を汚さない）。
+
+    `kc_find_dataset` 自体は常に呼ばれる（パスを返すだけの安い処理）。
+    契約は「**tar を探さない＝復元しない**」なので、`_glob` を見張る。
+    """
+    import os as _os
+
+    src = _cells.cell(*INSTALL)
+    start = src.index("# ---- warm cache（任意 Dataset）----")
+    end = src.index("# ---- torch を「消してから入れる」ための道具 ----")
+    block = src[start:end]
+
+    globbed = []
+
+    def spy_glob(pattern):
+        globbed.append(pattern)
+        return []
+
+    ns = {"os": _os, "_glob": spy_glob, "print": lambda *a, **k: None,
+          "kc_find_dataset": lambda slug: "/nonexistent"}
+    old = _os.environ.get("KC_WARM_CACHE")
+    _os.environ["KC_WARM_CACHE"] = "0"
+    try:
+        exec(compile(block, "cell:01_install_vllm:warm_cache", "exec"), ns)
+    finally:
+        if old is None:
+            _os.environ.pop("KC_WARM_CACHE", None)
+        else:
+            _os.environ["KC_WARM_CACHE"] = old
+    assert globbed == [], f"KC_WARM_CACHE=0 なのに tar を探した: {globbed}"

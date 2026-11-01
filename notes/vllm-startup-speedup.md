@@ -848,3 +848,39 @@ The following are not valid dataset sources and could not be added to the kernel
 
 
 
+
+### 18.4 `VLLM_TRITON_FORCE_FIRST_CONFIG` は**診断専用**（CPU で中身を確認した）
+
+`force_first` 実験の前提を、GPU を使う前に pinned wheel で確認した
+（`.wheel/vllm-0.32.0-cp38-abi3-manylinux_2_28_x86_64.whl`）。結論は
+**「効くが、本番に使ってはいけない」**。
+
+**入っている**: `vllm/env_override.py`（37,970 B）が
+`VLLM_TRITON_FORCE_FIRST_CONFIG` を読み、`vllm/triton_utils/force_first_config.py`
+（3,301 B）の `install()` を呼ぶ。両方とも pinned wheel の中にある。
+
+**何をするか**（`Autotuner.run` を丸ごと差し替える）:
+
+1. `configs` を先頭から順に試し、**最初に成功した config** を採用する
+2. 失敗と見なすのは `OutOfResources` / `CompileTimeAssertionFailure` / `PTXASError`
+   だけ（＝「T4 で動かない config」を飛ばす）
+3. `self.best_config` にそれを入れ、`_picked_cache` に覚える
+4. **`do_bench` を 1 回も呼ばない**（ファイル内の出現数 0）
+
+→ 36 config を**全部コンパイルして計測する**代わりに、**1 個コンパイルして終わる**。
+373 秒が autotune なら、ここで大きく落ちる。だから**判定には使える**。
+
+**使ってはいけない理由**: 選ばれるのは「最速」ではなく「**最初に通った**」config。
+`picked_index` は通常 0 なので、性能は保証されない。起動は速くなるが t/s は落ちうる。
+`force_first` で起動が縮んだなら、正しい処方は**キャッシュ**（autotune の結果を
+そのまま持ち越す）であって、このフラグを本番に置くことではない。
+
+**ログで数えられる**: 採用時に 1 行出る。
+
+```
+[triton-autotune-disabled] kernel=chunk_o configs=36 picked_index=0 picked=...
+```
+
+`configs=` の合計が「autotune が何個の候補を持っていたか」＝ 373 秒の上限の目安。
+`force_first` の回でこの行を数えれば、**キャッシュで何個潰せるか**が分かる。
+`grep -c triton-autotune-disabled` と `grep -o 'configs=[0-9]*'` で足りる。
