@@ -806,6 +806,45 @@ chunk_local_cumsum_scalar_kernel  chunk_scaled_dot_kkt_fwd_kernel
 → 復元用の tar は**起動に成功した回**から採る。`baseline` は out2g と同じ経路を通るので、
 そこで採れた tar が完全版になる。
 
+### 18.3 `vllm-warm-cache` は**まだ存在しない**（2026-11-01 判明）
+
+`datasets/warm-cache/dataset-metadata.json` はローカルにあるが、Kaggle 側には
+**一度も作っていない**。`--no-run`（Quick Save）で playground を保存したときに出た警告:
+
+```
+The following are not valid dataset sources and could not be added to the kernel:
+['yamahei21python/vllm-warm-cache']
+```
+
+`kaggle datasets list --user yamahei21python` にも出てこない。つまり
+`kaggle/build_vllm_playground.py` の `dataset_sources` は**宙に浮いた参照**を持っている。
+
+これは危険。`KC_WARM_CACHE` の既定 `1` は「あれば復元、無ければ『なし』と出して続行」
+なので、`cache` 実験が **baseline とまったく同じ数字**を出し、「キャッシュは効かない」
+という偽陰性になる。1 往復（約 40 分）を使って間違った結論に到達する。
+
+→ **3 値にした**（`kaggle/step2-vllm/cells/01_install_vllm.py`）:
+
+| 値 | 挙動 | 用途 |
+|---|---|---|
+| `0` | 復元しない | 対照群（baseline） |
+| `1` | あれば復元、無ければ続行 | 本番の既定 |
+| `require` | **無ければその場で `RuntimeError`** | 実験（cache） |
+
+`require` のときのメッセージには「このまま走らせると baseline と同じ結果になり、
+偽陰性になるので中断する」と理由を書いてある。次に見た人が「なぜ落ちたか」で
+悩まないようにするため。
+
+順序も重要: `elif _WC_REQUIRED:` は「warm cache なし」を表示する `else:` より
+**前**に置く（後ろだと到達しない）。テストで固定済み。
+
+**完全版 tar が採れたら、次はこの順**:
+
+1. `datasets/warm-cache/` に tar を置く（`dataset-metadata.json` はコミット済み）
+2. `kaggle datasets create -p datasets/warm-cache` で Dataset 化
+3. `--no-run` で playground を保存し直し、警告が消えたことを確認
+4. `KC_EXPERIMENT=cache` で実行（`require` なので、Dataset が無ければ即落ちる）
+
 
 
 

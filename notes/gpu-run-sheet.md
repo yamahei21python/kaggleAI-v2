@@ -165,6 +165,34 @@ python3 -m cli push <name> --no-run --yes     # 保存だけ（実行しない�
 `--no-run` を要求されたときだけ 2.x を探し、無ければ作り方を出して止まる。
 別の場所の 2.x を使うなら `KC_KAGGLE=/path/to/kaggle` を指定する。
 
+### 7.1 `予約中` は「消費」ではなく「保留」（2026-11-01 実測）
+
+`cli quota` の `予約中` は**実行中のセッションが握っている上限**で、終われば戻る。
+実際に v15 で確認した:
+
+| | 残り | 予約中 |
+|---|---|---|
+| v15 実行中 | 7h05m | 11h52m |
+| v15 終了後 | **18h39m** | 0 |
+
+引かれるのは**実際に走った秒数だけ**。だから「5 分の smoke を撃ったら残りが
+12 時間減った」は勘定の見え方であって、溶けてはいない。
+
+ただし**副作用はある**: GPU セッションは同時 2 つまでなので、1 本走っている間は
+次の push が `Maximum batch GPU session count of 2 reached` で弾かれることがある
+（実測では RUNNING が 1 本でも弾かれた。終了直後のセッションがまだ数えられている
+と見られる）。`--no-run` はセッションを作らないので、**この制限には当たらない**。
+
+```bash
+# 実行せずに置く（クォータ 0・セッション 0）
+python3 -m cli push vllm-playground --no-run --yes
+```
+
+`--no-run` で分かった副産物: 存在しない Dataset を `dataset_sources` に入れると
+`not valid dataset sources ...` と警告が出る。実行時は `/kaggle/input/<slug>` が
+無いだけなので**静かに劣化する**。実際 `vllm-warm-cache` が未作成だと分かった
+（→ `vllm-startup-speedup.md` §18.3）。
+
 ## 8. 実測結果（2026-10-31・クォータ復活後）
 
 | # | エンジン | 結果 | 実行時間 | 主な数値 |
@@ -175,7 +203,7 @@ python3 -m cli push <name> --no-run --yes     # 保存だけ（実行しない�
 | 5 | keepalive / `/stop` | **✅ 検証済み（CPU・GPU 0 秒）** | 約 2 分 | `reset_done=True` / `stop_done=True` / 12s で 60分00秒 に戻る / 30s で `RUN=0` 終了 |
 | 6 | LMDeploy | **❌ 不可（形式非対応）＝ 判定済み** | 125s | `ValueError: Unsupported compressed-tensors group_size: expected 32, got 128` |
 | 7 | SGLang | **❌ 不可（sm75 非対応）＝ 判定済み** | 297s → 610.6s | `Quantization scheme is not supported for the current GPU. Min capability: 80. Current capability: 75.` |
-| 4 | ExLlamaV3 | **⚠ 判定に到達していない（梱包ミス）** | 7s | `NotJSONError: Notebook does not appear to be JSON`（`__notebook__.ipynb` に .py を入れて push した） |
+| 4 | ExLlamaV3 | **⚠→ エンジンは起動した（判定は次）** | 263.6s | `loaded in 229s; serving qwen38-exl3 on 127.0.0.1:9931 (ctx 8192)`。落ちたのは骨格の `engine_checks` の引数不一致（`5 were given`）で、エンジンではない。梱包ミスは解消済み |
 
 `[1] ui` は 3 本とも **SKIP**（smoke は proxy を立てないため。下記 (a)）。
 
