@@ -40,8 +40,10 @@ PATCH = "my-ollama-orcarouter-qwen38-27b-patch"
 OLLAMA_PORT = 11434
 
 TUNNEL = os.environ.get("STEP2_TUNNEL", "cloudflared").strip().lower()
-if TUNNEL not in ("cloudflared", "ngrok"):
-    raise SystemExit(f"STEP2_TUNNEL={TUNNEL!r} は未対応（cloudflared / ngrok）")
+if TUNNEL != "cloudflared":
+    raise SystemExit(
+        f"STEP2_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
+        "（ngrok は 2026-11-01 に廃止。notes/url-publishing.md）")
 
 # smoke 版は通常版と別ディレクトリへ書く（同じだと `cli push --smoke` が
 # 通常版を上書きしてしまう）。notebook 版の `smoke_out` と同じ考え方。
@@ -70,7 +72,6 @@ def _render_settings() -> str:
         "__CHAT_B64__": CHAT_SRC_B64,
         "__GIST_ID__": CFG.get("GIST_ID", ""),
         "__GIST_OWNER__": CFG.get("GIST_OWNER", ""),
-        "__NGROK_DOMAIN__": CFG.get("NGROK_DOMAIN", ""),
     })
 
 
@@ -129,8 +130,8 @@ META = metadata.base(
     code_file="main.py",
     kernel_type="script",
     gpu=True,
-    datasets=[f"{OWNER}/{DATASET}", f"{OWNER}/{PATCH}"]
-    + ([] if TUNNEL == "ngrok" else [f"{OWNER}/my-cloudflared-bin"]),
+    datasets=[f"{OWNER}/{DATASET}", f"{OWNER}/{PATCH}",
+              f"{OWNER}/my-cloudflared-bin"],
 )
 
 if __name__ == "__main__":
@@ -150,6 +151,5 @@ if __name__ == "__main__":
         hard_max_minutes=480,
         smoke=SMOKE,
         tunnel=TUNNEL,
-        ngrok_domain=CFG.get("NGROK_DOMAIN", ""),
         builder="kaggle/build_step2_script.py",
     )

@@ -52,25 +52,24 @@ chmod +x datasets/cloudflared/bin/cloudflared
 kaggle datasets create -p datasets/cloudflared --dir-mode tar
 ```
 
-> **cloudflared 版なら Secrets は不要**です。quick tunnel はアカウント・API キー不要で、
-> 自動発行される URL がそのまま使えます。
-> **ngrok 版を使う場合だけ** `NGROK_TOKEN` が必要です（`my-cloudflared-bin` は不要）。
+> **Secrets は不要**です。cloudflared の quick tunnel はアカウント・API キー不要で、
+> 自動発行される URL がそのまま使えます。URL は毎回変わりますが、
+> **ビーコン**（カーネルのコードを掲示板にする方式）から読めるので固定 URL は要りません
+> （`notes/url-publishing.md`）。ngrok は 2026-11-01 に廃止しました。
 
-### 2. Kaggle Secrets を設定（cloudflared 版は不要 / ngrok 版は必須）
+### 2. Kaggle Secrets を設定（すべて任意）
 
 > ⚠ **`kaggle` CLI に secrets を設定するコマンドはありません。**
 > 使用可能なコマンドは `competitions / datasets / kernels / models / files / config` のみです。
 > Secrets は **Kaggle の UI でしか登録できません**。
 
-**cloudflared 版は空で動きます。** ngrok 版は `NGROK_TOKEN` だけ登録が必要です。
+**空でも動きます。** 下の表は「設定すると挙動が変わる」ものだけで、必須はありません。
 Notebook を開き、右側 **Add-ons → Secrets → Add a Secret**:
 
 | ラベル | 値 | 必須 |
 |---|---|---|
 | `API_PASS` | 設定すると Basic 認証が有効になる | 不要（既定は認証なし） |
 | `API_USER` | Basic 認証のユーザー名（`API_PASS` 設定時のみ） | 不要（既定 `ollama`） |
-| `NGROK_TOKEN` | ngrok の authtoken | **ngrok 版のみ必須** |
-| `NGROK_DOMAIN` | ngrok の dev domain | 任意（埋め込み既定値を上書き。既定値は `config.env`） |
 | `GITHUB_TOKEN` | gist 権限つきトークン（`gh auth token` の出力） | 任意（Gist 自動配布を使う場合） |
 | `GIST_ID` | 配布先 Gist の ID | 任意（既定 Gist を使用） |
 | `KAGGLE_USERNAME` | Kaggle ユーザー名 | Step1 のみ |
@@ -99,8 +98,8 @@ kaggle kernels push -p kaggle/step1
 
 ### 4. Step2: サーバー起動 + トンネル公開
 
-1. Step2 の Notebook を開く（cloudflared 版 or ngrok 版）
-2. **Add Data** → 以下の **3つ** を追加（ngrok 版は `my-cloudflared-bin` 不要で **2つ**）
+1. Step2 の Notebook を開く
+2. **Add Data** → 以下の **3つ** を追加
    - `my-ollama-orcarouter-qwen38-27b`（モデル 16.5 GiB）
    - `my-ollama-orcarouter-qwen38-27b-patch`（ollama + llama-server + CUDA 1.45 GB）
    - `my-cloudflared-bin`（cloudflared 40 MB）
@@ -114,10 +113,9 @@ kaggle kernels push -p kaggle/step1
 kaggle kernels push -p kaggle/step2
 ```
 
-> **cloudflared 版は Dataset 3つとも推奨。** モデル本体だけでは `bin/ollama` と
+> **Dataset 3つとも推奨。** モデル本体だけでは `bin/ollama` と
 > **CUDA バックエンド**が入りません（片方だと CPU 推論に落ちる）。cloudflared が無いと
 > 毎回 GitHub から 40MB を落とし、GitHub に届かないと**カーネルが即エラーになります**。
-> ngrok 版は cloudflared を使わないので **2つ**で足ります（ngrok 本体は起動時に取得）。
 
 > **マウントパスは自動探索です。** Kaggle は `/kaggle/input/<slug>`（旧）から
 > `/kaggle/input/datasets/<owner>/<slug>`（新）へ移行中で、同一期間に混在します。
@@ -129,7 +127,6 @@ kaggle kernels push -p kaggle/step2
 > ⚠ **GPU セッションは同時2本まで。** 実行中のカーネルが2本あると
 > `Maximum batch GPU session count of 2 reached` で push が弾かれます。
 > `kaggle kernels stop` は CLI に無いので、**終了を待つ**か UI から止めてください。
-> cloudflared 版と ngrok 版を同時に走らせる場合は1本ずつ。
 
 ### 4b. 検証（必ず完了させてから）
 
@@ -138,8 +135,6 @@ kaggle kernels push -p kaggle/step2
 ```bash
 # 実行完了（既定30分）後:
 kaggle kernels output <username>/step2-orcarouter-qwen38-27b-cloudflared -p out/
-# ngrok 版は slug が ...-ngrok-fixed
-# kaggle kernels output <username>/step2-orcarouter-qwen38-27b-ngrok-fixed -p out.ngrok/
 cat out/verify_result.txt      # [1]UI [2]200 [3]streaming [4]OpenAI互換 [5]GPU常駐
 cat out/public_url.txt         # 公開URL
 cat out/connection_info.txt    # curl / Python / opencode.json の設定一式
@@ -182,16 +177,29 @@ client.chat.completions.create(
 )
 ```
 
-> **cloudflared 版の公開URLは実行のたびに変わります**（quick tunnel の仕様）。
+> **公開URLは実行のたびに変わります**（quick tunnel の仕様）。
 > 切れたらトンネルセルを再実行し、接続情報を取り直してください。
-> **ngrok 版は固定URL**なので、この手順は不要です（5c 参照）。
+> 「毎回 URL を調べる」のを避けるのが次の 5b です。
 
-### 5b. 固定URLで対話する（`ask.py`）
+### 5b. 変わってしまう URL を読む（ビーコン）
 
-quick tunnel の URL は事前に決められません。そこで **URL の配布先だけ固定**します。
+quick tunnel の URL は事前に決められません。そこで **URL の置き場所だけ固定**します。
+本命は **ビーコン**（掲示板カーネルのコードに URL を書く方式。`notes/url-publishing.md`）。
 
-- カーネルが起動直後に現在の URL を **Gist の `url.txt`** へ PATCH
-- クライアントは固定の raw URL を 1 回 GET して現在の URL を得る
+```bash
+python3 -m cli beacon                    # 既定の掲示板を読む
+python3 -m cli beacon --json | jq -r .url   # シェル置換用
+```
+
+- 配信カーネルが起動直後に掲示板（`serve-url-beacon`）の `main.py` を
+  `kernels_push` で書き換え、こちらは `kernels_pull` で読む（実測 0.26 秒）
+- **Secrets 不要**。専用アカウントでも動く（Gist は `GITHUB_TOKEN` が要る）
+- 既定で **`STAGE == "probe"` と 6 時間より古い値を捨てる**。
+  捨てたときは理由が出る（黙って古い URL を返さない）
+- 戻り値: `0` = 使える / `1` = 読めたが捨てた / `2` = 引けなかった
+
+旧経路の **Gist** も残っています（`GITHUB_TOKEN` と `GIST_ID` があるときだけ動く。
+無ければスキップして配信は続く）。
 
 ```
 https://gist.githubusercontent.com/yamahei21python/2b44ac8cb115012a31d3c46661af933f/raw/url.txt
@@ -200,11 +208,10 @@ https://gist.githubusercontent.com/yamahei21python/2b44ac8cb115012a31d3c46661af9
 ```bash
 python3 -m cli ask "自己紹介して"        # 1回だけ
 python3 -m cli ask                      # 対話モード（履歴保持, /reset /quit）
-python3 -m cli ask --url https://xxx.trycloudflare.com "..."   # Gist を介さない
+python3 -m cli ask --url https://xxx.trycloudflare.com "..."   # どちらも介さない
 ```
 
-- **ngrok 版は固定URLなので Gist は不要**（この節は cloudflared 版の話）
-- `GITHUB_TOKEN` 未設定なら Gist 更新はスキップ（従来どおり接続情報セルを使う）
+- `GITHUB_TOKEN` 未設定なら Gist 更新はスキップ（接続情報セルは常に出る）
 - Gist は **secret（非公開 URL）** だが、URL を知れば誰でも読める。
   認証を有効にした場合は URL 自体が入口になる点に注意
 - `ask.py` は `API_USER` / `API_PASS`（環境変数 → `~/.orcarouter_pass`）があれば
@@ -214,64 +221,29 @@ python3 -m cli ask --url https://xxx.trycloudflare.com "..."   # Gist を介さ�
 
 `opencode.json` の例は Step2 の「接続情報」セルが出力します。
 
-### 5c. ngrok 版（固定URLが欲しいとき）
-
-`kaggle/step2-ngrok/` に **ngrok 版ノート**を別途生成できます（ビルダーは共通）。
-
-```bash
-STEP2_TUNNEL=ngrok python3 kaggle/build_step2.py   # → kaggle/step2-ngrok/
-kaggle kernels push -p kaggle/step2-ngrok
-```
-
-| 項目 | cloudflared 版 | ngrok 版 |
-|---|---|---|
-| アカウント | 不要 | 必要（`NGROK_TOKEN`） |
-| URL | 毎回ランダム | **固定**（既定 `rebalance-cornflake-sagging.ngrok-free.dev`） |
-| 追加 Dataset | `my-cloudflared-bin` | 不要（起動時に取得） |
-| 帯域 | 制限なし | 無料枠あり |
-| 同時起動 | 可 | **同一ドメインで1本のみ** |
-
-- Secrets: `NGROK_TOKEN` のみ必須。`NGROK_DOMAIN` は上書き用（未設定なら埋め込み値）
-- `NGROK_DOMAIN` は https://dashboard.ngrok.com/domains で取得（無料枠1個）
-- 固定URLなので **URL を毎回調べなくてよい**。ただし `ask.py` の既定は Gist 参照なので、
-  `--url` か `LLM_URL` で明示するのが確実（Gist が古い cloudflared URL のままでも動く）
-
-```bash
-python3 -m cli ask --url https://rebalance-cornflake-sagging.ngrok-free.dev "自己紹介して"
-export LLM_URL=https://rebalance-cornflake-sagging.ngrok-free.dev   # 以後 --url 不要
-```
-- トンネルセルは共通インターフェース（`TUNNEL_NAME` / `RESTART_CMD` / `probe_url()`）
-  なので、keepalive の再起動も両対応
-- 無料枠はブラウザ UA に警告ページを返す → 全リクエストに
-  `ngrok-skip-browser-warning: true` を付ける（ノートと `ask.py` の両方で対応済み）
-
-`opencode.json` の例は Step2 の「接続情報」セルが出力します。
-
 ### 5d. ダブルクリックで起動 → ブラウザでチャット
 
 `run-kaggle-chat.command` を**ダブルクリックするだけ**で、Kaggle が起動してチャット UI が開きます。
 
 ```
 run-kaggle-chat.command をダブルクリック
-  → 既に動いていれば push しない（そのまま再利用）
+  → ビーコンに前回の URL が残っていて、それが生きていれば push しない
   → 動いていなければ kaggle kernels push（GPU T4 x2）
-  → /api/tags が 200 になるまで待機（既定 900 秒）
-  → https://<固定ドメイン>/ をブラウザで開く
+  → ビーコンが新しい URL を返すまで待機（healthz が 200 になるまで）
+  → /api/ps に size_vram>0 が乗るまで待機（既定 900 秒）
+  → その URL をブラウザで開く
 ```
 
 - **認証なし**。パスワード入力も URL の `#auth=` も不要
-- **ngrok 無料枠は `ERR_NGROK_6024` のブロックページを返す**（ボタンもリンクも無いので
-  クリックでは抜けられない）。`ngrok-skip-browser-warning: true` ヘッダを付けた
-  リクエストは素通りするので、**ローカル中継**（`auth_proxy.py`）がそのヘッダを肩代わりする。
-  ブラウザは `http://127.0.0.1:19950/` を開く。cloudflared 版はこの問題が無い
 - UI は **リポジトリ直下の `llama-chat.html`**（ローカル uzu 版と同一ファイル）。
-  接続先は HTML 側が自動判定する: `?api=` → `?port=` → 同一オリジン（中継）→ 既定ポート
-- 中継は**ローカルの `llama-chat.html` を配る**。上流から取ると push 済みの古い版が返る
+  接続先は HTML 側が自動判定する: `?api=` → `?port=` → 同一オリジン → 既定ポート
+- ブラウザ警告ページの回避（`ngrok-skip-browser-warning`）は **2026-11-01 に不要になった**
+  （ngrok を廃止し、cloudflared は素の UA を通す）
 
 ```bash
-KC_TUNNEL=cloudflared ./run-kaggle-chat.command   # URL 可変版
-KC_FORCE_PUSH=1 ./run-kaggle-chat.command         # 動いていても再 push
-KC_NO_OPEN=1 ./run-kaggle-chat.command            # ブラウザを開かない
+./run-kaggle-chat.command                     # 既定（cloudflared）
+KC_FORCE_PUSH=1 ./run-kaggle-chat.command     # 動いていても再 push
+KC_NO_OPEN=1 ./run-kaggle-chat.command        # ブラウザを開かない
 ```
 
 > **`uzu` の Kaggle 版は作れません。** uzu は Metal（macOS）専用で、

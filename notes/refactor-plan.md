@@ -1106,7 +1106,13 @@ notebook と script が**同じ `kaggle/step2/cells/00_settings.py` を読む**�
 
 #### A. 先に潰すべき穴 → **2026-10-30 に両方解消済み**
 
-**A-1（解消）script 骨格が ngrok に対応していなかった。**
+> ⚠ **A-1 は 2026-11-01 に撤回した。** ngrok 自体を廃止したので、骨格が ngrok を
+> 実装している必要が無くなった（`notes/url-publishing.md`）。以下は「当時こう
+> 直した」という記録として残す。現在の骨格は `start_tunnel()` が
+> `start_cloudflared()` へ渡すだけで、`STEP2_TUNNEL` に cloudflared 以外を渡すと
+> **生成前に落ちる**。`kaggle/serve-cells/tunnel_ngrok.py` は削除済み。
+
+**A-1（解消 → 撤回）script 骨格が ngrok に対応していなかった。**
 `start_tunnel()` が cloudflared 固定で、`TUNNEL_KIND` は `result.json` に書くだけ
 だった。ngrok 版は `my-cloudflared-bin` を dataset から外しているので、
 cloudflared を毎回ダウンロードして quick tunnel を張っていた（動くがラベルが嘘）。

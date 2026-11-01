@@ -1,7 +1,10 @@
 # Kaggle GPU で Qwen3.8-27B-Uncensored を動かす
 
 T4 x2（16 GB × 2）の Kaggle カーネルで 27B 級モデルを動かし、
-cloudflared / ngrok で OpenAI 互換 API + チャット UI として公開する。
+cloudflared の quick tunnel で OpenAI 互換 API + チャット UI として公開する。
+URL は毎回変わるので、**ビーコン**（掲示板カーネルのコードに URL を書かせて
+`python3 -m cli beacon` で読む）で受け渡す。ngrok は 2026-11-01 に廃止した
+（`notes/url-publishing.md`）。
 ローカル Mac（RAM 16 GiB）では実用速度が出ないため、推論はすべて Kaggle 側。
 
 - 推論エンジン 6 系統: **Ollama（GGUF）/ llama-server 直起動 / vLLM（AWQ+MTP）/ ExLlamaV3（EXL3）/
@@ -52,7 +55,7 @@ python3 -m cli push step2-lmdeploy-qwen38-27b-cloudflared --smoke --yes
 python3 -m cli timings /tmp/out1/result.json /tmp/out2/result.json
 
 # 3c) 実行せずカーネルだけ作る（Quick Save 相当・GPU を消費しない）
-python3 -m cli push llama-server-ngrok-script --no-run --yes
+python3 -m cli push llama-server-cpu-check --no-run --yes
 
 # 4) 出力（result.json / url.txt）を取得
 kaggle kernels output <id> -p out/
@@ -100,16 +103,20 @@ archive/                    # 生成物・ログの退避先（gitignore。中�
 kaggle/
   build_*.py                  # ビルダー（18 本。notebook / script を生成）
   serve-cells/                # notebook 配信の共有セル（proxy / tunnel / gist / verify …）
-  step1/ step2/ step2-ngrok/  # 生成物（Ollama 系 notebook）
+  step1/ step2/               # 生成物（Ollama 系 notebook）
+  step2-ngrok/                # 退役（2026-11-01）。履歴として残置、再生成不可
   llama-server/               # llama-server 直起動（cells/ + cloudflared 版の出力先）
-  llama-server-ngrok/         # 同上 ngrok 版
+  llama-server-ngrok/         # 退役（同上）
   step2-vllm/                 # Dataset 作成 notebook
-  step2-vllm-kernel/{cloudflared,ngrok,smoke-cloudflared}/  # vLLM 本体
+  step2-vllm-kernel/{cloudflared,smoke-cloudflared}/  # vLLM 本体
+  step2-vllm-kernel/ngrok/    # 退役（同上）
   step2-vllm-dryrun/          # vLLM 配管テスト（CPU）
   # ---- script 版（notebook と並走。配信は kbuild/serve_script.py の骨格）----
-  step2-script/{cloudflared,ngrok}/        # Ollama（+ smoke-<tunnel>/ は --smoke 版）
-  step2-vllm-script/{cloudflared,ngrok}/   # vLLM（同上）
-  llama-server-script/ngrok/               # llama-server 直起動（同上）
+  step2-script/cloudflared/          # Ollama（smoke-cloudflared/ は --smoke 版）
+  step2-vllm-script/cloudflared/     # vLLM（同上）
+  step2-script/ngrok/                # 退役（同上。smoke-ngrok/ も）
+  step2-vllm-script/ngrok/           # 退役（同上）
+  llama-server-script/ngrok/         # 退役（同上）
   # ---- script 版（配信しないカーネル。セル列をそのまま 1 ファイルへ）----
   {step1,step2,step2-vllm,step2-vllm-dryrun,smoke,bench,bench_mtp}/script/
   exl3-serve/                 # chat_server.py（EXL3 用 OpenAI 互換サーバの真実源）
@@ -171,15 +178,14 @@ id は**原則**変えない（Secrets / `dataset_sources` / 実行履歴が id 
 例外は 2026-10-30 の `step2-direct-llama-server-*` → `llama-server-*` の改名だけで、
 これは **Kaggle 上では新規カーネル**になる（旧 id はそのまま残るので、
 不要になったら UI から消す。GPU 実測前だったので失うものは無い）。
-全 **36 件**（現役 14 / 準現役 20 / 退役 2）、うちビルダー持ち 31 件。
+全 **51 件**（現役 12 / 準現役 31 / 退役 8）、うちビルダー持ち 30 件。
 全件は `python3 -m cli list`。主なもの:
 
 | 状態 | カーネル | 種別 | 役割 |
 |---|---|---|---|
 | 現役 | `step1-orcarouter-qwen38-27b-dl` | notebook / CPU | GGUF を Dataset 化（初回のみ） |
 | 現役 | `step2-orcarouter-qwen38-27b-cloudflared` | notebook / GPU | Ollama + cloudflared |
-| 現役 | `step2-orcarouter-qwen38-27b-ngrok-fixed` | notebook / GPU | Ollama + 固定 ngrok |
-| 現役 | `step2-vllm-qwen38-27b-cloudflared` / `-ngrok` | notebook / GPU | vLLM + AWQ + MTP |
+| 現役 | `step2-vllm-qwen38-27b-cloudflared` | notebook / GPU | vLLM + AWQ + MTP |
 | 現役 | `prepare-vllm-dataset` | notebook / CPU | wheelhouse / AWQ の Dataset 化 |
 | 現役 | `exl3-serve` | script / GPU | EXL3 配信（60 分で自動停止） |
 | 現役 | `exl3-serve-dryrun` / `-keepalive` | script / CPU | 配管・keepalive の実測 |
@@ -190,6 +196,7 @@ id は**原則**変えない（Secrets / `dataset_sources` / 実行履歴が id 
 | 準現役 | `step1` / `step2` / `dryrun` / `smoke` / `bench` ×2 の `-script` | script / CPU・GPU | 配信しないカーネルの script 版（セル連結） |
 | 準現役 | `smoke-…`, `bench-…` ×2, `step2-vllm-dryrun`, `llama-server-…` | notebook | 測定・代替経路 |
 | 退役 | `keepalive-test-1`, `capture-ollama-patch-v2` | — | 参照しない |
+| 退役 | `…-ngrok` 系 6 本（2026-11-01） | notebook / script | ngrok 廃止に伴い停止。`main.py` / `.ipynb` は履歴として残置 |
 
 Secrets は**カーネル id 単位**で UI から登録する。台帳は `kbuild/secrets.py`、
 コード中の参照との一致は `tests/test_secrets.py` が検査する。
@@ -208,7 +215,7 @@ Kaggle は `kernel_type` が `notebook`（`.ipynb`）と `script`（`main.py` �
 | 実体 | `.ipynb`（セル JSON） | `main.py` 1 ファイル（補助ファイルは base64） |
 | 配信の骨格 | `kbuild/serve_notebook.py` の `Flow` | `kbuild/serve_script.py` 1 本 |
 | エンジン差の置き場 | `kaggle/<kernel>/cells/*.py` | 同じセルを `textwrap.indent` で関数化 |
-| トンネル | `kaggle/serve-cells/tunnel_*.py`（cloudflared / ngrok） | 骨格が両方持つ（`tunnel=` で選ぶ） |
+| トンネル | `kaggle/serve-cells/tunnel_cloudflared.py` | 骨格が持つ（`start_tunnel()` → cloudflared のみ） |
 | レビュー | GitHub で差分が見える | 骨格版は読める／セル連結版はほぼ読める |
 | 一致検査 | `kaggle/check_notebooks.py`（13 冊） | `kaggle/check_scripts.py`（18 カーネル / 46 ファイル） |
 | 状態 | 常用（実績あり） | 生成・CPU 検証まで完了。**GPU 実測は未実施** |
@@ -217,8 +224,8 @@ script 側の作り方は 3 通り:
 
 1. **骨格版（配信）** — `build_step2_script.py` / `build_step2_vllm_script.py` /
    `build_llama_server_script.py`。`stage_install()` と `launch(model_dir)` を
-   渡すだけで、proxy / tunnel（cloudflared・ngrok）/ gist / keepalive / 予算ループは
-   骨格が持つ。`--smoke` は `smoke-<tunnel>/` へ別書きする。
+   渡すだけで、proxy / tunnel（cloudflared）/ gist / keepalive / 予算ループは
+   骨格が持つ。`--smoke` は `smoke-cloudflared/` へ別書きする。
 2. **セル連結版（配信しない）** — `build_batch_script.py` が `KC_BATCH`（元ビルダー）と
    `KC_BATCH_OUT`（出力先）を受け、`cells` をそのまま 1 ファイルへ連結する。
    `SERVE=False` の単発モードなので骨格は使わない（意味を変えないための割り切り）。
@@ -364,8 +371,8 @@ CPU でできることは一通り終わっている（2026-10-30 に「先に�
 
 ### 済んだこと（2026-10-30）
 
-- **script 骨格が ngrok に対応**した。`kbuild/serve_script.py` が
-  `start_cloudflared()` / `start_ngrok()` を持ち、`tunnel=` で選ぶ。
+- **script 骨格が ngrok に対応**した（→ 2026-11-01 に撤回。骨格は cloudflared
+  だけを持つ。`start_tunnel()` が `start_cloudflared()` へ渡すだけになった）。
   `result.json` の `tunnel` は**実際に張った方**を書く。
 - **script 版が `--smoke` に対応**した。`smoke_out`（`smoke-<tunnel>/`）へ
   別書きするので通常版を壊さない。`cli push --smoke` も通る。
@@ -384,7 +391,13 @@ CPU でできることは一通り終わっている（2026-10-30 に「先に�
 |---|---|---|---|---|
 | 1 | Ollama（GGUF） | `step2-orcarouter-qwen38-27b-cloudflared-script` | 1 | 8〜12 分 |
 | 2 | vLLM（AWQ + MTP） | `step2-vllm-qwen38-27b-cloudflared-script` | 1 | 8〜25 分 |
-| 3 | llama-server（直起動） | `llama-server-ngrok-script` | 1 | 15 分 |
+| 3 | llama-server（直起動） | **配信カーネル無し**（下記） | — | — |
+
+> ⚠ **llama-server は 2026-11-01 から GPU カーネルを持っていない。**
+> この系統は `llama-server-ngrok` / `-ngrok-script` の 2 本しか無く、ngrok 廃止で
+> 両方 retired にしたため。コード（`kaggle/llama-server/cells` と
+> `kaggle/build_llama_server.py`・既定 cloudflared）は残っているので、台帳に
+> 1 行足せば復活する。**新しい Kaggle カーネルを作るので、やるなら別途判断**。
 
 合計 **3 回・約 1 時間**。合否は `result.json` の `stage=done` /
 `verify_direct.checks` が全 true / `stop_remaining=[]`。
@@ -394,7 +407,7 @@ proxy / トンネル / Gist / keepalive を省略するので、そこは次の�
 
 | # | 内容 | 回数 | 備考 |
 |---|---|---|---|
-| 4 | ngrok の**実配線** | 1 | `step2-orcarouter-qwen38-27b-ngrok-script` を `--smoke` **無し**で。`url` が `https://<NGROK_DOMAIN>` / `tunnel == "ngrok"` を確認 |
+| 4 | ~~ngrok の**実配線**~~ | — | **不要**。2026-11-01 に ngrok を廃止し、ビーコン + cloudflared に一本化 |
 | 5 | 配信カーネル 1 本で keepalive / `/stop` / UI | 1 | 3 種のどれか 1 本が通ってから |
 | 6 | LMDeploy / SGLang の比較実測 | 2 | 従来からの宿題（semi・比較用） |
 

@@ -35,10 +35,7 @@ SMOKE_KERNELS = {
     "step2-sglang-qwen38-27b-cloudflared",
     "step2-vllm-qwen38-27b-cloudflared",
     "step2-orcarouter-qwen38-27b-cloudflared-script",
-    "step2-orcarouter-qwen38-27b-ngrok-script",
     "step2-vllm-qwen38-27b-cloudflared-script",
-    "step2-vllm-qwen38-27b-ngrok-script",
-    "llama-server-ngrok-script",
 }
 
 

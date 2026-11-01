@@ -4,9 +4,7 @@ import json, time as _time, urllib.request
 
 
 def _call(url, timeout=900, stream=False, auth=None):
-    # ngrok 無料枠のブラウザ向け警告ページを踏まないためのヘッダ（cloudflared では無害）
-    headers = {"Content-Type": "application/json",
-               "ngrok-skip-browser-warning": "true"}
+    headers = {"Content-Type": "application/json"}
     if auth:
         headers["Authorization"] = auth
     payload = {
@@ -100,7 +98,6 @@ def engine_checks(judge, retry, base, auth=None, direct=False):
                 "max_tokens": 128,
             }).encode(),
             headers={"Content-Type": "application/json",
-                     "ngrok-skip-browser-warning": "true",
                      **({"Authorization": auth} if auth else {})},
             method="POST",
         )

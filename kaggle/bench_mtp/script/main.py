@@ -24,17 +24,17 @@ import time
 import urllib.error
 import urllib.request
 
-# hosts は表駆動。URL の出所（ログ解析 / 管理API）と待ち時間だけが違う。
+# hosts は表駆動。今はログ解析の 1 種類しか無いが、待ち時間を URL の出所と
+# 一緒に置いておくと `kc_wait_url` が既定値を知らずに済む。
+# ngrok は 2026-11-01 に廃止した（`notes/url-publishing.md`）。表に残すと
+# `kc_probe_url("ngrok")` が黙って空を返し、「トンネルは張れたのに URL が
+# 取れない」に見えるので、項目ごと落とす（KeyError で即座に気づける）。
+# 管理 API から URL を取る分岐（旧 ngrok 用）も一緒に消した。表に `api` の
+# 項目が無い以上、通らない枝になる。
 TUNNEL_HOSTS = {
     "cloudflared": {
-        "kind": "log",
         "url_re": re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com"),
         "wait_seconds": 90,
-    },
-    "ngrok": {
-        "kind": "api",
-        "api_url": "http://127.0.0.1:4040/api/tunnels",
-        "wait_seconds": 60,
     },
 }
 
@@ -50,19 +50,8 @@ def kc_cloudflared_url(version=KC_CLOUDFLARED_VERSION):
 
 
 def kc_probe_url(host, log_path=None):
-    """現在の公開URLを返す（無ければ ""）。host は cloudflared / ngrok。"""
+    """現在の公開URLを返す（無ければ ""）。host は cloudflared のみ。"""
     spec = TUNNEL_HOSTS[host]
-    if spec["kind"] == "api":
-        try:
-            with urllib.request.urlopen(spec["api_url"], timeout=3) as r:
-                d = json.loads(r.read().decode())
-            for t in d.get("tunnels", []):
-                u = t.get("public_url", "")
-                if u.startswith("https://"):
-                    return u
-        except Exception:
-            return ""
-        return ""
     if not log_path:
         return ""
     try:
@@ -149,8 +138,7 @@ def kc_retry(fn, tries=6, delay=5, skip_http_errors=True):
 
 def kc_post_json(url, payload, timeout=60, headers=None, opener=None):
     """JSON POST のレスポンスを返す（ストリームは呼び出し側で読む）。"""
-    h = {"Content-Type": "application/json",
-         "ngrok-skip-browser-warning": "true"}
+    h = {"Content-Type": "application/json"}
     if headers:
         h.update(headers)
     req = urllib.request.Request(
@@ -369,12 +357,12 @@ def kc_wait_gpu_idle(limit_mib=500, timeout=180):
 
 
 def _kc_argv(pattern):
-    """"-x ngrok" → ["-x", "ngrok"]（shell を介さない）。"""
+    """"-x cloudflared" → ["-x", "cloudflared"]（shell を介さない）。"""
     return pattern.split()
 
 
 def kc_pids(pattern, timeout=15):
-    """pgrep の引数文字列（例: "-x ngrok"）に一致する PID を返す。"""
+    """pgrep の引数文字列（例: "-x cloudflared"）に一致する PID を返す。"""
     try:
         r = subprocess.run(["pgrep", *_kc_argv(pattern)],
                            capture_output=True, text=True, timeout=timeout)

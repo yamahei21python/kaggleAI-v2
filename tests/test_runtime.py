@@ -63,6 +63,11 @@ def _raises(fn, exc):
     return False
 
 
+def _raises_keyerror(fn, *args):
+    """`fn(*args)` が KeyError になること（未知の host を弾く）。"""
+    return _raises(lambda: fn(*args), KeyError)
+
+
 # --------------------------------------------------------------------------
 # net
 # --------------------------------------------------------------------------
@@ -104,28 +109,11 @@ def test_net():
     check("ログ無しでも落ちない",
           net.kc_probe_url("cloudflared", str(tmp / "none.log")) == "")
 
-    # ngrok は管理 API から取る（urlopen を差し替え）
-    payload = json.dumps({"tunnels": [
-        {"public_url": "http://127.0.0.1:4040"},
-        {"public_url": "https://fixed.ngrok-free.dev"}]}).encode()
-
-    class _Resp:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def read(self):
-            return payload
-
-    orig = net.urllib.request.urlopen
-    net.urllib.request.urlopen = lambda *a, **kw: _Resp()
-    try:
-        check("ngrok 管理 API から https URL",
-              net.kc_probe_url("ngrok") == "https://fixed.ngrok-free.dev")
-    finally:
-        net.urllib.request.urlopen = orig
+    # ngrok は 2026-11-01 に廃止。表から消してあるので KeyError で気づける
+    # （黙って "" を返すと「トンネルは張れたのに URL が取れない」に見える）。
+    check("ngrok は表に無い（KeyError）", _raises_keyerror(net.kc_probe_url, "ngrok"))
+    check("管理 API の分岐も消えている",
+          '"api"' not in pathlib.Path(net.__file__).read_text())
 
     # 待ちループは sleep を差し替えて即時化
     sleeps = []

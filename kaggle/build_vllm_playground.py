@@ -112,7 +112,6 @@ SETTINGS = render_settings(CELLS / "00_settings.py", {
     "__CHAT_B64__": CHAT_SRC_B64,
     "__GIST_ID__": CFG.get("GIST_ID", ""),
     "__GIST_OWNER__": CFG.get("GIST_OWNER", ""),
-    "__NGROK_DOMAIN__": CFG.get("NGROK_DOMAIN", ""),
 })
 
 # 実験の環境変数は**設定セルより前**に置く。後ろに置くと、設定セルや install
@@ -193,6 +192,5 @@ if __name__ == "__main__":
         hard_max_minutes=180,
         smoke=True,          # トンネル / Gist / keepalive を省略して起動で終了
         tunnel="none",
-        ngrok_domain=CFG.get("NGROK_DOMAIN", ""),
         builder="kaggle/build_vllm_playground.py",
     )

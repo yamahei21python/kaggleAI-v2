@@ -76,7 +76,6 @@ print(f"  モデル {MODEL_GIB} GiB + KV(q8_0) {kv_used:.2f} GiB = {MODEL_GIB + 
 # ---- Secrets の既定値（config.env 由来。Secret があれば上書きされる）----
 GIST_ID_DEFAULT = "__GIST_ID__"
 GIST_OWNER = "__GIST_OWNER__"
-NGROK_DOMAIN_DEFAULT = "__NGROK_DOMAIN__"
 
 # ---- キープアライブ ----
 MAX_MINUTES = 480                 # セル開始からの合計上限（Kaggle 9h より短く）
@@ -89,7 +88,6 @@ ENGINE_LOG = "/tmp/ollama.log"
 # 偽 alive になる。プロセス名完全一致で見る。proxy は argv で見る。
 ENGINE_PROCS = [("ollama", "exact"), ("auth_proxy.py", "argv")]
 CLEANUP_TARGETS = [
-    ("-x ngrok", "ngrok"),
     ("-x cloudflared", "cloudflared"),
     ("-f auth_proxy.py", "auth_proxy"),
     ("-x ollama", "ollama"),

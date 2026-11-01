@@ -4,7 +4,7 @@ push は Kaggle 側で即実行され、GPU カーネルはクォータを消費
 そのため既定では走らせず、`--yes` を要求する。実行前に残量を表示する。
 
     python3 -m cli push exl3-serve --yes
-    python3 -m cli push llama-server-ngrok-script --no-run --yes   # 作成だけ
+    python3 -m cli push vllm-playground --no-run --yes   # 作成だけ
 
 `--no-run` は **Quick Save 相当**（バージョンを保存するだけで 1 セルも実行しない）。
 GPU クォータを消費せずにカーネル id だけ先に確保したいときに使う。ただし

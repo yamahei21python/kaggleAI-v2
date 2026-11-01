@@ -15,7 +15,7 @@ PROXY_PORT = 11435
 
 # ローカル（macOS）
 UI_PORT = 8899            # llama-chat.html の中継
-RELAY_PORT = 19950        # run-kaggle-chat の ngrok 警告回避
+RELAY_PORT = 19950        # run-kaggle-chat の中継（ローカル）
 
 # テスト・検証用
 KEEPALIVE_TEST_PORT = 8080

@@ -156,7 +156,47 @@ UPDATED = 1762051200.123      # 発行時刻の epoch
 | URL（読み取り） | `python3 -m cli beacon` で読める。古い値と `probe` は既定で捨てる |
 | 進捗（起動中） | **未着手**。§4 のとおり、まだ外から見えない |
 
-`runtime/gist.py` は残置。`GITHUB_TOKEN` が読めれば動くが、専用アカウント
-運用では読めないので実質は死んでいる（`notes/pitfall-coverage.md` #33）。
-消すかどうかは、個人アカウントの実験カーネルで Gist を使い続けるかで決まる。
+### `runtime/gist.py` は残す（2026-11-01 判断）
+
+消さない。理由は 3 つ。
+
+1. **URL の経路としてはもう主役ではない**が、`publish_url` の片翼としては生きている
+   （`GITHUB_TOKEN` が読める環境なら動く）。読み手の `cli/ask.py` と
+   ランチャーの `gist_url` も同じ。
+2. **進捗を運ぶ唯一の実装**。§4 の穴はまだ埋まっていないので、ここを消すと
+   「設計も実装も無い」状態になる。
+3. **`kaggle/step2-vllm/cells/03_vllm_serve.py` が `vllm_status.txt` を書いている**。
+   これは起動待ちの現在地を外に出す唯一の口で、消すにはビーコンの
+   ステータス版を先に作る必要がある。
+
+ただし**このアカウントでは動かない**。`gist-probe`（2026-11-01 09:39 UTC）の実測:
+
+```json
+{"token_present": false,
+ "token_detail": "Secret を読めない（ConnectionError: Connection error trying to
+                  communicate with service.） — アカウントに登録済みでも、
+                  カーネルごとの紐付けが無いと読めない",
+ "negative_ok": true}
+```
+
+`negative_ok: true` は「壊れたときは必ず理由を返す」という設計が効いている証拠で、
+黙って落ちることは無い。つまり**死んでいることが観測できる**。だから残しても
+事故らない。次の一手は §4 のステータス用ビーコン（`runtime/gist.py` を消すのは
+その後）。
+
+### 進捗が見えないコスト（2026-11-01 22:40 実測）
+
+`vllm-playground` の `cache` 実験を回している間、**外から状態を知る手段が
+3 つとも空**だった:
+
+| 手段 | 結果 |
+|---|---|
+| `kaggle kernels logs` | 空（実行中は返らない） |
+| `kaggle kernels output` | 空（完了まで何も落ちてこない） |
+| `kaggle kernels files` | `--no-run` で保存した**スタブ**（各 841〜865 B、9:47 UTC）だけ |
+
+`kernels list --sort-by dateRun` で `lastRunTime` を見るまで、79 分経過を
+3 時間半と読み違えた（ファイルの時刻は**保存時**のもの）。§4 の
+「詰まっているのか遅いだけか分からない」はこれ。
+
 

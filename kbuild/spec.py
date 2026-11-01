@@ -74,25 +74,24 @@ KERNELS = (
            "yamahei21python/my-ollama-orcarouter-qwen38-27b-patch",
            "yamahei21python/my-cloudflared-bin"),
        builder="build_step2", env=(("STEP2_TUNNEL", "cloudflared"),)),
+    # ngrok は 2026-11-01 に廃止（`notes/url-publishing.md`）。理由は 2 つ:
+    # `NGROK_TOKEN` が専用アカウントで読めない（`ConnectionError`）ことと、
+    # 固定ドメインを維持する理由がビーコンで消えたこと。ファイルは残す
+    # （ノートブックは消さない方針）が、再生成も push もしない。
     _K("step2-orcarouter-qwen38-27b-ngrok-fixed",
        "step2 orcarouter qwen38 27b ngrok fixed", "notebook", "kaggle/step2-ngrok",
        "step2-orcarouter-qwen38-27b-ngrok.ipynb", gpu=True,
-       ds=("yamahei21python/my-ollama-orcarouter-qwen38-27b",
-           "yamahei21python/my-ollama-orcarouter-qwen38-27b-patch"),
-       builder="build_step2", env=(("STEP2_TUNNEL", "ngrok"),)),
+       status=RETIRED),
     _K("keepalive-test", "keepalive test", "notebook", "kaggle/step2",
        "step2-keepalive-test.ipynb", builder="build_keepalive_test",
        meta="kernel-metadata-keepalive-test.json"),
     _K("keepalive-test-1", "keepalive test 1", "notebook", "kaggle/step2-ka-test",
        "step2-keepalive-test-1.ipynb", status=RETIRED),
     # ---- llama-server 直起動 ----
+    # ngrok 廃止（上と同じ理由）。ノートブックは残すが retired。
     _K("llama-server-ngrok", "llama-server ngrok",
        "notebook", "kaggle/llama-server-ngrok", "llama-server-ngrok.ipynb",
-       gpu=True,
-       ds=("yamahei21python/my-ollama-orcarouter-qwen38-27b",
-           "yamahei21python/my-ollama-orcarouter-qwen38-27b-patch"),
-       builder="build_llama_server", env=(("LLAMA_TUNNEL", "ngrok"),),
-       status=SEMI),
+       gpu=True, status=RETIRED),
     # ---- vLLM ----
     _K("prepare-vllm-dataset", "Prepare vLLM Dataset", "notebook",
        "kaggle/step2-vllm", "prepare-vllm-dataset.ipynb",
@@ -107,13 +106,10 @@ KERNELS = (
            "yamahei21python/vllm-wheelhouse-patch"),
        builder="build_step2_vllm", env=(("STEP2_TUNNEL", "cloudflared"),),
        smoke_out="kaggle/step2-vllm-kernel/smoke-cloudflared"),
+    # ngrok 廃止。ノートブックは残すが retired。
     _K("step2-vllm-qwen38-27b-ngrok", "step2 vllm qwen38 27b ngrok", "notebook",
        "kaggle/step2-vllm-kernel/ngrok", "step2-vllm-qwen38-27b-ngrok.ipynb",
-       gpu=True,
-       ds=("yamahei21python/qwen38-27b-uncensored-hauhaucs-awq-mtp",
-           "yamahei21python/vllm-wheelhouse",
-           "yamahei21python/vllm-wheelhouse-patch"),
-       builder="build_step2_vllm", env=(("STEP2_TUNNEL", "ngrok"),)),
+       gpu=True, status=RETIRED),
     _K("step2-vllm-dryrun", "Step2 vLLM dryrun", "notebook",
        "kaggle/step2-vllm-dryrun", "step2-vllm-dryrun.ipynb",
        ds=("yamahei21python/qwen38-27b-uncensored-hauhaucs-awq-mtp",
@@ -128,13 +124,10 @@ KERNELS = (
            "yamahei21python/my-cloudflared-bin"),
        builder="build_step2_script", env=(("STEP2_TUNNEL", "cloudflared"),),
        status=SEMI, smoke_out="kaggle/step2-script/smoke-cloudflared"),
+    # ngrok 廃止。`main.py` は残すが retired（再生成しない）。
     _K("step2-orcarouter-qwen38-27b-ngrok-script",
        "step2 orcarouter qwen38 27b ngrok script", "script",
-       "kaggle/step2-script/ngrok", "main.py", gpu=True,
-       ds=("yamahei21python/my-ollama-orcarouter-qwen38-27b",
-           "yamahei21python/my-ollama-orcarouter-qwen38-27b-patch"),
-       builder="build_step2_script", env=(("STEP2_TUNNEL", "ngrok"),),
-       status=SEMI, smoke_out="kaggle/step2-script/smoke-ngrok"),
+       "kaggle/step2-script/ngrok", "main.py", gpu=True, status=RETIRED),
     # ---- vLLM / script 版（notebook 版と並走。id は別なので notebook は無傷）----
     # wheelhouse 2 点を ds に入れる（2026-10-31）。本体だけでは
     # `cuda-toolkit 13.0.3` が要求する `nvidia-cublas==13.1.1.3.*` を満たせず
@@ -150,15 +143,10 @@ KERNELS = (
        builder="build_step2_vllm_script",
        env=(("STEP2_TUNNEL", "cloudflared"),), status=SEMI,
        smoke_out="kaggle/step2-vllm-script/smoke-cloudflared"),
+    # ngrok 廃止。`main.py` は残すが retired（再生成しない）。
     _K("step2-vllm-qwen38-27b-ngrok-script",
        "step2 vllm qwen38 27b ngrok script", "script",
-       "kaggle/step2-vllm-script/ngrok", "main.py", gpu=True,
-       ds=("yamahei21python/qwen38-27b-uncensored-hauhaucs-awq-mtp",
-           "yamahei21python/vllm-wheelhouse",
-           "yamahei21python/vllm-wheelhouse-patch"),
-       builder="build_step2_vllm_script",
-       env=(("STEP2_TUNNEL", "ngrok"),), status=SEMI,
-       smoke_out="kaggle/step2-vllm-script/smoke-ngrok"),
+       "kaggle/step2-vllm-script/ngrok", "main.py", gpu=True, status=RETIRED),
     # ---- 実験用 playground ----
     # **本番と同じセル**を、公開系（トンネル / proxy / keepalive）だけ外した
     # 骨組みで動かす。ノブは `KC_EXPERIMENT`（baseline / prewarm_on / cache /
@@ -210,14 +198,10 @@ KERNELS = (
        "kaggle/cpu-tests/beacon", "main.py", gpu=False,
        ds=(), builder="build_beacon_probe", status=SEMI),
     # ---- llama-server / script 版（notebook 版と並走）----
+    # ngrok 廃止。`main.py` は残すが retired（再生成しない）。
     _K("llama-server-ngrok-script",
        "llama-server ngrok script", "script",
-       "kaggle/llama-server-script/ngrok", "main.py", gpu=True,
-       ds=("yamahei21python/my-ollama-orcarouter-qwen38-27b",
-           "yamahei21python/my-ollama-orcarouter-qwen38-27b-patch"),
-       builder="build_llama_server_script",
-       env=(("LLAMA_TUNNEL", "ngrok"),), status=SEMI,
-       smoke_out="kaggle/llama-server-script/smoke-ngrok"),
+       "kaggle/llama-server-script/ngrok", "main.py", gpu=True, status=RETIRED),
     # ---- 配信しないカーネル / script 版（セル列をそのまま 1 ファイルへ）----
     _K("prepare-vllm-dataset-script",
        "prepare vllm dataset script", "script", "kaggle/step2-vllm/script", "main.py", gpu=False,

@@ -427,14 +427,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                             "content-length"}:
                 continue
             req.add_header(key, value)
-        # 上流が ngrok のとき、ブラウザからのリクエストには
-        # ngrok-skip-browser-warning が付かない（HTML 取得時）。
-        # 中継側で必ず付けて、警告ページを回避する。
-        if ARGS.upstream_header:
-            for item in ARGS.upstream_header:
-                if "=" in item:
-                    k, v = item.split("=", 1)
-                    req.add_header(k.strip(), v.strip())
         if body is not None:
             req.add_header("Content-Length", str(len(body)))
 
@@ -516,10 +508,6 @@ def main():
     parser.add_argument("--upstream", default="http://127.0.0.1:11434")
     parser.add_argument("--chat-html", default=os.environ.get("CHAT_HTML", ""),
                         help="チャット UI の HTML（/ で配信する）")
-    parser.add_argument("--upstream-header", action="append", default=[],
-                        metavar="K=V",
-                        help="上流へ必ず付けるヘッダ（複数指定可）。"
-                             "ngrok の警告ページ回避に使う")
     parser.add_argument("--stop-pid", type=int, default=0,
                         help="/stop 時に SIGTERM を送る PID。"
                              "uzu のようにランチャーが子プロセスを抱える場合、"

@@ -83,8 +83,6 @@ def resolve_auth():
 def post(url, user, pw, payload, timeout=600):
     headers = {
         "Content-Type": "application/json",
-        # ngrok 無料枠のブラウザ向け警告ページを踏まないためのヘッダ
-        "ngrok-skip-browser-warning": "true",
     }
     if pw:
         token = base64.b64encode(("%s:%s" % (user, pw)).encode()).decode()

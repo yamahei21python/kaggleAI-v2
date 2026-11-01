@@ -8,15 +8,13 @@ AUTH = None
 
 def _auth_headers():
     """AUTH があれば Authorization を足したヘッダを返す。"""
-    h = {"Content-Type": "application/json",
-         "ngrok-skip-browser-warning": "true"}
+    h = {"Content-Type": "application/json"}
     if AUTH:
         h["Authorization"] = AUTH
     return h
 
 
 def _post(url, payload, timeout=900):
-    # ngrok 無料枠のブラウザ向け警告ページを踏まないためのヘッダ（cloudflared では無害）
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode(),
         headers=_auth_headers(),

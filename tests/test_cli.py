@@ -83,10 +83,12 @@ def test_ambiguous_name_is_rejected():
 
 def test_push_no_run_is_save_only(monkeypatch, capsys):
     """--no-run は実行しないので、クォータを読まず「保存のみ」と明示する。"""
+    # 退役したカーネルを指すと push が「退役」で止まる。現役の軽い script
+    # カーネルを使う（2026-11-01 に ngrok 系を RETIRED にした）。
     def boom():
         raise AssertionError("--no-run なのにクォータを読んだ")
     monkeypatch.setattr(push_mod, "_quota_lines", boom)
-    rc = push_mod.push("llama-server-ngrok-script", yes=False, no_run=True)
+    rc = push_mod.push("llama-server-cpu-check", yes=False, no_run=True)
     out = capsys.readouterr().out
     assert rc == 1
     assert "保存のみ" in out and "Quick Save" in out
@@ -94,7 +96,7 @@ def test_push_no_run_is_save_only(monkeypatch, capsys):
 
 def test_push_no_run_dry_run_shows_flag(monkeypatch, capsys):
     monkeypatch.setattr(push_mod, "_quota_lines", lambda: [])
-    rc = push_mod.push("llama-server-ngrok-script", yes=True, dry_run=True, no_run=True)
+    rc = push_mod.push("llama-server-cpu-check", yes=True, dry_run=True, no_run=True)
     out = capsys.readouterr().out
     assert rc == 0
     assert "--no-run" in out and "[no-run]" in out
@@ -104,7 +106,7 @@ def test_push_no_run_needs_cli_2x(monkeypatch, capsys):
     """2.x が無いときは「作る方法」まで出す（黙って実行しない）。"""
     monkeypatch.setattr(push_mod, "_quota_lines", lambda: [])
     monkeypatch.setattr(push_mod, "kaggle_exe", lambda need_no_run=False: None)
-    rc = push_mod.push("llama-server-ngrok-script", yes=True, no_run=True)
+    rc = push_mod.push("llama-server-cpu-check", yes=True, no_run=True)
     out = capsys.readouterr().out
     assert rc == 1
     assert "kaggle CLI 2.x" in out and ".venv-kaggle-cli" in out

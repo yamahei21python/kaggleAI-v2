@@ -86,8 +86,13 @@ uzu_ready() {
 
 # Kaggle は /api/ps に size_vram > 0 のモデルが居れば会話可能。
 # /api/tags は Ollama 起動時点で 200 を返すので判定に使えない。
-KAGGLE_DOMAIN="${KC_DOMAIN:-${CFG_NGROK_DOMAIN}}"
-KAGGLE_BASE="https://${KAGGLE_DOMAIN}"
+# URL は毎回変わる（cloudflared の quick tunnel）ので、使う直前に
+# ビーコンから引く。ngrok の固定ドメインは 2026-11-01 に廃止した。
+KAGGLE_BASE=""
+refresh_kaggle_base() {
+  KAGGLE_BASE="$(kc_beacon_url)"
+  [[ -n "${KAGGLE_BASE}" ]]
+}
 
 # ---- uzu 起動 ----------------------------------------------
 # run-uzu-server.command は前面で動き続けるので、バックグラウンドで起動して
@@ -129,16 +134,37 @@ start_uzu() {
 
 # ---- Kaggle 起動 -------------------------------------------
 start_kaggle() {
-  if kc_model_ready "${KAGGLE_BASE}"; then
+  # push の前に分かるのは「前回の URL」だけ（ビーコンに残っている値）。
+  # それが生きていれば push しない —— 2 本目を立てると GPU 枠を食う。
+  refresh_kaggle_base || true
+  if [[ -n "${KAGGLE_BASE}" ]] && kc_model_ready "${KAGGLE_BASE}"; then
     echo "✅ Kaggle: 既に起動済み・会話可能"
   else
     # トンネルは生きているがモデル未常駐なら、push せずに待つ
-    if [[ "$(kc_http_code "${KAGGLE_BASE}/healthz" 5)" == "200" ]]; then
+    if [[ -n "${KAGGLE_BASE}" ]] \
+       && [[ "$(kc_http_code "${KAGGLE_BASE}/healthz" 5)" == "200" ]]; then
       echo "ℹ Kaggle: 起動済みだがモデル未常駐。VRAM 常駐を待つ..."
     else
       echo "⏳ Kaggle: push 中..."
       kc_require_kaggle || return 1
-      kc_push_kernel "${SCRIPT_DIR}/kaggle/step2-ngrok" || return 1
+      kc_push_kernel "${SCRIPT_DIR}/kaggle/step2" || return 1
+      # push したら URL が変わる。ビーコンが serving になるまで待つ。
+      # 「値が入った」だけでは足りない（前回の死んだ URL が残っている）ので、
+      # healthz が 200 を返すまで進めない。
+      echo "⏳ Kaggle: 公開 URL を待機中（ビーコン）..."
+      local i
+      for i in {1..60}; do
+        sleep 5
+        refresh_kaggle_base || continue
+        if [[ "$(kc_http_code "${KAGGLE_BASE}/healthz" 3)" == "200" ]]; then
+          break
+        fi
+      done
+      if [[ -z "${KAGGLE_BASE}" ]]; then
+        echo "❌ Kaggle: 公開 URL を取得できませんでした（ビーコン未更新）" >&2
+        echo "   python3 -m cli beacon で掲示板を確認してください。" >&2
+        return 1
+      fi
     fi
     # モデルが VRAM に乗るまで待つ（実測: ロードに 250 秒前後）
     if ! kc_wait_model "${KAGGLE_BASE}" "${TIMEOUT}"; then
@@ -146,7 +172,8 @@ start_kaggle() {
     fi
   fi
 
-  # ---- 中継を立てる（ngrok の警告ページ回避）----
+  # ---- 中継を立てる ----
+  # ローカルの llama-chat.html を配るため（上流は push 済みの古い版を返す）。
   if [[ "$(kc_http_code "${KAGGLE_BASE}/healthz" 5)" != "200" ]]; then
     echo "⚠ Kaggle: 上流が応答していません（中継は立てます）" >&2
   fi
@@ -194,7 +221,7 @@ stop_all() {
 
   echo
   echo "  ℹ Kaggle の GPU セッションはここからは止められません。"
-  echo "    止めるには UI から: https://www.kaggle.com/code/${CFG_KERNEL_SLUG_NGROK}"
+  echo "    止めるには UI から: https://www.kaggle.com/code/${CFG_KERNEL_SLUG_CLOUDFLARED}"
 }
 
 # ---- 本体 --------------------------------------------------

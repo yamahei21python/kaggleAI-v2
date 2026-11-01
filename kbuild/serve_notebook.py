@@ -20,7 +20,7 @@ notebook 形式で push する配信カーネルは Ollama / llama-server / vLLM
     実体パス    CHAT_PATH / PROXY_PATH
     プロキシ    PROXY_AUTH / PROXY_EXTRA_ARGS / PROXY_CHECK_PATH
     モデル      MODEL_NAME / MODEL_DISPLAY / ENGINE_DISPLAY / CONTEXT_LENGTH
-    Secrets     GIST_ID_DEFAULT / GIST_OWNER / NGROK_DOMAIN_DEFAULT（ngrok のみ）
+    Secrets     GIST_ID_DEFAULT / GIST_OWNER
     keepalive   MAX_MINUTES / KEEPALIVE_RESET_MINUTES / TUNNEL_CHECK_EVERY
                 ENGINE_LABEL / ENGINE_PROCS / CLEANUP_TARGETS / ENGINE_LOG
     後片付け    engine_cleanup()  ← 必須。未使用のエンジンは None を返す
@@ -50,9 +50,6 @@ MD_LAUNCH = "---\n### 🔥 推論サーバ起動\n"
 MD_WARMUP = "---\n### 🔥 ウォームアップ（初回ロードは数分かかります）\n"
 MD_TUNNEL = {
     "cloudflared": "---\n### 🔗 cloudflared トンネル → 公開URL\n",
-    "ngrok": ("---\n### 🔗 ngrok トンネル → 公開URL\n\n"
-              "Secrets の `NGROK_TOKEN` を使います。`NGROK_DOMAIN` を設定すると\n"
-              "**毎回同じ URL** になります（未設定ならランダム）。\n"),
 }
 MD_GIST = ("---\n### 📌 固定URL配布（quick tunnel の URL を Gist に反映）\n\n"
            "quick tunnel の URL は毎回変わるので、**取得先だけ固定**します。\n"

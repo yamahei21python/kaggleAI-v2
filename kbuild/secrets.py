@@ -26,9 +26,6 @@ REQUIRED = {
     "kaggle/serve-cells/gist.py": frozenset({
         "GIST_ID", "GITHUB_TOKEN",
     }),
-    "kaggle/serve-cells/tunnel_ngrok.py": frozenset({
-        "NGROK_TOKEN", "NGROK_DOMAIN",
-    }),
     # vLLM は起動の進捗を Gist に流す（起動に失敗しても外から見えるように）。
     # 実装は runtime/gist.py に寄せた（2026-11-01）。セル側は kc_gist_write を
     # 呼ぶだけなので、Secret の参照はこの 1 箇所になる。
@@ -36,10 +33,9 @@ REQUIRED = {
         "GITHUB_TOKEN",
     }),
     # ── script カーネル（main.py を base64 で埋め込む系統）──
-    # トンネルは骨格が両方持つ（cloudflared / ngrok）ので、ngrok 用の 2 つも
-    # 台帳に載せる。実際に必要になるのは `-script` の ngrok 版だけ。
+    # トンネルは cloudflared だけ。ngrok の 2 つ（NGROK_TOKEN / NGROK_DOMAIN）は
+    # 2026-11-01 に台帳から外した（専用アカウントでは読めないため）。
     "kbuild/serve_script.py": frozenset({
         "API_USER", "API_PASS", "GIST_ID", "GITHUB_TOKEN",
-        "NGROK_TOKEN", "NGROK_DOMAIN",
     }),
 }

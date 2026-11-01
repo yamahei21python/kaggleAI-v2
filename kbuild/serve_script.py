@@ -8,7 +8,8 @@ exl3 / LMDeploy / SGLang は**同じ骨格**で生成する。エンジンごと
 
 proxy / トンネル / keepalive / 検証 / Gist 配布は `runtime/` の kc_* と
 このテンプレートの共通実装をそのまま使う。エンジン側に配管を書かない。
-トンネルは cloudflared / ngrok の両方を骨格が持つ（`tunnel=` で選ぶ）。
+トンネルは cloudflared の quick tunnel だけ（`tunnel=` で選ぶ）。ngrok は
+2026-11-01 に廃止した（`notes/url-publishing.md`）。
 
 テンプレートを分けない理由: 以前は exl3 用と LMDeploy 用で 2 本に分かれており、
 共通関数 21 本のうち完全一致が 2 本だけになっていた（`verify` が空応答を
@@ -77,8 +78,7 @@ HARD_MAX_MINUTES = $HARD_MAX_MINUTES
 # smoke: トンネル / Gist / keepalive を省略し、疎通だけ見て終了する（GPU 時間の節約）
 SMOKE = $SMOKE
 ENGINE_PATTERN = "$ENGINE_PATTERN"
-TUNNEL = "$TUNNEL"              # 実際に張るトンネル（cloudflared / ngrok）
-NGROK_DOMAIN = "$NGROK_DOMAIN"  # ngrok の固定ドメイン既定値（空ならランダム）
+TUNNEL = "$TUNNEL"              # 実際に張るトンネル（cloudflared のみ）
 KNOBS = $KNOBS
 RESULT = "/kaggle/working/result.json"
 # セル側が書く計測の置き場。save() が result.json の `timings` に合流させる。
@@ -438,63 +438,25 @@ def start_cloudflared():
     return _wait_tunnel(p, "cloudflared", log_path, 120)
 
 
-NGROK_BIN = "/usr/local/bin/ngrok"
-NGROK_TGZ = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz"
-
-
-def ensure_ngrok():
-    """ngrok バイナリを用意する（Dataset に入れていないので取得する）。
-
-    約 30 MB / 数秒。既にあれば何もしない。
-    """
-    if os.path.isfile(NGROK_BIN):
-        return NGROK_BIN
-    bin_dir = os.path.dirname(NGROK_BIN)
-    os.makedirs(bin_dir, exist_ok=True)
-    r, _ = sh(["bash", "-c",
-               f"curl -sSL {NGROK_TGZ} | tar xz -C {bin_dir}"], timeout=300)
-    if not os.path.isfile(NGROK_BIN):
-        raise RuntimeError("ngrok を取得できなかった: "
-                           + tail(r.stderr + r.stdout, 10))
-    os.chmod(NGROK_BIN, 0o755)
-    return NGROK_BIN
-
-
-def start_ngrok():
-    """ngrok でトンネルを張る（authtoken は Secrets の NGROK_TOKEN）。
-
-    固定ドメインの優先順: 環境変数 NGROK_DOMAIN → Secret NGROK_DOMAIN →
-    ビルダーが埋めた既定値。既定値があるので Secret 未設定でも固定 URL になる。
-    """
-    bin_ = ensure_ngrok()
-    token = secret("NGROK_TOKEN").strip()
-    if not token:
-        raise RuntimeError("NGROK_TOKEN が無い（Kaggle Secrets に登録する）")
-    r, _ = sh([bin_, "config", "add-authtoken", token], timeout=120)
-    if r.returncode != 0:
-        raise RuntimeError(f"ngrok authtoken の設定に失敗 ({r.returncode})")
-
-    domain = (os.environ.get("NGROK_DOMAIN", "") or secret("NGROK_DOMAIN")
-              or NGROK_DOMAIN).strip()
-    data["ngrok_domain"] = domain or None
-    print(f"固定ドメイン: {domain or '（なし → ランダム URL）'}")
-    # --pooling-enabled が無いと、同じ固定ドメインが前回セッションから残って
-    # いるときに ERR_NGROK_334 で即死する（notebook 版で実測）。
-    argv = [bin_, "http", str(PROXY_PORT), "--log=stdout", "--pooling-enabled"]
-    if domain:
-        # --domain は deprecated。--url が現行（notebook 版で実測）。
-        argv.append(f"--url=https://{domain}")
-    log_path = "/kaggle/working/ngrok.log"
-    with open(log_path, "w") as log:
-        p = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
-    return _wait_tunnel(p, "ngrok", log_path, 90)
-
-
 def start_tunnel():
-    """TUNNEL に従ってトンネルを張る。骨格が選ぶのはここだけ。"""
-    if TUNNEL == "ngrok":
-        return start_ngrok()
-    return start_cloudflared()
+    """TUNNEL に従ってトンネルを張り、`(proc, url)` を返す。
+
+    選ぶ先は今 cloudflared しか無い。ngrok は 2026-11-01 に廃止した。
+    理由は 2 つで、どちらも実測:
+      - `NGROK_TOKEN` を Secrets から読むが、専用アカウントでは未紐付けの
+        `get_secret()` が `ConnectionError` を返す（`notes/url-publishing.md`）。
+        つまりビーコンで URL を配っても、その手前で起動できない
+      - 固定ドメインを維持する理由がビーコンで消えた（URL が毎回変わっても
+        `python3 -m cli beacon` で読める）
+    cloudflared の quick tunnel はアカウントも authtoken も要らない。
+
+    分岐を残しているのは、`TUNNEL` が骨格（builder）の環境変数から来る値で、
+    ここだけがその値を見る場所だから。値を増やすときは `_wait_tunnel` の
+    host 名と `data["tunnel"]` の整合も一緒に直すこと。
+    """
+    if TUNNEL == "cloudflared":
+        return start_cloudflared()
+    raise RuntimeError(f"TUNNEL={TUNNEL!r} は未対応（cloudflared のみ）")
 
 
 def publish_url(url):
@@ -667,7 +629,6 @@ def stop_all(procs):
         remaining = kc_stop_processes([
             ("-f auth_proxy.py", "auth_proxy"),
             ("-x cloudflared", "cloudflared"),
-            ("-x ngrok", "ngrok"),
             (ENGINE_PATTERN, ENGINE),
         ])
     except Exception as e:          # 停止処理で元の例外をマスクしない
@@ -894,14 +855,15 @@ def render(engine: dict, *, run_minutes: int, runtime: str, proxy_b64: str,
            port: int = 8000, proxy_port: int = 11435,
            hard_max_minutes: int = 180, smoke: bool = False,
            mode: str = "serve", tunnel: str = "cloudflared",
-           ngrok_domain: str = "",
            builder: str = "kaggle/build_engine_serve.py") -> str:
     # `none` は「トンネルを張らない」実験用（playground）。公開経路を持たない
     # カーネルでだけ意味があるので、`smoke=True` と組のときだけ許す。
     # 本番（smoke=False）で `none` を渡すのは設定ミスなので、従来どおり弾く。
-    if tunnel not in ("cloudflared", "ngrok") and not (smoke and tunnel == "none"):
+    # ngrok は廃止（`notes/url-publishing.md`）。ここで弾かないと、指定した
+    # ビルダーが「ngrok のつもり」で cloudflared を張って静かに動いてしまう。
+    if tunnel not in ("cloudflared",) and not (smoke and tunnel == "none"):
         raise ValueError(
-            f"tunnel={tunnel!r} は未対応（cloudflared / ngrok / smoke 時のみ none）")
+            f"tunnel={tunnel!r} は未対応（cloudflared / smoke 時のみ none）")
     flow = {**DEFAULT_FLOW, **(engine.get("flow") or {})}
     # 実体があるスロットは自動で有効化する（flow で明示しなくても呼ばれる）。
     if engine.get("warmup"):
@@ -935,7 +897,6 @@ def render(engine: dict, *, run_minutes: int, runtime: str, proxy_b64: str,
         HARD_MAX_MINUTES=hard_max_minutes,
         SMOKE="True" if smoke else "False",
         TUNNEL=tunnel,
-        NGROK_DOMAIN=ngrok_domain,
         KNOBS=engine.get("knobs", "{}"),
         RUN_MINUTES=run_minutes,
         RUNTIME=runtime,

@@ -155,7 +155,6 @@ PROXY_AUTH = {
 # ---- Secrets の既定値（config.env 由来。Secret があれば上書きされる）----
 GIST_ID_DEFAULT = "__GIST_ID__"
 GIST_OWNER = "__GIST_OWNER__"
-NGROK_DOMAIN_DEFAULT = "__NGROK_DOMAIN__"
 
 # ---- キープアライブ ----
 # 上限。チャット 1 回で proxy が MINUTES=60 を書くため、上限が無いと
@@ -169,7 +168,6 @@ TUNNEL_CHECK_EVERY = 10           # 公開URL疎通は 10 分ごと
 ENGINE_LOG = "/tmp/vllm_1.log"
 ENGINE_PROCS = [("vllm serve", "argv"), ("auth_proxy.py", "argv")]
 CLEANUP_TARGETS = [
-    ("-x ngrok", "ngrok"),
     ("-x cloudflared", "cloudflared"),
     ("-f auth_proxy.py", "auth_proxy"),
     ("-f vllm serve", "vllm"),

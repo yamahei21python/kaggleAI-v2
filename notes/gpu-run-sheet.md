@@ -1,5 +1,10 @@
 # GPU 実行シート（2026-10-30 作成）
 
+> ⚠ **2026-11-01 に ngrok を廃止したので、#3（llama-server）と #4（ngrok 実配線）は
+> 実行できない。** 該当カーネルは retired で、`cli push` が「退役」で止まる。
+> 生きている手順は #1 / #2（どちらも cloudflared）。URL は
+> `python3 -m cli beacon` で読む。以下は当時の記録として残す。
+
 クォータが戻ったら、この順で回す。**カーネルの作成は済んでいる**ので、やるのは実行だけ。
 
 - 作成は `kaggle kernels push --no-run`（= Quick Save 相当）で行った。**1 セルも実行して

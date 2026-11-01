@@ -27,16 +27,16 @@ TARGETS = [
     ("build_step1.py", {}, "kaggle/step1/step1-orcarouter-qwen38-27b-dl.ipynb"),
     ("build_step2.py", {"STEP2_TUNNEL": "cloudflared"},
      "kaggle/step2/step2-orcarouter-qwen38-27b-cloudflared.ipynb"),
-    ("build_step2.py", {"STEP2_TUNNEL": "ngrok"},
-     "kaggle/step2-ngrok/step2-orcarouter-qwen38-27b-ngrok.ipynb"),
     ("build_smoke.py", {}, "kaggle/smoke/smoke-orcarouter-qwen38-27b.ipynb"),
     ("build_bench.py", {}, "kaggle/bench/bench-ctx-orcarouter-qwen38-27b.ipynb"),
     ("build_bench_mtp.py", {},
      "kaggle/bench_mtp/bench-mtp-orcarouter-qwen38-27b.ipynb"),
     ("build_keepalive_test.py", {},
      "kaggle/step2/step2-keepalive-test.ipynb"),
-    ("build_llama_server.py", {"LLAMA_TUNNEL": "ngrok"},
-     "kaggle/llama-server-ngrok/llama-server-ngrok.ipynb"),
+    # ngrok 版（`kaggle/step2-ngrok/` `kaggle/llama-server-ngrok/`
+    # `kaggle/step2-vllm-kernel/ngrok/`）は 2026-11-01 に retired。
+    # ビルダーが ngrok を受け付けなくなったので、ここからは外す
+    # （ノートブックは消さない方針なのでファイルは残る）。
     ("build_vllm_dataset.py", {},
      "kaggle/step2-vllm/prepare-vllm-dataset.ipynb"),
     ("build_vllm_dryrun.py", {},
@@ -44,8 +44,6 @@ TARGETS = [
     ("build_step2_vllm.py", {"STEP2_TUNNEL": "cloudflared"},
      "kaggle/step2-vllm-kernel/cloudflared/"
      "step2-vllm-qwen38-27b-cloudflared.ipynb"),
-    ("build_step2_vllm.py", {"STEP2_TUNNEL": "ngrok"},
-     "kaggle/step2-vllm-kernel/ngrok/step2-vllm-qwen38-27b-ngrok.ipynb"),
     # smoke 版は通常版と別パス・別セル数（15 セル）。同じ TARGETS で見ないと
     # 「通常版を smoke で上書き」も「smoke の取りこぼし」も検知できない。
     ("build_step2_vllm.py", {"STEP2_TUNNEL": "cloudflared", "KC_SMOKE": "1"},
@@ -66,7 +64,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="kc-nbcheck-") as tmp:
         # コミットするノートは config.env（既定値）で生成したものが基準。
         # config.local.env の個人値はノートに焼き込まず、Kaggle 側は Secrets
-        # （NGROK_DOMAIN / GIST_ID）で上書きする前提なので、ここでは写さない。
+        # （GIST_ID）で上書きする前提なので、ここでは写さない。
         if (ROOT / "config.local.env").is_file():
             print("ℹ config.local.env は無視して既定値で比較します"
                   "（個人値で再生成したノートは不一致になります）\n")

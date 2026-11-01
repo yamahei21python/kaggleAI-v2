@@ -20,18 +20,15 @@ from kbuild.serve_notebook import CELLS_DIR
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # (ラベル, notebook, トンネル)
+# ngrok 系の 3 本は 2026-11-01 に RETIRED にした（`notes/url-publishing.md`）。
+# notebook は履歴としてディスクに残すが、共有セル `tunnel_ngrok.py` を消した
+# のでもう再生成できない。監査対象は「今もビルドできる配信カーネル」だけ。
 NOTEBOOKS = [
     ("ollama/cloudflared",
      "kaggle/step2/step2-orcarouter-qwen38-27b-cloudflared.ipynb", "cloudflared"),
-    ("ollama/ngrok",
-     "kaggle/step2-ngrok/step2-orcarouter-qwen38-27b-ngrok.ipynb", "ngrok"),
-    ("llama-server/ngrok",
-     "kaggle/llama-server-ngrok/llama-server-ngrok.ipynb", "ngrok"),
     ("vllm/cloudflared",
      "kaggle/step2-vllm-kernel/cloudflared/"
      "step2-vllm-qwen38-27b-cloudflared.ipynb", "cloudflared"),
-    ("vllm/ngrok",
-     "kaggle/step2-vllm-kernel/ngrok/step2-vllm-qwen38-27b-ngrok.ipynb", "ngrok"),
 ]
 
 # 配管セルの並び。ここが「カーネルの形」そのもの。
@@ -104,7 +101,7 @@ def test_settings_defines_the_contract():
         "PORT", "UPSTREAM_PORT", "PROXY_PORT", "CHAT_PATH", "PROXY_PATH",
         "PROXY_AUTH", "PROXY_EXTRA_ARGS", "PROXY_CHECK_PATH",
         "MODEL_NAME", "MODEL_DISPLAY", "ENGINE_DISPLAY", "CONTEXT_LENGTH",
-        "GIST_ID_DEFAULT", "GIST_OWNER", "NGROK_DOMAIN_DEFAULT",
+        "GIST_ID_DEFAULT", "GIST_OWNER",
         "MAX_MINUTES", "KEEPALIVE_RESET_MINUTES", "TUNNEL_CHECK_EVERY",
         "ENGINE_LABEL", "ENGINE_PROCS", "CLEANUP_TARGETS", "ENGINE_LOG",
         "OUT_DIRS", "save_output", "fail",

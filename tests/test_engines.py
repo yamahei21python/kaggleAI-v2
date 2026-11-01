@@ -178,14 +178,14 @@ def test_normal_variant_serves(tmp_path):
     assert "SMOKE = False" in body
 
 
-def _render_tunnel(tmp, tunnel, domain="", name="sglang"):
+def _render_tunnel(tmp, tunnel, name="sglang"):
     engine = bes.ENGINES[name]
     serve_script.write(
         pathlib.Path(tmp) / tunnel, engine, bes.METADATA[name],
         run_minutes=60,
         runtime="\n# runtime\n",
         proxy_b64="", html_b64="", gist_id="g", gist_owner="o",
-        tunnel=tunnel, ngrok_domain=domain,
+        tunnel=tunnel,
     )
     return (pathlib.Path(tmp) / tunnel / "main.py").read_text()
 
@@ -195,23 +195,63 @@ def test_tunnel_defaults_to_cloudflared(tmp_path):
     body = _render_tunnel(tmp_path, "cloudflared")
     assert 'TUNNEL = "cloudflared"' in body
     assert "def start_cloudflared(" in body
-    # ngrok の実装も同梱する（分岐は start_tunnel() だけ）
-    assert "def start_ngrok(" in body
     assert 'data["tunnel"] = TUNNEL' in body    # 設定と実装がずれても実装が正
     ast.parse(body)
 
 
-def test_tunnel_ngrok_branches_to_ngrok(tmp_path):
-    """ngrok を選ぶと ngrok 側が使われ、固定ドメインの既定値が埋まる。"""
-    body = _render_tunnel(tmp_path, "ngrok", domain="example.ngrok-free.dev")
-    assert 'TUNNEL = "ngrok"' in body
-    assert 'NGROK_DOMAIN = "example.ngrok-free.dev"' in body
-    assert 'if TUNNEL == "ngrok":' in body
-    # 固定ドメインの ERR_NGROK_334 回避と、cloudflared 側の実装が残っていること
-    assert "--pooling-enabled" in body
-    assert "--no-autoupdate" in body
-    assert "NGROK_TOKEN" in body
-    ast.parse(body)
+def test_tunnel_has_no_ngrok_left(tmp_path):
+    """ngrok の**実装**が骨格に残っていないこと（2026-11-01 に廃止）。
+
+    残っていると「NGROK_TOKEN を Secrets に入れれば固定 URL になる」と
+    読めてしまう。専用アカウントでは Secret が読めず、ビーコンで URL を
+    配っても手前で起動できない（`notes/url-publishing.md`）。
+
+    ただし**説明文には残す**。廃止の理由を書かないと、次に読む人が同じ
+    判断をやり直すことになる。なので「文字として出てこない」ではなく
+    「コードとして使われていない」を見る: AST から識別子と、docstring
+    以外の文字列定数を拾い、そこに ngrok が無いことを確かめる。
+    コメントは AST に載らないので、この判定に引っかからない。
+    """
+    body = _render_tunnel(tmp_path, "cloudflared")
+    tree = ast.parse(body)
+
+    docs = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.FunctionDef,
+                                 ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        head = getattr(node, "body", [None])[0]
+        if (isinstance(head, ast.Expr) and isinstance(head.value, ast.Constant)
+                and isinstance(head.value.value, str)):
+            docs.add(id(head.value))
+
+    used = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            used.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            used.add(node.attr)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)):
+            used.add(node.name)
+        elif isinstance(node, ast.arg):
+            used.add(node.arg)
+        elif isinstance(node, ast.keyword) and node.arg:
+            used.add(node.arg)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            used.update(a.name for a in node.names)
+        elif isinstance(node, ast.Constant) and id(node) not in docs:
+            used.add(str(node.value))
+
+    hits = sorted(u for u in used if "ngrok" in u.lower())
+    assert not hits, f"ngrok が実装に残っている: {hits}"
+
+
+def test_tunnel_rejects_ngrok(tmp_path):
+    """`tunnel="ngrok"` は生成時に落とす（cloudflared で静かに動かさない）。"""
+    import pytest
+    with pytest.raises(ValueError, match="未対応"):
+        _render_tunnel(tmp_path, "ngrok")
 
 
 def test_tunnel_rejects_unknown(tmp_path):

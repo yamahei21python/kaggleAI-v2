@@ -21,8 +21,15 @@
 - 準現役: 必要時に使う（測定・CPU 検証・代替経路）。壊さないが優先度は低い。
 - 退役: 参照しない。ビルダーは残すが再生成・push の対象外。
 
-全体は **36 件**（notebook 14 / script 22）。うち現役 14・準現役 20・退役 2、
-ビルダー持ち 31 件。`.ipynb` は 1 冊も削除していない（script 版は並走）。
+全体は **51 件**（notebook 20 / script 31）。うち現役 12・準現役 31・退役 8、
+ビルダー持ち 30 件。`.ipynb` は 1 冊も削除していない（script 版は並走）。
+
+> **ngrok 廃止（2026-11-01）**: トンネルを cloudflared の quick tunnel + ビーコンに
+> 一本化したため、ngrok 系 6 本を retired にした（`notes/url-publishing.md`）。
+> **生成物（`main.py` / `.ipynb`）は履歴として残してある。** 骨格が
+> `STEP2_TUNNEL=ngrok` を弾くようになったので**再生成はできない**。
+> 副作用として **llama-server は GPU カーネルを失った**（あの系統は ngrok 版
+> しか無かった）。コードは残っているので台帳に 1 行足せば戻る。
 
 ## 一覧
 
@@ -30,10 +37,10 @@
 |---|---|---|---|---|---|
 | 現役 | `step1-orcarouter-qwen38-27b-dl` | `kaggle/step1/` | `build_step1.py` | notebook / CPU | 0 |
 | 現役 | `step2-orcarouter-qwen38-27b-cloudflared` | `kaggle/step2/` | `build_step2.py`（既定） | notebook / GPU | 3 |
-| 現役 | `step2-orcarouter-qwen38-27b-ngrok-fixed` | `kaggle/step2-ngrok/` | `build_step2.py` `STEP2_TUNNEL=ngrok` | notebook / GPU | 2 |
+| 退役 | `step2-orcarouter-qwen38-27b-ngrok-fixed` | `kaggle/step2-ngrok/` | 生成不可（ngrok 廃止） | notebook / GPU | 2 |
 | 現役 | `prepare-vllm-dataset` | `kaggle/step2-vllm/` | `build_vllm_dataset.py` | notebook / CPU | 0 |
 | 現役 | `step2-vllm-qwen38-27b-cloudflared` | `kaggle/step2-vllm-kernel/cloudflared/` | `build_step2_vllm.py`（既定） | notebook / GPU | 3 |
-| 現役 | `step2-vllm-qwen38-27b-ngrok` | `kaggle/step2-vllm-kernel/ngrok/` | `build_step2_vllm.py` `STEP2_TUNNEL=ngrok` | notebook / GPU | 2 |
+| 退役 | `step2-vllm-qwen38-27b-ngrok` | `kaggle/step2-vllm-kernel/ngrok/` | 生成不可（ngrok 廃止） | notebook / GPU | 2 |
 | 現役 | `keepalive-test` | `kaggle/step2/`（`kernel-metadata-keepalive-test.json`） | `build_keepalive_test.py` | notebook / CPU | 0 |
 | 現役 | `exl3-qwen38-gpu-check` | `kaggle/exl3-gpu-check/` | なし（`main.py` 直接編集） | script / GPU | 1 |
 | 現役 | `exl3-dataset-upload` | `kaggle/exl3-dataset-upload/` | なし（直接編集） | script / CPU | 0 |
@@ -43,7 +50,7 @@
 | 現役 | `llama-server-cpu-check` | `kaggle/cpu-check/` | なし（直接編集） | script / CPU | 2 |
 | 準現役 | `step2-lmdeploy-qwen38-27b-cloudflared` | `kaggle/lmdeploy-serve/` | `build_engine_serve.py` | script / GPU | 2 |
 | 準現役 | `step2-sglang-qwen38-27b-cloudflared` | `kaggle/sglang-serve/` | `build_engine_serve.py` | script / GPU | 2 |
-| 準現役 | `llama-server-ngrok` | `kaggle/llama-server-ngrok/` | `build_llama_server.py`（既定 ngrok） | notebook / GPU | 2 |
+| 退役 | `llama-server-ngrok` | `kaggle/llama-server-ngrok/` | 生成不可（ngrok 廃止） | notebook / GPU | 2 |
 | 準現役 | `step2-vllm-dryrun` | `kaggle/step2-vllm-dryrun/` | `build_vllm_dryrun.py` | notebook / CPU | 2 |
 | 準現役 | `bench-ctx-vs-speed-orcarouter-qwen3-8-27b` | `kaggle/bench/` | `build_bench.py` | notebook / GPU | 0 |
 | 準現役 | `bench-mtp-spec-decoding-orcarouter-qwen3-8-27b` | `kaggle/bench_mtp/` | `build_bench_mtp.py` | notebook / GPU | 0 |
@@ -84,10 +91,10 @@
 | 状態 | カーネル id | ローカル | 生成元 | GPU |
 |---|---|---|---|---|
 | 準現役 | `step2-orcarouter-qwen38-27b-cloudflared-script` | `kaggle/step2-script/cloudflared/` | `build_step2_script.py` `STEP2_TUNNEL=cloudflared` | ✓ |
-| 準現役 | `step2-orcarouter-qwen38-27b-ngrok-script` | `kaggle/step2-script/ngrok/` | 同上 `STEP2_TUNNEL=ngrok` | ✓ |
+| 退役 | `step2-orcarouter-qwen38-27b-ngrok-script` | `kaggle/step2-script/ngrok/` | 生成不可（ngrok 廃止） | ✓ |
 | 準現役 | `step2-vllm-qwen38-27b-cloudflared-script` | `kaggle/step2-vllm-script/cloudflared/` | `build_step2_vllm_script.py` `STEP2_TUNNEL=cloudflared` | ✓ |
-| 準現役 | `step2-vllm-qwen38-27b-ngrok-script` | `kaggle/step2-vllm-script/ngrok/` | 同上 `STEP2_TUNNEL=ngrok` | ✓ |
-| 準現役 | `llama-server-ngrok-script` | `kaggle/llama-server-script/ngrok/` | `build_llama_server_script.py` | ✓ |
+| 退役 | `step2-vllm-qwen38-27b-ngrok-script` | `kaggle/step2-vllm-script/ngrok/` | 生成不可（ngrok 廃止） | ✓ |
+| 退役 | `llama-server-ngrok-script` | `kaggle/llama-server-script/ngrok/` | 生成不可（ngrok 廃止） | ✓ |
 | 準現役 | `prepare-vllm-dataset-script` | `kaggle/step2-vllm/script/` | `build_batch_script.py` ← `build_vllm_dataset` | |
 | 準現役 | `step1-orcarouter-qwen38-27b-dl-script` | `kaggle/step1/script/` | 同上 ← `build_step1` | |
 | 準現役 | `keepalive-test-script` | `kaggle/step2/script/` | 同上 ← `build_keepalive_test` | |
@@ -114,9 +121,11 @@
    （id `keepalive-test`）。`kaggle/step2-ka-test/` は旧 `keepalive-test-1` で、
    どのビルダーも生成しない。混同しやすいので、移行時は `step2-ka-test/` を
    退役として扱い、`step2/` 側だけをビルダー対象に保つ。
-2. **`llama-server` は ngrok 版だけコミットされている**。`LLAMA_TUNNEL=cloudflared`
-   を指定すると `kaggle/llama-server/llama-server-cloudflared.ipynb` が生成される
-   （未追跡。セル置き場 `kaggle/llama-server/cells/` も同じディレクトリ）。
+2. **`llama-server` は GPU カーネルを持っていない**（2026-11-01）。あの系統は
+   ngrok 版しか無く、ngrok 廃止で両方 retired にしたため。`LLAMA_TUNNEL=cloudflared`
+   で `kaggle/llama-server/llama-server-cloudflared.ipynb` は生成できる
+   （セル置き場 `kaggle/llama-server/cells/`）が、**台帳に id が無いので push
+   できない**。戻すなら `kbuild/spec.py` に 1 行足す（新規 Kaggle カーネルになる）。
 3. **`kaggle/exl3-serve-kernel/{serve,dryrun,keepalive}/` は生成物**。
    `kaggle/build_exl3_serve.py` から再生成でき、`.gitignore` 済み。
    `kaggle/exl3-serve/` に残るのは `chat_server.py`（真実源）だけ。
@@ -131,8 +140,9 @@
    smoke 版に入れ替わる。実稼働前に `cli push <name> --yes`（smoke 無し）で
    戻すこと。smoke ディレクトリは再生成可能な一時成果物だが、
    `check_notebooks.py` の TARGETS に入っているので消すと検証が落ちる。
-6. **`build_llama_server.py` は既定が ngrok**（`build_step2.py` / vLLM は既定
-   cloudflared）。kbuild の spec ではトンネルを必須項目にして既定値の揺れを消す。
+6. **トンネルの既定は 3 ビルダーとも cloudflared**（2026-11-01 に
+   `build_llama_server.py` の既定 ngrok を直した）。`STEP2_TUNNEL` / `LLAMA_TUNNEL`
+   に cloudflared 以外を渡すと、ビルダーは生成前に落ちる。
 7. **script 版は notebook と同じディレクトリに置かない**。`-script` は
    `kaggle/step2-script/`、セル連結版は `kaggle/step2/script/` のように分ける。
    `kaggle/step2/` には `kernel-metadata.json` と `kernel-metadata-keepalive-test.json`
@@ -184,36 +194,36 @@ Secrets は**カーネル単位**で UI から登録する（コードからは�
 |---|---|
 | `step1-orcarouter-qwen38-27b-dl` | `KAGGLE_USERNAME`, `KAGGLE_KEY` |
 | `step2-…-cloudflared` / `step2-vllm-…-cloudflared` | `GIST_ID`, `GITHUB_TOKEN` |
-| `step2-…-ngrok-fixed` / `step2-vllm-…-ngrok` / `llama-server-ngrok` | 上記 + `NGROK_TOKEN`, `NGROK_DOMAIN` |
 | `prepare-vllm-dataset` | `HF_TOKEN` |
 | `exl3-serve` / `-dryrun` / `-keepalive` | `EXL3_API_USER`, `EXL3_API_PASS`, `GIST_ID`, `GITHUB_TOKEN` |
 | `exl3-dataset-upload` | `KAGGLE_USERNAME`, `KAGGLE_KEY` |
-| **`…-script`（骨格版 5 本）** | `API_USER`, `API_PASS`, `GIST_ID`, `GITHUB_TOKEN`（台帳は `kbuild/serve_script.py`）。**ngrok 版は加えて `NGROK_TOKEN` / `NGROK_DOMAIN`**（`NGROK_DOMAIN` は埋め込み既定値があるので上書き用） |
+| **`…-script`（骨格版 3 本）** | `API_USER`, `API_PASS`, `GIST_ID`, `GITHUB_TOKEN`（台帳は `kbuild/serve_script.py`） |
 | **`…/script`（セル連結版 7 本）** | 元の notebook 版と同じ（`step1` は `KAGGLE_*`、`prepare-vllm-dataset` は `HF_TOKEN`、他はなし） |
 | `keepalive-test` / `ci-cpu` / その他の CPU 検証 | なし |
 
 `EXL3_API_PASS` が未設定でも乱数で起動するが、`result.json` には値を残さない。
 
-> script 骨格は cloudflared / ngrok の**両方**を実装している（`tunnel=` で選ぶ）。
-> `NGROK_TOKEN` / `NGROK_DOMAIN` は骨格の台帳に載っているが、実際に必要になるのは
-> `-script` の ngrok 版だけ。
+> script 骨格が実装するトンネルは **cloudflared だけ**（2026-11-01 に ngrok を
+> 落とした）。`NGROK_TOKEN` / `NGROK_DOMAIN` は台帳からも消してある。
+> **どの配信カーネルも Secrets 無しで起動できる**（URL はビーコンが運ぶ）。
 
 ## 生成一致チェックの現状
 
 「commit 済みの生成物 = ビルダーの再出力」をバイト比較する。2 本立て:
 
-### notebook — `kaggle/check_notebooks.py`（13 冊）
+### notebook — `kaggle/check_notebooks.py`（10 冊）
 
-- `step1` / `step2`（cloudflared・ngrok）/ `smoke` / `bench` / `bench_mtp` /
-  `step2-keepalive-test` / `llama-server-ngrok`
-- `prepare-vllm-dataset` / `step2-vllm-dryrun` /
-  `step2-vllm-qwen38-27b-cloudflared` / `step2-vllm-qwen38-27b-ngrok`
+- `step1` / `step2`（cloudflared）/ `smoke` / `bench` / `bench_mtp` /
+  `step2-keepalive-test`
+- `prepare-vllm-dataset` / `step2-vllm-dryrun` / `step2-vllm-qwen38-27b-cloudflared`
 - `step2-vllm-kernel/smoke-cloudflared/…`（smoke 版・15 セル。`KC_SMOKE=1`）
+
+退役した ngrok 版は対象外（再生成できないので比較する相手が無い）。
 
 notebook 側の対象表は `TARGETS` に**手で**書いてある（`KC_SMOKE` のような台帳に
 載らないノブを使うため）。
 
-### script — `kaggle/check_scripts.py`（18 カーネル / 46 ファイル）
+### script — `kaggle/check_scripts.py`（44 ファイル）
 
 `kbuild/spec.py` から `kind == "script"` かつ `builder` 持ちを引くので、
 **script カーネルを増やしても一覧の更新は要らない**。同じビルダーが複数の出力を

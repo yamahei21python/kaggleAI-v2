@@ -85,7 +85,12 @@ def test_metadata_matches_spec(kernel):
     assert meta["kernel_type"] == kernel.kind
     assert meta["enable_gpu"] is kernel.gpu
     assert meta["code_file"] == kernel.code_file
-    assert tuple(meta["dataset_sources"]) == kernel.datasets
+    # 退役したカーネルは台帳から datasets を落としてある（もう push しない
+    # ので、二度と使わない値を残すと「まだ動く」と読めてしまう）。メタデータ
+    # 側は履歴としてそのまま残すため、ここだけ比較しない。
+    # 2026-11-01 の ngrok 廃止で 6 本がこの形になった。
+    if kernel.status != spec.RETIRED:
+        assert tuple(meta["dataset_sources"]) == kernel.datasets
 
 
 def test_smoke_output_is_separate_from_normal():
@@ -121,7 +126,11 @@ def test_builders_plan_is_deduped():
     keys = [(b, tuple(sorted(env.items()))) for b, env in plan]
     assert len(keys) == len(set(keys))
     assert ("build_step2", {"STEP2_TUNNEL": "cloudflared"}) in plan
-    assert ("build_step2", {"STEP2_TUNNEL": "ngrok"}) in plan
+    # ngrok は 2026-11-01 に廃止。骨格（builder）は cloudflared 以外を
+    # 受け付けないので、計画に混ざっていたら台帳の書き戻し漏れ。
+    assert ("build_step2", {"STEP2_TUNNEL": "ngrok"}) not in plan
+    assert all(env.get("STEP2_TUNNEL", "cloudflared") == "cloudflared"
+               for _b, env in plan)
 
 
 def test_find_accepts_name_and_id_and_path():

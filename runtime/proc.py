@@ -209,12 +209,12 @@ def kc_wait_gpu_idle(limit_mib=500, timeout=180):
 
 
 def _kc_argv(pattern):
-    """"-x ngrok" → ["-x", "ngrok"]（shell を介さない）。"""
+    """"-x cloudflared" → ["-x", "cloudflared"]（shell を介さない）。"""
     return pattern.split()
 
 
 def kc_pids(pattern, timeout=15):
-    """pgrep の引数文字列（例: "-x ngrok"）に一致する PID を返す。"""
+    """pgrep の引数文字列（例: "-x cloudflared"）に一致する PID を返す。"""
     try:
         r = subprocess.run(["pgrep", *_kc_argv(pattern)],
                            capture_output=True, text=True, timeout=timeout)

@@ -9,8 +9,10 @@
 実体は `kaggle/step2-vllm/cells/*.py` に置く（ruff で構文チェックできるように）。
 
     python3 kaggle/build_step2_vllm.py                  # cloudflared
-    STEP2_TUNNEL=ngrok python3 kaggle/build_step2_vllm.py
     python3 kaggle/build_step2_vllm.py --smoke          # 起動＋会話だけで終了
+
+`STEP2_TUNNEL` は互換のために受けるが cloudflared のみ（ngrok は 2026-11-01 に
+retired。`notes/url-publishing.md`）。
 
 出力: kaggle/step2-vllm-kernel/<tunnel>/step2-vllm-qwen38-27b-<tunnel>.ipynb
       smoke 版は kaggle/step2-vllm-kernel/smoke-<tunnel>/ へ別名で書く
@@ -28,9 +30,10 @@ HF_MODEL = "twolven/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-AWQ-MTP"
 SERVED_NAME = "qwen3.8-27b-awq"
 
 TUNNEL = os.environ.get("STEP2_TUNNEL", "cloudflared").strip().lower()
-if TUNNEL not in ("cloudflared", "ngrok"):
-    raise SystemExit(f"STEP2_TUNNEL={TUNNEL!r} は未対応（cloudflared / ngrok）")
-IS_NGROK = TUNNEL == "ngrok"
+if TUNNEL != "cloudflared":
+    raise SystemExit(
+        f"STEP2_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
+        "（ngrok は 2026-11-01 に廃止。notes/url-publishing.md）")
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -44,7 +47,7 @@ CFG = kcconfig.load()
 
 # smoke 版は通常版と干渉しない別ディレクトリへ。
 # （push --smoke が通常生成物を上書きしないため。実稼働時は通常版を使う）
-# トンネルごとにも分ける（smoke の ngrok 実行が cloudflared 版を潰さない）。
+# トンネルごとにも分ける（smoke の cloudflared 実行が通常版を潰さない）。
 SMOKE_OUT_DIR = HERE / "step2-vllm-kernel" / f"smoke-{TUNNEL}"
 
 # smoke: トンネル / Gist 公開 / keepalive を省略し、起動と会話だけで終了する。
@@ -80,22 +83,16 @@ def _tpl(src, **kw):
 
 
 # ── title ───────────────────────────────────────────────────
-cf_bullet = ("" if IS_NGROK else
-             "   - `my-cloudflared-bin`（cloudflared 40 MB）"
+cf_bullet = ("   - `my-cloudflared-bin`（cloudflared 40 MB）"
              "— 無いと毎回 GitHub から落とす")
 secret_note = (
-    """> ✅ **必要な Secrets**: `NGROK_TOKEN`（必須）
-> `NGROK_DOMAIN` はノートに埋め込み済み → **毎回同じ URL**。
->
-> 🔓 認証はありません（URL を知れば誰でも使えます）。
-> 他人に使われたくないときは環境変数 `API_PASS` を設定してください。"""
-    if IS_NGROK else
     """> ✅ **Secrets の設定は不要です。**（cloudflared はアカウント不要）
 >
 > 🔓 認証はありません（URL を知れば誰でも使えます）。
 > 他人に使われたくないときは環境変数 `API_PASS` を設定してください。
 >
-> ⚠ 公開URLは **実行のたびに変わります**（quick tunnel の仕様）。""")
+> ⚠ 公開URLは **実行のたびに変わります**（quick tunnel の仕様）。
+> 現在の URL はビーコン（`python3 -m cli beacon`）から読めます。""")
 
 TITLE = _tpl("""# 🚀 Step 2 (vLLM): Qwen3.8-27B AWQ + __TUNNEL__ 公開APIサーバー
 
@@ -133,7 +130,6 @@ SETTINGS = _tpl(
     DATASET_SLUG=DATASET_SLUG, SERVED=SERVED_NAME, TUNNEL=TUNNEL,
     PROXY_B64=PROXY_SRC_B64, CHAT_B64=CHAT_SRC_B64,
     GIST_ID=CFG["GIST_ID"], GIST_OWNER=CFG["GIST_OWNER"],
-    NGROK_DOMAIN=CFG["NGROK_DOMAIN"],
 )
 
 LAUNCH_MD = '''---
@@ -230,9 +226,7 @@ else:
 
 # ── kernel-metadata.json（push 用・まだ push しない）─────────
 SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}"
-sources = [DATASET_ID]
-if not IS_NGROK:
-    sources.append(f"{OWNER}/my-cloudflared-bin")
+sources = [DATASET_ID, f"{OWNER}/my-cloudflared-bin"]
 # wheelhouse 2 点（本体 + cublas patch）。patch が無いと `cuda-toolkit 13.0.3` の
 # `nvidia-cublas==13.1.1.3.*` を満たせない（CPU 実測 2026-10-31）。
 # 解決に失敗しても install 側が PyPI へフォールバックする。
@@ -240,8 +234,7 @@ sources += [f"{OWNER}/vllm-wheelhouse", f"{OWNER}/vllm-wheelhouse-patch"]
 meta = {
     "id": f"{OWNER}/{SLUG}",
     # title は slug に解決できる必要がある（不一致だと push が 409）
-    "title": ("Step2 vLLM qwen38 27b cloudflared" if not IS_NGROK
-              else SLUG.replace("-", " ")),
+    "title": "Step2 vLLM qwen38 27b cloudflared",
     "code_file": OUT.name,
     "language": "python",
     "kernel_type": "notebook",

@@ -2,8 +2,10 @@
 """vLLM 配信カーネルを **script 形式**（main.py 1 ファイル）で生成する。
 
     python3 kaggle/build_step2_vllm_script.py              # cloudflared
-    STEP2_TUNNEL=ngrok python3 kaggle/build_step2_vllm_script.py
     python3 kaggle/build_step2_vllm_script.py --smoke      # 起動＋会話だけ
+
+`STEP2_TUNNEL` は互換のために受けるが cloudflared のみ（ngrok は 2026-11-01 に
+retired。`notes/url-publishing.md`）。
 
 notebook 版（`build_step2_vllm.py`）はそのまま残す。こちらは同じセル列
 （`kaggle/step2-vllm/cells/*.py`）を `kbuild/serve_script.py` の骨組みに載せた
@@ -31,8 +33,10 @@ DATASET_SLUG = "qwen38-27b-uncensored-hauhaucs-awq-mtp"
 SERVED_NAME = "qwen3.8-27b-awq"
 
 TUNNEL = os.environ.get("STEP2_TUNNEL", "cloudflared").strip().lower()
-if TUNNEL not in ("cloudflared", "ngrok"):
-    raise SystemExit(f"STEP2_TUNNEL={TUNNEL!r} は未対応（cloudflared / ngrok）")
+if TUNNEL != "cloudflared":
+    raise SystemExit(
+        f"STEP2_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
+        "（ngrok は 2026-11-01 に廃止。notes/url-publishing.md）")
 
 # smoke 版は通常版と別ディレクトリへ書く（`cli push --smoke` が通常版を
 # 上書きしないため。notebook 版の `smoke_out` と同じ考え方）。
@@ -52,7 +56,6 @@ SETTINGS = render_settings(CELLS / "00_settings.py", {
     "__CHAT_B64__": CHAT_SRC_B64,
     "__GIST_ID__": CFG.get("GIST_ID", ""),
     "__GIST_OWNER__": CFG.get("GIST_OWNER", ""),
-    "__NGROK_DOMAIN__": CFG.get("NGROK_DOMAIN", ""),
 })
 
 ENGINE_CODE = (
@@ -102,9 +105,8 @@ META = metadata.base(
     # wheelhouse 2 点（本体 + cublas patch）。patch は cuda-toolkit 13.0.3 が
     # `nvidia-cublas==13.1.1.3.*` を固定するため必要（CPU 実測 2026-10-31）。
     # 解決に失敗しても install 側が PyPI へフォールバックする。
-    datasets=[f"{OWNER}/{DATASET_SLUG}"]
-    + ([] if TUNNEL == "ngrok" else [f"{OWNER}/my-cloudflared-bin"])
-    + [f"{OWNER}/vllm-wheelhouse", f"{OWNER}/vllm-wheelhouse-patch"],
+    datasets=[f"{OWNER}/{DATASET_SLUG}", f"{OWNER}/my-cloudflared-bin",
+              f"{OWNER}/vllm-wheelhouse", f"{OWNER}/vllm-wheelhouse-patch"],
 )
 
 if __name__ == "__main__":
@@ -124,6 +126,5 @@ if __name__ == "__main__":
         hard_max_minutes=180,
         smoke=SMOKE,
         tunnel=TUNNEL,
-        ngrok_domain=CFG.get("NGROK_DOMAIN", ""),
         builder="kaggle/build_step2_vllm_script.py",
     )

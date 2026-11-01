@@ -45,7 +45,9 @@ def _find_cached(name):
 
 
 # --- ollama / cloudflared ---
-for name in (["ollama"] if TUNNEL_KIND == "ngrok" else ["ollama", "cloudflared"]):
+# cloudflared は Dataset から復元する。ngrok は 2026-11-01 に廃止したので、
+# トンネルの種類で分岐しない（`notes/url-publishing.md`）。
+for name in ["ollama", "cloudflared"]:
     dst = os.path.join(BIN_DIR, name)
     src = _find_cached(name)
     if src:
@@ -142,10 +144,9 @@ if missing:
 print()
 ok = True
 _targets = [(f"{BIN_DIR}/ollama", MIN_SIZE),
+            (f"{BIN_DIR}/cloudflared", MIN_SIZE),
             (LLAMA_SERVER_DST, MIN_SIZE_LLAMA),
             (CUDA_LIB, MIN_SIZE)]
-if TUNNEL_KIND != "ngrok":
-    _targets.insert(1, (f"{BIN_DIR}/cloudflared", MIN_SIZE))
 for path, min_sz in _targets:
     exists = os.path.isfile(path)
     size = os.path.getsize(path) if exists else 0
@@ -158,9 +159,7 @@ for path, min_sz in _targets:
 # サイズだけ見ていると通ってしまい、起動時に 500 になるので明示的に確認する。
 # root 実行では os.access(X_OK) が「x ビットが1つでもあれば True」になるため、
 # mode ビットで 3 桁すべて（0o111）が立っているかを見る。
-_exes = [f"{BIN_DIR}/ollama", LLAMA_SERVER_DST]
-if TUNNEL_KIND != "ngrok":
-    _exes.insert(1, f"{BIN_DIR}/cloudflared")
+_exes = [f"{BIN_DIR}/ollama", f"{BIN_DIR}/cloudflared", LLAMA_SERVER_DST]
 for exe in _exes:
     if not os.path.isfile(exe):
         continue
@@ -182,9 +181,7 @@ if not ok:
 print()
 # --version が通る = 実行ビットの end-to-end 証明。returncode まで見る
 # （exec 失敗だと stdout が空のまま素通りする）。
-_ver_exes = [f"{BIN_DIR}/ollama"]
-if TUNNEL_KIND != "ngrok":
-    _ver_exes.append(f"{BIN_DIR}/cloudflared")
+_ver_exes = [f"{BIN_DIR}/ollama", f"{BIN_DIR}/cloudflared"]
 for _exe in _ver_exes:
     _r = subprocess.run([_exe, "--version"], capture_output=True, text=True)
     print((_r.stdout or _r.stderr).strip())

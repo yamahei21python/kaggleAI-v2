@@ -34,7 +34,7 @@ smoke test の実測値です。
 ### Dataset キャッシュ（推奨）
 
 Step2 は Dataset を見て、あればそこから復元します。**3つの Dataset に分かれています。**
-（ngrok 版は `my-cloudflared-bin` を使わないので **2つ**）
+（2026-11-01 に ngrok を廃止したので、`my-cloudflared-bin` を外す版はもう無い）
 （下は旧形式のパス例。新形式では `/kaggle/input/datasets/<owner>/<slug>/` になり、
 Step2 は自動探索するので実害なし）
 
@@ -90,8 +90,7 @@ Step2 は自動探索するので実害なし）
 > 採取時に落としてあります（SONAME の `.so.12` 側だけ保持）。
 
 Dataset を追加するには、Step2 の Notebook で **Add Data** から選びます。
-`kernel-metadata.json` の `dataset_sources` に書いておけば push で入ります
-（cloudflared 版は3つ、ngrok 版は2つ）。
+`kernel-metadata.json` の `dataset_sources` に書いておけば push で入ります（3つ）。
 
 ### llama.cpp 直起動（Ollama を経由しない）
 
@@ -429,7 +428,7 @@ smoke test の結果です（`kaggle/smoke/`）。
 
 ### リバースプロキシ（UI 配信 + 同一オリジン化）
 
-cloudflared / ngrok はどちらも「1ポートをそのまま公開」するだけなので、
+cloudflared の quick tunnel は「1ポートをそのまま公開」するだけなので、
 Ollama の手前に `kaggle/step2/auth_proxy.py` を置いて
 **チャット UI の配信**と **`/v1` の同一オリジン化**を担当させます。
 
@@ -446,7 +445,7 @@ Ollama の手前に `kaggle/step2/auth_proxy.py` を置いて
 | `/api/*` `/v1/*` | 上流へ中継（ストリーミング対応） |
 
 ```
-cloudflared / ngrok
+cloudflared（quick tunnel）
       │  http://127.0.0.1:11435
       ▼
 auth_proxy.py  ── / は llama-chat.html（200）、/api/* /v1/* は Ollama へ中継
@@ -725,24 +724,21 @@ python3 kaggle/build_keepalive_test.py
 
 | 項目 | 値 |
 |---|---|
-| cloudflared quick tunnel | 制限なし。**URL は実行のたびに変わる**・SLA なし |
-| ngrok dev domain | **URL 固定**。無料枠は帯域・接続数に上限、**同一ドメインで1本のみ** |
+| cloudflared quick tunnel | 制限なし。**URL は実行のたびに変わる**・SLA なし。変わってもビーコン（`python3 -m cli beacon`）で読めるので実害なし |
 | Kaggle カーネル | 9時間で停止 |
 | アイドル | 約40分で Notebook が停止 |
 | 初回ロード | 16.5 GiB を VRAM に載せる。**実測 87秒**（`load` は環境で 198秒） |
 | キープアライブ | チャット送信ごとに **60分にリセット**、停止ボタンで即終了。最後の送信から 60分経過で自動終了 |
-| トンネル死亡 | keepalive が **1回だけ自動再起動**（cloudflared は新URLを `public_url.txt` に書き直す／ngrok は同一ドメインで復帰。2回目以降は fail） |
+| トンネル死亡 | keepalive が **1回だけ自動再起動**（新しい URL を `url.txt` とビーコンに書き直す。2回目以降は fail） |
 | tunnel 疎通 | 1回の瞬断は許容、**通算2回で fail**（`tunnel=<name>:DEAD x2`。カウンタは再起動時のみリセット） |
 
 ### セキュリティ
 
 - **既定は認証なしです。** URL を知っていれば誰でもあなたの GPU を使えます。
   閉じたいときは環境変数 `API_PASS` を設定（Basic 認証が有効になる）
-- **Secrets は基本不要**（cloudflared はアカウント・API キー不要）。
-  ngrok 版だけ `NGROK_TOKEN` が必須
-- **cloudflared 版は公開URLが毎回変わる**ため、旧URLを知っている相手には届きません
+- **Secrets は不要**（cloudflared はアカウント・API キー不要。ビーコンも Secrets を使わない）
+- **公開URLは毎回変わる**ため、旧URLを知っている相手には届きません
   （quick tunnel は実行ごとに新トンネルを張るため）
-- **ngrok 版は URL が固定**なので、この防御は無い。URL を知られると使われます
 - 認証を有効にした場合、`/kaggle/working/connection_info.txt` に
   Basic 認証情報が平文で残ります。不要になったら削除してください
 
@@ -754,8 +750,7 @@ python3 kaggle/build_keepalive_test.py
 - [orcarouter/Qwen3.8-27B-Uncensored (Ollama)](https://ollama.com/orcarouter/Qwen3.8-27B-Uncensored)
 - [Cloudflare: Try Cloudflare Quick Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/use-cases/tunnel-ingress-rules/) — Step2 が使う公開手段
 - [GitHub: cloudflare/cloudflared](https://github.com/cloudflare/cloudflared) — リリースバイナリの出所
-- [Qiita: Kaggle × ngrok で無料LLM APIサーバーを利用する](https://qiita.com/mhuk_mtd/items/4ecf1ebc1fd047ef4ab7) — ngrok 版の参考
-- [ngrok: Domains](https://dashboard.ngrok.com/domains) — 固定URL（dev domain）の取得
+- [Qiita: Kaggle × ngrok で無料LLM APIサーバーを利用する](https://qiita.com/mhuk_mtd/items/4ecf1ebc1fd047ef4ab7) — ngrok 版の参考（**本リポジトリでは 2026-11-01 に ngrok を廃止**）
 - [GitHub: cyberytti/OllamaKaggle](https://github.com/cyberytti/OllamaKaggle)
 - [Kaggle](https://www.kaggle.com) / [Ollama](https://ollama.com)
 

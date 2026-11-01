@@ -14,7 +14,7 @@
   projector blob が既にあるので、pull は不要。
 
 環境変数:
-  LLAMA_TUNNEL=ngrok|cloudflared   既定 ngrok
+  LLAMA_TUNNEL=cloudflared         既定 cloudflared（ngrok は 2026-11-01 に廃止）
   LLAMA_MTP=1|0                    既定 1（MTP 有効）
   LLAMA_CTX=<int>                  既定 32768（テスト用に小さめ）
 """
@@ -37,17 +37,20 @@ MODEL_DISPLAY = "Qwen3.8-27B-Uncensored (直起動)"
 DATASET = "my-ollama-orcarouter-qwen38-27b"
 PATCH = "my-ollama-orcarouter-qwen38-27b-patch"
 
-TUNNEL = os.environ.get("LLAMA_TUNNEL", "ngrok").strip().lower()
-if TUNNEL not in ("cloudflared", "ngrok"):
-    raise SystemExit(f"LLAMA_TUNNEL={TUNNEL!r} は未対応（cloudflared / ngrok）")
-IS_NGROK = TUNNEL == "ngrok"
+# ngrok は 2026-11-01 に廃止した（`notes/url-publishing.md`）。llama-server の
+# 配信カーネルは ngrok 前提で作っていたので台帳では retired にしてあるが、
+# ビルダー自体は cloudflared で生成できる状態に残す（作り直したくなったとき用）。
+TUNNEL = os.environ.get("LLAMA_TUNNEL", "cloudflared").strip().lower()
+if TUNNEL != "cloudflared":
+    raise SystemExit(
+        f"LLAMA_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
+        "（ngrok は 2026-11-01 に廃止）")
 
 USE_MTP = os.environ.get("LLAMA_MTP", "1").strip() == "1"
 CTX = int(os.environ.get("LLAMA_CTX", "32768"))
 
-# ngrok 版は `llama-server-ngrok/`、cloudflared 版はセル置き場も兼ねる
-# `llama-server/` へ出す（`kaggle/step2/` と `kaggle/step2-ngrok/` と同じ関係）。
-OUT_DIR = HERE / ("llama-server-ngrok" if IS_NGROK else "llama-server")
+# 出力はセル置き場も兼ねる `llama-server/`（`kaggle/step2/` と同じ関係）。
+OUT_DIR = HERE / "llama-server"
 OUT = OUT_DIR / f"llama-server-{TUNNEL}.ipynb"
 
 PROXY_SRC_B64 = embed.b64_text(proxy_source(HERE / "step2" / "auth_proxy.py"))
@@ -88,7 +91,7 @@ llama-server を直に叩けば `--spec-type draft-mtp` が使えます。
 2. **Internet**: `On`
 3. **Add Data**: `{DATASET}` と `{PATCH}`
 
-> **Secrets は不要です**（ngrok 版は `NGROK_TOKEN` が必要）。
+> **Secrets は不要です**（cloudflared はアカウント不要）。
 
 ### このノートの設定
 
@@ -180,7 +183,6 @@ print(f"MTP        : {{'有効' if USE_MTP else '無効'}}")
 # ---- Secrets の既定値（config.env 由来。Secret があれば上書きされる）----
 GIST_ID_DEFAULT = "{CFG["GIST_ID"]}"
 GIST_OWNER = "{CFG["GIST_OWNER"]}"
-NGROK_DOMAIN_DEFAULT = "{CFG["NGROK_DOMAIN"]}"
 
 # ---- キープアライブ ----
 MAX_MINUTES = 480
@@ -191,7 +193,6 @@ TUNNEL_CHECK_EVERY = 10
 ENGINE_LOG = "/tmp/llama-server.log"
 ENGINE_PROCS = [("llama-server", "argv"), ("auth_proxy.py", "argv")]
 CLEANUP_TARGETS = [
-    ("-x ngrok", "ngrok"),
     ("-x cloudflared", "cloudflared"),
     ("-f auth_proxy.py", "auth_proxy"),
     ("-f llama-server", "llama-server"),

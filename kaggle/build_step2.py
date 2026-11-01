@@ -6,9 +6,9 @@
 
     settings / install / launch / verify_checks
 
-トンネルは環境変数で切り替える（セル構成は共通、トンネルセルだけ差し替え）:
-    STEP2_TUNNEL=cloudflared  (既定) → アカウント不要・URL は毎回ランダム
-    STEP2_TUNNEL=ngrok                → NGROK_TOKEN 必須・NGROK_DOMAIN で固定URL可
+トンネルは cloudflared の quick tunnel だけ（`notes/url-publishing.md`）。
+ngrok 版は 2026-11-01 に retired にした（`NGROK_TOKEN` を Secrets から
+読めないため）。`STEP2_TUNNEL` は互換のために受けるが cloudflared のみ。
 """
 import os
 import pathlib
@@ -29,15 +29,15 @@ DATASET = "my-ollama-orcarouter-qwen38-27b"
 PATCH = "my-ollama-orcarouter-qwen38-27b-patch"
 
 TUNNEL = os.environ.get("STEP2_TUNNEL", "cloudflared").strip().lower()
-if TUNNEL not in ("cloudflared", "ngrok"):
-    raise SystemExit(f"STEP2_TUNNEL={TUNNEL!r} は未対応（cloudflared / ngrok）")
-IS_NGROK = TUNNEL == "ngrok"
+if TUNNEL != "cloudflared":
+    raise SystemExit(
+        f"STEP2_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
+        "（ngrok は 2026-11-01 に廃止。notes/url-publishing.md）")
 
 # 出力先・プロキシ置き場は __file__ 基準。cwd に依存させない。
 # （相対パスだとリポジトリ直下で走らせたときに別所へ生成される）
 HERE = pathlib.Path(__file__).resolve().parent
-OUT = str(HERE / ("step2-ngrok" if IS_NGROK else "step2") /
-          f"step2-orcarouter-qwen38-27b-{TUNNEL}.ipynb")
+OUT = str(HERE / "step2" / f"step2-orcarouter-qwen38-27b-{TUNNEL}.ipynb")
 
 # Basic 認証つきリバースプロキシ / チャット UI を notebook に埋め込む（base64）。
 # 単一のソースをそのまま使うので、notebook 側でコードを二重管理しない。
@@ -52,18 +52,9 @@ def _cell(name):
 
 
 # ── title ───────────────────────────────────────────────────
-cf_bullet = ("" if IS_NGROK else
-             "   - `my-cloudflared-bin`（cloudflared 40 MB）"
+cf_bullet = ("   - `my-cloudflared-bin`（cloudflared 40 MB）"
              "— 無いと毎回 GitHub から落とす")
 secret_note = (
-    """> ✅ **必要な Secrets**: `NGROK_TOKEN` のみ（必須）
-> `NGROK_DOMAIN` はノートに埋め込み済み → **毎回同じ URL**。
-> Secret に入れると上書きできる（未設定なら埋め込み値を使う）。
->
-> 🔓 **認証はありません**（URL を知れば誰でも使えます）。
-> 他人に使われたくないときは環境変数 `API_PASS` を設定してください
-> （proxy が Basic 認証を有効化します）。"""
-    if IS_NGROK else
     """> ✅ **Secrets の設定は不要です。**
 > cloudflared の quick tunnel はアカウント不要。authtoken も API キーも要りません。
 > 自動で発行される公開URLがそのままエンドポイントになります。
@@ -73,7 +64,8 @@ secret_note = (
 > （proxy が Basic 認証を有効化します）。
 >
 > ⚠ 公開URLは **実行のたびに変わります**（quick tunnel の仕様）。
-> 切れたらトンネルセルを再実行し、接続情報を取り直してください。""")
+> 切れたらトンネルセルを再実行し、接続情報を取り直してください。
+> 現在の URL はビーコン（`python3 -m cli beacon`）から読めます。""")
 
 TITLE = f"""# 🚀 Step 2: Ollama + {TUNNEL} 公開APIサーバー
 
@@ -85,7 +77,7 @@ TITLE = f"""# 🚀 Step 2: Ollama + {TUNNEL} 公開APIサーバー
 
 1. **Accelerator**: `GPU T4 x2` に設定
 2. **Internet**: `On` に設定
-3. **Add Data**: 以下の **{2 if IS_NGROK else 3}つ** を追加
+3. **Add Data**: 以下の **3つ** を追加
    - `{DATASET}`（モデル 16.5 GiB）
    - `{PATCH}`（ollama + llama-server + CUDA 1.45 GB）
 {cf_bullet}
@@ -121,7 +113,6 @@ SETTINGS = render_settings(CELLS_DIR / "00_settings.py", {
     "__CHAT_B64__": CHAT_SRC_B64,
     "__GIST_ID__": CFG["GIST_ID"],
     "__GIST_OWNER__": CFG["GIST_OWNER"],
-    "__NGROK_DOMAIN__": CFG["NGROK_DOMAIN"],
 })
 
 flow = Flow(
@@ -142,17 +133,13 @@ flow = Flow(
 flow.write(OUT)
 
 # ── kernel-metadata.json（push 用）────────────────────────────
-# トンネルごとに別 kernel として push できるよう、id と sources を切り替える。
-SLUG = ("step2-orcarouter-qwen38-27b-ngrok-fixed" if IS_NGROK
-        else "step2-orcarouter-qwen38-27b-cloudflared")
-sources = [f"yamahei21python/{DATASET}", f"yamahei21python/{PATCH}"]
-if not IS_NGROK:
-    sources.append("yamahei21python/my-cloudflared-bin")
+SLUG = "step2-orcarouter-qwen38-27b-cloudflared"
+sources = [f"yamahei21python/{DATASET}", f"yamahei21python/{PATCH}",
+           "yamahei21python/my-cloudflared-bin"]
 meta = {
     "id": f"yamahei21python/{SLUG}",
     # title は slug に解決できる必要がある（不一致だと push が 409 Conflict）
-    "title": (SLUG.replace("-", " ") if IS_NGROK
-              else "Step2 orcarouter qwen38 27b cloudflared"),
+    "title": "Step2 orcarouter qwen38 27b cloudflared",
     "code_file": pathlib.Path(OUT).name,
     "language": "python",
     "kernel_type": "notebook",

@@ -23,7 +23,8 @@ kc_load_config() {
 }
 kc_load_config
 
-KC_UA_HEADER="ngrok-skip-browser-warning: true"
+# ngrok のブラウザ警告ページを避けるための UA 偽装ヘッダは 2026-11-01 に
+# 廃止した（ngrok 自体を廃止したため）。cloudflared は素の UA を通す。
 KC_PROXY_PY="${SCRIPT_DIR}/kaggle/step2/auth_proxy.py"
 KC_CHAT_HTML="${SCRIPT_DIR}/llama-chat.html"
 
@@ -41,8 +42,7 @@ kc_require_kaggle() {
 
 kc_http_code() {  # $1=url $2=timeout(既定8)
   local c
-  c="$(curl -s -o /dev/null -w '%{http_code}' -m "${2:-8}" \
-        -H "${KC_UA_HEADER}" "$1" 2>/dev/null)"
+  c="$(curl -s -o /dev/null -w '%{http_code}' -m "${2:-8}" "$1" 2>/dev/null)"
   echo "${c:-000}"
 }
 
@@ -51,7 +51,7 @@ kc_http_code() {  # $1=url $2=timeout(既定8)
 # 会話できるかは /api/ps に size_vram > 0 のモデルが居るかで判定する。
 kc_model_ready() {  # $1=base url
   local body
-  body="$(curl -s -m 10 -H "${KC_UA_HEADER}" "$1/api/ps" 2>/dev/null)"
+  body="$(curl -s -m 10 "$1/api/ps" 2>/dev/null)"
   [[ -z "${body}" ]] && return 1
   [[ "${body}" == *'"models":[]'* ]] && return 1
   [[ "${body}" =~ '"size_vram":[1-9]' ]] && return 0
@@ -95,10 +95,33 @@ EOS
   return 1
 }
 
-# ngrok 無料枠はブラウザの HTML 取得に ERR_NGROK_6024 の警告ページを返す。
-# ヘッダ ngrok-skip-browser-warning を付けたリクエストは素通りするので、
-# ローカル中継にそのヘッダを肩代わりさせる。UI はローカルの llama-chat.html
-# を配る（上流から取ると push 済みの古い版が返ってくる）。
+# ---- 公開 URL の取得 ---------------------------------------
+# cloudflared の quick tunnel は URL が毎回変わる。その URL を「掲示板カーネル」
+# に書かせて読むのがビーコン（`notes/url-publishing.md`）。ngrok を 2026-11-01
+# に廃止してから、ここが URL の一次情報。**Secrets は要らない。**
+# 読めなければ空を返す（呼び出し側が Gist などに落ちる）。
+kc_beacon_url() {
+  local u
+  # `cli beacon` は 0=使える / 1=読めたが捨てた / 2=引けなかった。
+  # ok=false のときは URL を出さない（古い値・probe を掴まないため）。
+  u="$(python3 -m cli beacon --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+print(d.get("url", "") if d.get("ok") else "")
+' 2>/dev/null)"
+  # 想定ホスト以外は信用しない（前方一致だと
+  # `https://a.trycloudflare.com.evil.tld` を通してしまう）。
+  if [[ "${u}" =~ '^https://[a-z0-9-]+\.trycloudflare\.com/?$' ]]; then
+    printf '%s' "${u%/}"
+  fi
+}
+
+# ローカル中継。UI はローカルの llama-chat.html を配る（上流から取ると
+# push 済みの古い版が返ってくる）。上流は cloudflared の quick tunnel なので、
+# ヘッダの肩代わりは要らない（ngrok は 2026-11-01 に廃止）。
 # 成功時は KC_RELAY_PID に PID を入れて 0 を返す。
 kc_start_relay() {  # $1=upstream base url $2=port
   KC_RELAY_PID=""
@@ -110,7 +133,6 @@ kc_start_relay() {  # $1=upstream base url $2=port
   sleep 1
   python3 "${KC_PROXY_PY}" --port "$2" --upstream "$1" \
     --chat-html "${KC_CHAT_HTML}" \
-    --upstream-header "ngrok-skip-browser-warning=true" \
     >/tmp/kc-relay.log 2>&1 &
   KC_RELAY_PID=$!
   sleep 2

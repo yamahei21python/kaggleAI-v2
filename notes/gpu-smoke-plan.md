@@ -1,5 +1,11 @@
 # GPU スモーク計画（2026-10-31 以降）
 
+> ⚠ **この文書は 2026-11-01 に一部が古くなった。** ngrok を廃止したので、
+> 「#4 ngrok の実配線」は**やらない**（ビーコン + cloudflared が正しい組み合わせ。
+> `notes/url-publishing.md`）。ngrok 版のカーネルを指している行も、
+> いまは retired で push できない。読むときはその前提で。
+> 現在の手順は `README.md` の「GPU が要る」と `notes/operations.md`。
+
 > **カーネルは作成済み（2026-10-30）**。`--no-run`（Quick Save 相当）で version 1 を
 > 保存したので、GPU は消費していない。当日の手順・Secrets・判定は
 > `notes/gpu-run-sheet.md` にまとめてある。ここは「なぜその順か」の設計メモ。
@@ -25,7 +31,7 @@ GPU 時間を推論スタックの確認だけに使う。
 ## smoke モード
 
 `--smoke` を付けると生成物が「install → launch → `/v1/chat/completions` → 停止 → exit」に
-変わる（`SMOKE = True`）。省略されるのは **cloudflared / ngrok / Gist 公開 /
+変わる（`SMOKE = True`）。省略されるのは **cloudflared / Gist 公開 /
 keepalive ループ**の 3 つ。**auth_proxy は smoke でも起動する**（vLLM は proxy 経由で
 会話を確認するため。UI 配信も同じ経路）。LMDeploy / SGLang / EXL3 の smoke は
 推論サーバへ**直接**投げる（LMDeploy / SGLang は 8000、EXL3 の chat_server は 9931）。
@@ -35,7 +41,7 @@ smoke の対象は次の **9 カーネル**（`cli/build.py` の `SMOKE_KERNELS`
 | 系統 | カーネル |
 |---|---|
 | notebook | `exl3-serve` / `step2-lmdeploy-qwen38-27b-cloudflared` / `step2-sglang-qwen38-27b-cloudflared` / `step2-vllm-qwen38-27b-cloudflared` |
-| script | `step2-orcarouter-qwen38-27b-cloudflared-script` / `…-ngrok-script` / `step2-vllm-qwen38-27b-cloudflared-script` / `…-ngrok-script` / `llama-server-ngrok-script` |
+| script | `step2-orcarouter-qwen38-27b-cloudflared-script` / `step2-vllm-qwen38-27b-cloudflared-script`（ngrok 系と llama-server は退役） |
 
 それ以外は `--smoke` を拒否する。旧 script 3 系統（exl3 / lmdeploy / sglang）は
 `smoke_out` を持たず `--smoke` で同じディレクトリへ書くため対象外（`cli push --smoke`
@@ -90,11 +96,10 @@ notebook 版とセル列は同じだが、梱包（`main.py` 1 ファイル + ba
 |---|---|---|---|---|
 | 1 | Ollama | `step2-orcarouter-qwen38-27b-cloudflared-script` | Ollama GGUF | `stage=done` / `verify_direct.checks` が全 true / `stop_remaining=[]` |
 | 2 | vLLM | `step2-vllm-qwen38-27b-cloudflared-script` | vLLM AWQ + MTP | 同上（起動ラダーが script でも回るか） |
-| 3 | llama-server | `llama-server-ngrok-script` | llama-server 直起動 | 同上（`chmod +x` と `--spec-type`） |
+| 3 | ~~llama-server~~ | ~~`llama-server-ngrok-script`~~ | 退役（GPU カーネル無し） | — |
 
 3 本とも `--smoke` が使える（`smoke-<tunnel>/` へ別書きし、通常版を壊さない）。
-#3 は ngrok 版なので `NGROK_TOKEN` を Secrets に登録しておくこと
-（`NGROK_DOMAIN` は埋め込み既定値があるので任意）。
+**Secrets は要らない**（2026-11-01 に ngrok を廃止し、URL はビーコンが運ぶ）。
 
 ```bash
 python3 -m cli quota
@@ -102,7 +107,7 @@ python3 -m cli push step2-orcarouter-qwen38-27b-cloudflared-script --smoke --yes
 kaggle kernels output yamahei21python/step2-orcarouter-qwen38-27b-cloudflared-script -p out.script/
 ```
 
-`--smoke` は proxy / トンネル / Gist / keepalive を**省略**するので、#3 の ngrok
+`--smoke` は proxy / トンネル / Gist / keepalive を**省略**するので、#3 の
 実装そのものはここでは試されない（`result.json` の `tunnel` も出ない）。
 **この 3 回で確定するのは「骨格が Kaggle で起動して会話できる」ところまで**。
 
@@ -110,7 +115,7 @@ kaggle kernels output yamahei21python/step2-orcarouter-qwen38-27b-cloudflared-sc
 
 | # | 内容 | 回数 | 合格条件 | 失敗時の次手 |
 |---|---|---|---|---|
-| 4 | ngrok の**実配線** | 1 | `step2-orcarouter-qwen38-27b-ngrok-script` を `--smoke` **無し**で push。`url` が `https://<NGROK_DOMAIN>`、`tunnel == "ngrok"`、`ngrok_domain` あり → `/stop`（10〜15 分） | `ngrok.log` の authtoken エラーを見る |
+| 4 | ~~ngrok の実配線~~ | — | **廃止**（2026-11-01）。ビーコン + cloudflared に一本化したので、この枠は消えた | — |
 | 5 | keepalive / `/stop` / UI | 1 | 3 種のどれか 1 本が通ってから、配信カーネルをそのまま使う（下の「共通テスト」） | `keepalive.conf` の `RUN` / `DEADLINE` |
 | 6 | LMDeploy | 1 | `step2-lmdeploy-qwen38-27b-cloudflared` | `--backend pytorch` へ、`session_len` を 4096 に |
 | 7 | SGLang | 1 | `step2-sglang-qwen38-27b-cloudflared` | ~~`mem_fraction_static` を 0.6 に~~ → **不要。T4 では不可が確定**（WNA16 が sm80 必須。`notes/gpu-run-sheet.md` v4） |

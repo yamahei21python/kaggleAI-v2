@@ -25,33 +25,34 @@ def _mark(name):
     return _MARKS[name]
 
 # ---- cloudflared（Dataset キャッシュ優先）----
-if TUNNEL_KIND != "ngrok":
-    CF_PATH = kc_find_dataset("my-cloudflared-bin")
-    dst = os.path.join(BIN_DIR, "cloudflared")
-    src = None
-    for cand in (os.path.join(CF_PATH, "cloudflared"),
-                 os.path.join(CF_PATH, "bin", "cloudflared")):
-        if os.path.isfile(cand) and os.path.getsize(cand) >= MIN_SIZE:
-            src = cand
-            break
-    if src:
-        shutil.copy2(src, dst)
-        subprocess.run(["chmod", "+x", dst])
-        print(f"✅ cloudflared 復元: {src}")
-    elif not (os.path.isfile(dst) and os.path.getsize(dst) >= MIN_SIZE):
-        print("⬇️  cloudflared をダウンロード中...")
-        subprocess.run(
-            "curl -fsSL --connect-timeout 15 -o /usr/local/bin/cloudflared "
-            f"{kc_cloudflared_url()}"
-            " && chmod +x /usr/local/bin/cloudflared",
-            shell=True, check=False, timeout=300,
-        )
-    if not os.path.isfile(dst):
-        fail("cloudflared がありません（Dataset 未マウント / 取得失敗）")
-    r = subprocess.run([dst, "--version"], capture_output=True, text=True)
-    print((r.stdout or r.stderr).strip())
-    if r.returncode != 0:
-        fail("cloudflared の実行に失敗しました（実行ビット/Dataset を確認）")
+# ngrok は 2026-11-01 に廃止したので、トンネルの種類で分岐しない
+# （`notes/url-publishing.md`）。cloudflared は常に用意する。
+CF_PATH = kc_find_dataset("my-cloudflared-bin")
+dst = os.path.join(BIN_DIR, "cloudflared")
+src = None
+for cand in (os.path.join(CF_PATH, "cloudflared"),
+             os.path.join(CF_PATH, "bin", "cloudflared")):
+    if os.path.isfile(cand) and os.path.getsize(cand) >= MIN_SIZE:
+        src = cand
+        break
+if src:
+    shutil.copy2(src, dst)
+    subprocess.run(["chmod", "+x", dst])
+    print(f"✅ cloudflared 復元: {src}")
+elif not (os.path.isfile(dst) and os.path.getsize(dst) >= MIN_SIZE):
+    print("⬇️  cloudflared をダウンロード中...")
+    subprocess.run(
+        "curl -fsSL --connect-timeout 15 -o /usr/local/bin/cloudflared "
+        f"{kc_cloudflared_url()}"
+        " && chmod +x /usr/local/bin/cloudflared",
+        shell=True, check=False, timeout=300,
+    )
+if not os.path.isfile(dst):
+    fail("cloudflared がありません（Dataset 未マウント / 取得失敗）")
+r = subprocess.run([dst, "--version"], capture_output=True, text=True)
+print((r.stdout or r.stderr).strip())
+if r.returncode != 0:
+    fail("cloudflared の実行に失敗しました（実行ビット/Dataset を確認）")
 
 # ---- vLLM ----
 # wheelhouse Dataset（vllm 0.32.0 + 依存 wheel / 3.25 GB）を 2 つに分けて持つ:

@@ -15,7 +15,6 @@ def _req(url, timeout):
 
 
 def _post(url, payload, timeout=600):
-    # ngrok のブラウザ警告ページを踏まないヘッダは kc_post_json が付ける。
     # IPv4 フォールバックも効かせる（Kaggle VM は AAAA だけ返すことがある）。
     return kc_post_json(url, payload, timeout=timeout, opener=kc_urlopen_v4,
                         headers={"Authorization": AUTH} if AUTH else None)

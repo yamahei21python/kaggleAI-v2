@@ -71,11 +71,13 @@ smoke は auth_proxy / cloudflared / Gist / keepalive を**省略**し、エン�
 これで 6 エンジン（Ollama / llama-server / vLLM / ExLlamaV3 / LMDeploy / SGLang）が
 **同じ `result.json` の形**を返す。
 
-**トンネルも骨格が両方持つ**（2026-10-30 解消）。`kbuild/serve_script.py` は
-`start_cloudflared()` / `start_ngrok()` を持ち、`tunnel=`（既定 `cloudflared`）で
-選ぶ。`start_tunnel()` が分岐する唯一の場所で、`data["tunnel"] = TUNNEL` により
+**トンネルは cloudflared だけ**（2026-11-01。それまでは ngrok と両対応だった）。
+`kbuild/serve_script.py` の `start_tunnel()` が唯一の分岐点で、今は
+`start_cloudflared()` を呼ぶだけ。`data["tunnel"] = TUNNEL` により
 `result.json` の `tunnel` は**実際に張った方**になる（設定セルの `TUNNEL_KIND` より
-骨格の実装が優先）。`NGROK_TOKEN` は Secret、`NGROK_DOMAIN` は埋め込み既定値。
+骨格の実装が優先）。ngrok を落とした理由は `notes/url-publishing.md`:
+`NGROK_TOKEN` を Secrets から読めない（専用アカウント）うえ、固定ドメインの
+必要性自体がビーコンで消えた。
 
 ## 前提
 

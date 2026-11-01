@@ -53,9 +53,27 @@ def test_launchers_default_ports():
     llama = _read("run-llama-server.command")
     assert f'LLAMA_PORT:-{constants.CHAT_PORT}' in llama
     assert f'LLAMA_UI_PORT:-{constants.UI_PORT}' in llama
-    relay = _read("run-kaggle-chat.command")
+    # 中継を持つのは run-ai.command（run-kaggle-chat は ngrok の警告ページ
+    # 回避のためだけに中継を立てていたので、2026-11-01 に落とした）。
+    relay = _read("run-ai.command")
     assert f'KC_RELAY_PORT:-${{CFG_RELAY_PORT:-{constants.RELAY_PORT}}}' in relay
 
 
 def test_ui_default_endpoint():
     assert f"127.0.0.1:{constants.CHAT_PORT}/v1" in _read("llama-chat.html")
+
+
+def test_launchers_have_no_ngrok_left():
+    """ランチャーと config.env に ngrok の配線が残っていないこと。
+
+    ngrok は 2026-11-01 に廃止した（`notes/url-publishing.md`）。固定ドメインを
+    前提にした分岐が残っていると、**存在しない URL を開こうとする**か、
+    retired にしたカーネルを push しようとする。どちらも黙って失敗するので、
+    名前そのものを禁止する。URL はビーコン（`kc_beacon_url`）から読む。
+    """
+    for name in ("run-kaggle-chat.command", "run-ai.command"):
+        src = _read(name)
+        for bad in ("CFG_NGROK_DOMAIN", "CFG_KERNEL_SLUG_NGROK",
+                    "step2-ngrok", "KC_TUNNEL:-ngrok"):
+            assert bad not in src, f"{name} に {bad} が残っている"
+    assert "NGROK" not in _read("config.env")

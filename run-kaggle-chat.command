@@ -11,12 +11,10 @@
 # 環境変数 API_PASS を設定すると Basic 認証が有効になる。
 #
 # 環境変数:
-#   KC_TUNNEL=ngrok|cloudflared   既定 ngrok（URL 固定・待たされない）
-#   KC_DOMAIN=<host>              ngrok の固定ドメインを上書き（既定は config.env）
 #   KC_TIMEOUT=900                起動待ちの上限秒
 #   KC_NO_OPEN=1                  ブラウザを開かない
 #   KC_FORCE_PUSH=1               既に動いていても push し直す
-#   KC_RELAY_PORT=19950           ngrok 警告ページ回避用のローカル中継ポート
+#   KC_TUNNEL=cloudflared         互換のため受けるが、値は 1 つだけ
 set -uo pipefail
 
 SCRIPT_DIR="${0:A:h}"
@@ -24,23 +22,22 @@ cd "${SCRIPT_DIR}" || exit 1
 source "${SCRIPT_DIR}/lib/launcher-common.zsh"
 kc_require_kaggle || exit 1
 
-TUNNEL="${KC_TUNNEL:-ngrok}"
-DOMAIN="${KC_DOMAIN:-${CFG_NGROK_DOMAIN}}"
+# トンネルは cloudflared の quick tunnel だけ。ngrok は 2026-11-01 に廃止した
+# （`notes/url-publishing.md`）。アカウントも authtoken も要らない代わりに
+# URL が毎回変わるので、取得はビーコン経由（kc_beacon_url）。
+TUNNEL="${KC_TUNNEL:-cloudflared}"
+if [[ "${TUNNEL}" != "cloudflared" ]]; then
+  echo "KC_TUNNEL=${TUNNEL} は未対応（cloudflared のみ）" >&2
+  exit 1
+fi
+KERNEL_DIR="kaggle/step2"
+SLUG="${CFG_KERNEL_SLUG_CLOUDFLARED}"
 TIMEOUT="${KC_TIMEOUT:-900}"
-RELAY_PORT="${KC_RELAY_PORT:-${CFG_RELAY_PORT:-19950}}"
-
-case "${TUNNEL}" in
-  ngrok)       KERNEL_DIR="kaggle/step2-ngrok"
-               SLUG="${CFG_KERNEL_SLUG_NGROK}" ;;
-  cloudflared) KERNEL_DIR="kaggle/step2"
-               SLUG="${CFG_KERNEL_SLUG_CLOUDFLARED}" ;;
-  *) echo "KC_TUNNEL=${TUNNEL} は未対応（ngrok / cloudflared）" >&2; exit 1 ;;
-esac
 
 # ---- 二重起動の防止 ----
 # ダブルクリック 2 回で両方が「未起動」と判断して push すると、
 # GPU セッション 2 枠を食ったうえ stop 手段が無い（CLI に無い）ので詰む。
-# ロックはトンネル共通（ngrok と cloudflared を同時に push しても同じ枠を奪い合う）。
+# ロックは起動処理の共通（二重 push で GPU 2 枠を食うのを防ぐ）。
 LOCK="/tmp/kc-chat.lock"
 if ! mkdir "${LOCK}" 2>/dev/null; then
   # 異常終了（SIGKILL 等）で残ったロックは 30 分で無効とみなす。
@@ -60,25 +57,8 @@ trap 'rmdir "${LOCK}" 2>/dev/null' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-# ngrok 無料枠はブラウザ UA の HTML 取得に警告ページを挟む。
-# 502/503（proxy 未起動）と混同しないよう、ngrok 固有の痕跡で判定する。
-needs_visit() {  # $1=base url
-  local ua body
-  ua="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
-  body="$(curl -s -m 6 -A "${ua}" "$1/" 2>/dev/null | head -c 4000)"
-  [[ "${body}" != *"Kaggle Chat"* && "${body}" == *"ngrok"* ]]
-}
-
 open_ui() {  # $1=base url
   local ui_url="$1/"
-  if [[ "${TUNNEL}" == "ngrok" ]] && needs_visit "$1"; then
-    if kc_start_relay "$1" "${RELAY_PORT}"; then
-      ui_url="http://127.0.0.1:${RELAY_PORT}/"
-      echo ""
-      echo "  ℹ ngrok の警告ページを回避するため、ローカル中継を立てました。"
-      echo "    中継 PID: ${KC_RELAY_PID}（止めるとき: kill ${KC_RELAY_PID}）"
-    fi
-  fi
 
   echo ""
   echo "============================================================"
@@ -104,14 +84,14 @@ gist_url() {
 echo "▶ tunnel=${TUNNEL}"
 BASE=""
 
-# ---- ngrok: 固定ドメイン ----
-if [[ "${TUNNEL}" == "ngrok" ]]; then
-  BASE="https://${DOMAIN}"
-  hz="$(kc_http_code "${BASE}/healthz")"
-  tags="$(kc_http_code "${BASE}/api/tags")"
-  echo "   状態: healthz=${hz} tags=${tags}"
-
-  if [[ "${KC_FORCE_PUSH:-0}" != "1" && "${hz}" == "200" ]]; then
+# ---- 既に動いていないか ----
+# 固定 URL が無くなっても、ビーコンが「今の URL」を教えてくれるので
+# push の前に生存確認ができる（ngrok 版が固定ドメインでやっていたこと）。
+# ここを飛ばすと、動いているカーネルの隣で 2 本目を push して GPU 枠を
+# 食う（`kaggle kernels stop` は CLI に無いので詰む）。
+if [[ "${KC_FORCE_PUSH:-0}" != "1" ]]; then
+  BASE="$(kc_beacon_url)"
+  if [[ -n "${BASE}" ]] && [[ "$(kc_http_code "${BASE}/healthz")" == "200" ]]; then
     if kc_model_ready "${BASE}"; then
       echo "✅ 既に起動済み・会話可能（push しない）"
     else
@@ -123,6 +103,7 @@ if [[ "${TUNNEL}" == "ngrok" ]]; then
     open_ui "${BASE}"
     exit 0
   fi
+  BASE=""      # 死んでいた / 古い値。push して取り直す
 fi
 
 # ---- push ----
@@ -136,8 +117,11 @@ tries=0
 while (( $(date +%s) < deadline )); do
   tries=$(( tries + 1 ))
 
-  if [[ "${TUNNEL}" == "cloudflared" ]]; then
-    BASE="$(gist_url)"
+  # URL の出所は 2 つ。ビーコンが本命（Secrets 不要）、Gist は旧経路。
+  # 一度取れたら覚えておく（ビーコンは push 直後まだ空のことがある）。
+  if [[ -z "${BASE}" ]]; then
+    BASE="$(kc_beacon_url)"
+    [[ -n "${BASE}" ]] || BASE="$(gist_url)"
   fi
 
   if [[ -n "${BASE}" ]]; then
