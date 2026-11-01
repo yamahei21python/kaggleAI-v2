@@ -10,7 +10,7 @@ GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定し�
 | ファイル | 役割 | 本数 |
 |---|---|---|
 | `tests/test_gpu_pitfalls.py` | **症状 → 防御**の一覧（この文書の表） | 23 |
-| `tests/test_vllm_cells.py` | vLLM の**セル内部**の契約（順序・版の出どころ・可観測性） | 24 |
+| `tests/test_vllm_cells.py` | vLLM の**セル内部**の契約（順序・版の出どころ・可観測性） | 27 |
 | `tests/test_serve_script_guards.py` | **全エンジン共通**の足場（`wait_http` / `find_model` / `stage_env` / `ENGINE_PATTERN` / `PIP_STEPS`） | 17 |
 | `tests/test_startup_timing.py` | **計測**（節目の解釈・timings の合流・`cli timings`） | 21 |
 | `tests/test_cpu_probes.py` | CPU プローブ（GPU 0 秒）の契約 | 25 |
@@ -22,7 +22,7 @@ GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定し�
 | その他（`test_serve_notebook` / `test_step2_builder` / `test_runtime` / `test_constants` / `test_exl3_*` / `test_pinned_wheel` / `test_kbuild` / `test_secrets` / `test_notebooks` / `test_step2_proxy`） | — | 41 |
 | `tests/_cells.py` | セルから関数を切り出す共通ヘルパー（規則はここ 1 箇所） | — |
 
-実行: `python3 -m pytest tests/ -q`（**258 本**）。
+実行: `python3 -m pytest tests/ -q`（**261 本**）。
 落とし穴の一覧だけなら `python3 -m pytest tests/test_gpu_pitfalls.py -q`。
 
 **同じアサーションを 2 箇所に置かない**。整理のとき、`torchaudio の版` を
@@ -60,6 +60,7 @@ GPU 実行で**実際に踏んだ**不具合を、1 件 1 テストで固定し�
 | 27 | **存在しない Dataset を `dataset_sources` に入れても実行は止まらない**。`/kaggle/input/<slug>` が無いだけなので、`KC_WARM_CACHE=1` が「なし」と出して続行し、`cache` 実験が **baseline とまったく同じ数字**を出す（＝偽陰性）。実測 2026-11-01: `vllm-warm-cache` は未作成だった | `KC_WARM_CACHE` を 3 値にし、実験は `require`（無ければ `RuntimeError`）。`--no-run` で push すると `not valid dataset sources` の警告が出るので、Quick Save を警告チェックに使う | `test_vllm_cells.py::test_warm_cache_require_fails_instead_of_silently_degrading` / `test_vllm_playground.py::test_cache_experiment_requires_the_dataset` |
 | 28 | **起動待ちが無言だと「遅い」と「固まった」を区別できない**。実測 2026-11-01 exl3 v3: 1800 秒待って `chat_server.log` が **0 バイト**（`--no-progress` で進捗を切り、`print` は完走時の 1 行だけ）。手がかりゼロなので次の手が「もう 1 回回す」になり、1 往復 30 分を捨てる | 待機中は 30 秒ごとに `kc_sample`（`read_bytes` が主役）で観測し、`load_watch` に残す。`read_mib` が止まっていれば停止、増えていれば遅いだけ | `test_runtime.py::test_watch` / `test_exl3_build.py`（呼び出しと `stop()` の 2 点） |
 | 29 | **1 回の成功を「動く」と読まない**。ExLlamaV3 は同じモデル・同じ wheel・同じ T4 x2 で v2 が 229 秒、v3 が 1800 秒超（起動せず）。1 回の成功は再現性の証拠にならない | 台帳には「T4 で動くのは確実／安定性は未確定」と分けて書く。**同じ条件で 2 回通るまで既定に昇格しない** | テストにしない（実行の履歴。`notes/engine-rollout.md`） |
+| 30 | **tar はあるが中身が薄い**ケースを「キャッシュは効かない」と誤読する。v15 の tar は 30 エントリで `chunk_o` / `chunk_delta_h` が無い（profile run に未到達）。復元すると一部だけ当たって「少し効いた」ように見える | `require` では復元後のエントリ数が下限（50）未満なら落とす。復元数は `timings.warm_cache_restore.entries` にも残す | `test_vllm_cells.py::test_warm_cache_require_rejects_an_incomplete_tar` / `..._accepts_a_complete_tar_and_records_the_count` |
 
 
 ## 既に別ファイルで固定済みのもの

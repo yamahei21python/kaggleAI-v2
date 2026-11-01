@@ -289,8 +289,10 @@ v15 が残した tar（23.9 MB）は**不完全**なので使わない。重み�
 もので、`chunk_o` / `chunk_delta_h` が入っていない。起動に成功した回から採り直す。
 
 1. `KC_EXPERIMENT=baseline` を実行し、`warm-cache.tar` を成果物から取得
-2. 中身を検品: `chunk_o` / `chunk_delta_h` があり、エントリが 200 前後あること
-   （30 のままなら profile run に届いていない＝また不完全）
+2. 中身を検品: `chunk_o` / `chunk_delta_h` があり、エントリが 100〜200 あること
+   （30 のままなら profile run に届いていない＝また不完全）。
+   **`require` で回す限りこの検品は自動で効く**（復元後のエントリ数が 50 未満なら
+   `RuntimeError`。2026-11-01 追加）が、Dataset を作る前に手で見ておくほうが安い
 3. `datasets/warm-cache/` に tar を置き `kaggle datasets create -p datasets/warm-cache`
 4. `--no-run` で playground を保存し直し、`not valid dataset sources` が消えたことを確認
 5. `KC_EXPERIMENT=cache` で実行

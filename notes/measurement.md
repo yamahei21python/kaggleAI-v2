@@ -27,6 +27,7 @@ GPU を回すたびに「速くなった / 遅くなった」を**数字で**言
 | `triton_cache_before` | 起動前の `~/.triton/cache` のエントリ数とパス | — |
 | `triton_cache` | 起動後との比較（`new_entries` / `reused_pct` / `entries_after`） | — |
 | `warm_cache` | 退避した tar（`path` / `bytes` / `seconds` / `skipped` の理由） | 0.1s |
+| `warm_cache_restore` | 復元の結果（`mode` / `restored` / `tar` / `mib` / **`entries`** / `seconds`） | 0.1s |
 | `load_watch` | 起動待ちの間の観測（30 秒ごとの `rss_mib` / `read_mib` / `char_mib` / `vram_mib`） | 30s |
 
 `triton_cache.new_entries` は**「キャッシュが当たったか」の判定値**。
@@ -46,11 +47,19 @@ GPU を回すたびに「速くなった / 遅くなった」を**数字で**言
 |---|---|---|
 | `0` | 復元しない（対照） | `warm_cache.path` が無く、`triton_cache_before.entries` は 0 |
 | `1` | あれば復元、無ければ続行 | 「ℹ warm cache なし」が出ていれば**復元していない**。`triton_cache_before.entries` が 0 なら baseline と同じ条件 |
-| `require` | 無ければ `RuntimeError` | **完走した時点で「復元された」ことが保証される** |
+| `require` | 無ければ `RuntimeError` | **完走した時点で「復元された」ことが保証される**。加えて `entries` が下限（50）未満なら落ちる |
 
 `require` を使う理由は、`1` のときに「Dataset 未作成」「tar が空」「キー不一致」が
 すべて**同じ見た目**（373 秒が戻るだけ）になり、効かなかったのか準備が無かったのか
 区別できないこと。`require` は前者 2 つを実行前に潰す。
+
+**`require` は 4 つ目も潰す（2026-11-01 追加）: tar が不完全な場合。**
+v15 の tar は 30 エントリ / 23.9 MB で、373 秒の主役である `chunk_o` /
+`chunk_delta_h` が入っていなかった（重みロード中に落ちた回のもので、profile run に
+到達していない）。これを復元すると**一部だけ当たって「少し効いた」ように見える**ので、
+`require` では復元後のエントリ数が 50 未満なら落とす。50 は実測 30（不完全）と
+見込み 100〜200（完全）の間に置いた経験値で、厳密な判定ではない
+（誤検知が嫌なら `KC_WARM_CACHE=1` でこの検査だけ外せる）。
 
 残るのはキー不一致だけ。これは `triton_cache.new_entries` が減らないことで判る
 （`reused_pct` が低い）。**「入れた」と「当たった」は別**。
