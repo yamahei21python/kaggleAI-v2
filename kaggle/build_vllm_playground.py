@@ -114,6 +114,11 @@ EXPERIMENTS = {
     #   試行の上限は `min(ATTEMPT_TIMEOUT, 残予算)` なので、総予算だけ上げて
     #   `ATTEMPT_TIMEOUT` を 4,200 に残すと、試行 1 は**まったく同じ秒数**で
     #   切られる（`03_vllm_serve.py` の `_tmo`）。
+    # ノードの GCSFUSE 実効速度を測るだけ（install / 起動はしない）。
+    # 10 回まわして「遅いノードを弾けるか」を実測するための実験。
+    "probe": (
+        "起動前 64 MiB probe のみ（ノード速度の分布を測る）",
+        {"KC_PROBE_ONLY": "1", "KC_PREWARM": "0", "KC_WARM_CACHE": "0"}),
     "baseline_long": (
         "baseline と同構成・起動予算だけ 7,000 秒",
         {"KC_PREWARM": "0", "KC_WARM_CACHE": "0",

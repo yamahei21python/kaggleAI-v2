@@ -233,3 +233,109 @@ if "config.json" not in _files:
     fail("config.json が Dataset 直下にありません（Add Data を確認）")
 if "model.safetensors" not in _files:
     fail("model.safetensors が Dataset 直下にありません（Add Data を確認）")
+
+
+# ---- 起動前の I/O probe（ノードの実効速度を測る）--------------------
+# 同じコードでも重みロードが 1,304〜6,128 秒と 4.7 倍振れる（notes §25）。
+# 差の大半は**ノードの GCSFUSE 実効速度**で、こちらからは選べない。
+# そこで起動前に 64 MiB を 1 本で逐次読みし、19.0 GiB を割って予算に
+# 収まるかを見る。遅いノードを引いた回に 100 分焼かず、30 秒で諦めるため。
+#
+# `KC_PROBE_ONLY=1` なら**計測だけして終了**する（install の 270 秒も払わない）。
+# 10 回まわして「速いノード / 遅いノード」をどれだけ弾けるかの実測に使う。
+def _kc_probe_safetensors():
+    """Dataset 直下の `.safetensors` を (合計バイト, 最大ファイル) で返す。"""
+    total, biggest = 0, (0, "")
+    try:
+        names = sorted(os.listdir(MODEL_SRC))
+    except OSError:
+        return 0, (0, "")
+    for fn in names:
+        if not fn.endswith(".safetensors"):
+            continue
+        p = os.path.join(MODEL_SRC, fn)
+        try:
+            size = os.path.getsize(p)
+        except OSError:
+            continue
+        total += size
+        if size > biggest[0]:
+            biggest = (size, p)
+    return total, biggest
+
+
+def _kc_probe_io(mib=64):
+    """最大の safetensors の末尾を `mib` MiB 読んで実効速度を返す（1 本）。"""
+    import time
+
+    total, (size, path) = _kc_probe_safetensors()
+    if not path:
+        return {"ok": False, "why": "safetensors が無い"}
+    n = min(int(mib) * 2**20, size)
+    off = max(0, size - n)                 # 末尾（本読みと窓をずらす）
+    t0 = time.time()
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            got = len(os.pread(fd, n, off))
+        finally:
+            os.close(fd)
+    except OSError as e:
+        return {"ok": False, "why": f"{type(e).__name__}: {e}"}
+    dt = time.time() - t0
+    if not got or dt <= 0:
+        return {"ok": False, "why": "0 バイト"}
+    rate = got / 2**20 / dt
+    projected = total / 2**20 / rate
+    limit = int(os.environ.get("KC_PROBE_LIMIT_S", "6400"))
+    return {
+        "ok": True,
+        "file": os.path.basename(path),
+        "read_mib": round(got / 2**20, 1),
+        "seconds": round(dt, 3),
+        "mib_s": round(rate, 2),
+        "total_mib": round(total / 2**20, 1),
+        "projected_s": round(projected),
+        # 重みロード以外（install / compile / capture）に約 900 秒みる
+        "verdict": "pass" if projected + 900 <= limit else "reject",
+        "limit_s": limit,
+        "mem_available_mib": None,
+    }
+
+
+def _kc_probe_report(rec):
+    if not rec.get("ok"):
+        print(f"🔎 probe 失敗: {rec.get('why')}")
+        return
+    print(f"🔎 ノード probe: {rec['read_mib']} MiB / {rec['seconds']}s = "
+          f"**{rec['mib_s']} MiB/s**")
+    print(f"   19.0 GiB 相当 {rec['total_mib']} MiB → 重み {rec['projected_s']} 秒"
+          f"（上限 {rec['limit_s']} 秒 + 固定 900 秒） → {rec['verdict'].upper()}")
+    print("PROBE_JSON " + json.dumps(rec, ensure_ascii=False))
+
+
+def _kc_probe_mem_mib():
+    """`MemAvailable`（MiB）。03 の `_mem_info` は**まだ定義されていない**ので使わない。"""
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as _mf:
+            for _ln in _mf:
+                if _ln.startswith("MemAvailable:"):
+                    return int(_ln.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+_KC_PROBE = _kc_probe_io()
+_KC_PROBE["mem_available_mib"] = _kc_probe_mem_mib()
+_kc_probe_report(_KC_PROBE)
+kc_save_timings({"io_probe": _KC_PROBE})
+try:
+    with open("/kaggle/working/probe.json", "w", encoding="utf-8") as _f:
+        json.dump(_KC_PROBE, _f, ensure_ascii=False, indent=2)
+except OSError as _e:
+    print(f"⚠ probe.json を書けません: {_e}")
+
+if os.environ.get("KC_PROBE_ONLY", "").strip().lower() not in ("", "0", "false", "no"):
+    print("⏹ KC_PROBE_ONLY=1 → 計測だけして終了（install 以降は走らせない）")
+    raise SystemExit(0)

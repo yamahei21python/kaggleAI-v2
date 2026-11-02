@@ -106,11 +106,18 @@ def test_every_experiment_declares_both_knobs():
     mod = _module()
     assert set(mod.EXPERIMENTS) == {
         "baseline", "prewarm_on", "cache", "force_first",
-        "baseline_long", "prefetch1"}, mod.EXPERIMENTS
+        "baseline_long", "prefetch1", "probe"}, mod.EXPERIMENTS
     for name, (desc, env) in mod.EXPERIMENTS.items():
         assert "KC_PREWARM" in env, f"{name} が KC_PREWARM を明示していない"
         assert "KC_WARM_CACHE" in env, f"{name} が KC_WARM_CACHE を明示していない"
         assert desc, f"{name} に説明が無い"
+
+    # `probe` だけが計測で打ち切る。他は本番と同じく install まで走る。
+    for name, (_, env) in mod.EXPERIMENTS.items():
+        if name == "probe":
+            assert env.get("KC_PROBE_ONLY") == "1"
+        else:
+            assert "KC_PROBE_ONLY" not in env, f"{name} が計測だけで終わる"
 
 
 def test_baseline_long_only_moves_the_budget():
