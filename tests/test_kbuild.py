@@ -3,7 +3,7 @@ import json
 import pathlib
 import tempfile
 
-from kbuild import embed, metadata, pack_nb, pack_script
+from kbuild import embed, metadata, pack_nb, pack_script, placeholders
 
 
 def check(cond, msg):
@@ -65,3 +65,51 @@ def test_kbuild():
         import base64
         check(base64.b64decode(embed.b64_file(blob)) == bytes(range(256)),
               "base64 往復")
+
+
+def test_placeholders_guard():
+    """置換漏れ（`__NAME__` の残り）を書き出し口で落とす。
+
+    2026-11-02 まで、ビルダーの `str.replace` が漏れても生成物は静かに
+    通っていた。`KAGGLE_OWNER = "__KAGGLE_OWNER__"` のような残骸は
+    ビルドも構文検査も通り、GPU を掴んだあとに初めて壊れる。
+    """
+    # 拾うのは大文字始まりの dunder だけ（`__all__` は対象外）
+    check(placeholders.leftovers('X = "__MODEL__"') == ["MODEL"], "検出")
+    check(placeholders.leftovers("__all__ = []\n__init__ = 1") == [],
+          "小文字の dunder を拾っている")
+    check(placeholders.leftovers("") == [], "空文字")
+
+    # どのトークンが残ったかを名前で言う
+    try:
+        placeholders.check('a = "__A__"\nb = "__B__"', "どこか")
+    except ValueError as e:
+        msg = str(e)
+        check("__A__" in msg and "__B__" in msg, f"トークン名が無い: {msg}")
+        check("どこか" in msg, f"場所が無い: {msg}")
+        check("置換漏れ" in msg, f"原因が読めない: {msg}")
+    else:
+        raise AssertionError("残骸を検出できない")
+
+    # notebook: セル番号つきで落ちる
+    try:
+        pack_nb.notebook([("code", "ok = 1\n"),
+                          ("code", 'SRC = "__DATASET__"\n')])
+    except ValueError as e:
+        check("セル 1" in str(e), f"セル番号が無い: {e}")
+    else:
+        raise AssertionError("notebook の残骸を検出できない")
+
+    # script: 落ちたときは main.py を書かない（半端な生成物を残さない）
+    meta = metadata.base(
+        id="owner/x", title="x", code_file="main.py",
+        kernel_type="script", gpu=False)
+    with tempfile.TemporaryDirectory(prefix="kbuild-ph-") as tmp:
+        out = pathlib.Path(tmp) / "kernel"
+        try:
+            pack_script.write(out, 'N = "__SERVED__"\n', meta)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("script の残骸を検出できない")
+        check(not (out / "main.py").exists(), "落ちたのに main.py を書いている")

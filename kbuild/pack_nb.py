@@ -1,11 +1,27 @@
 """notebook の組み立て。nbformat_minor=5 では cell id が必須ではないが、
 一部のビルダーは `cell-NN` を付けて生成しているので切り替えられるようにする。
+
+**書き出しの直前に `placeholders.check` を通す**（置換漏れを GPU の前に落とす）。
 """
 import json
 import pathlib
 
+from . import placeholders
+
+
+def _check_cells(cells) -> None:
+    for i, c in enumerate(cells):
+        if isinstance(c, dict):
+            src = c.get("source") or ""
+            if isinstance(src, list):
+                src = "".join(src)
+        else:
+            src = c[1]
+        placeholders.check(src, f"セル {i}")
+
 
 def notebook(cells, language_version: str = "3.10.0", cell_ids: bool = False) -> dict:
+    _check_cells(cells)
     built = []
     for i, (kind, source) in enumerate(cells):
         cell = {"cell_type": kind}
@@ -34,6 +50,7 @@ def notebook(cells, language_version: str = "3.10.0", cell_ids: bool = False) ->
 
 def notebook_from_cells(cells, language_version: str = "3.10.0") -> dict:
     """既に dict で組み立て済みの cells を notebook に包む。"""
+    _check_cells(cells)
     return {
         "cells": cells,
         "metadata": {

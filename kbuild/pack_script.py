@@ -2,7 +2,7 @@
 import pathlib
 import textwrap
 
-from . import metadata
+from . import metadata, placeholders
 
 
 def wrap_cell(path, header: str, tail: str = "", globals_=()) -> str:
@@ -71,6 +71,7 @@ def from_cells(cells, header: str = "", footer: str = "") -> str:
 
 def write(out_dir, body: str, meta: dict, newline_meta: bool = True) -> None:
     out_dir = pathlib.Path(out_dir)
+    placeholders.check(body, f"{out_dir}/main.py")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "main.py").write_text(body, encoding="utf-8")
     metadata.write(out_dir / "kernel-metadata.json", meta, newline=newline_meta)
