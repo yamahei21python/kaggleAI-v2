@@ -24,25 +24,53 @@ conf の読み方 / 期限判定）は**同じ関数を呼んでいる**ので�
 | 疎通判定 | `verify.py` の `_judge`（SKIP は失敗に数えない） | `verify()` 内の `judge` | **同じ契約**（SKIP の扱いを含む） |
 | エンジン確認項目 | `engine_checks(judge, retry, url)` | `engine_checks(judge, retry, base, auth, direct)` | 引数が 2 個多い（smoke 用の `direct`） |
 | keepalive の延長 | conf の mtime 変化で延長（60 秒周期） | `read_conf()` を 20 秒周期で読む | 同等（周期が違う） |
-| **トンネル監視** | 60 秒ごとに `/healthz` を叩き、`tunnel_dead` を数える | **起動時に 1 回だけ**（`wait_public`） | **差あり** |
-| **トンネル再起動** | 死んだら 1 回だけ再起動し、新 URL を再公開 | **無い** | **差あり** |
-| keepalive の証跡 | `keepalive.txt`（毎分の状態 + 判定） | `result.json` の `stopped_by` のみ | **差あり** |
-| 後片付けの証跡 | `cleanup.txt` | ログ出力のみ | 差（軽微） |
+| トンネル監視 | 10 分ごとに `/healthz` を叩き、`tunnel_dead` を数える | `loop()` が `TUNNEL_CHECK_EVERY` 周ごとに同じことをする | **同等（2026-11-02 に追加）** |
+| トンネル再起動 | 死んだら 1 回だけ再起動し、新 URL を再公開 | `restart_tunnel()` を 1 回だけ | **同等（2026-11-02 に追加）** |
+| keepalive の証跡 | `keepalive.txt`（毎分の状態 + 判定） | `save_evidence()` が同じ名前で出す | **同等（2026-11-02 に追加）** |
+| 後片付けの証跡 | `cleanup.txt` | `save_evidence()` が同じ名前で出す | **同等（2026-11-02 に追加）** |
 | smoke / batch | 無い（別カーネル） | `SMOKE` / `SERVE=False` で分岐 | script だけにある |
 
-## いま効いている差: script 版は公開 URL の失効に気づかない
+## 直した差: script 版も公開 URL の失効に気づく（2026-11-02）
 
-quick tunnel の URL は**実行中でも失効しうる**（notebook 版はそのために
-`TUNNEL_CHECK_EVERY` ごとの `/healthz` と 1 回限りの再起動を持っている）。
-script 版は起動時の `wait_public()` 1 回きりなので、
+quick tunnel の URL は**実行中でも失効しうる**。notebook 版はそのために
+`TUNNEL_CHECK_EVERY` ごとの `/healthz` と 1 回限りの再起動を持っていたが、
+script 版は起動時の `wait_public()` 1 回きりで、`loop()` はエンジンの
+`poll()` しか見ていなかった。結果として
 
-- 途中でトンネルが死んでも `loop()` はエンジンの `poll()` しか見ない
-- 結果として `result.json` は `ok: true` のまま、外からは繋がらない
+- 途中で URL が失効しても `loop()` は走り続ける
+- `result.json` は `ok: true` のまま、外からは繋がらない
 - `url.txt` / Gist / ビーコンは失効 URL を指したまま
 
-本番（`step2-vllm-qwen38-27b-cloudflared-script`）は script 版なので、
-これは**運用中の穴**。GPU を使わずに直せる（制御の流れだけ）が、
-`loop()` の戻り値の意味が増えるので、直したら 1 往復で確認が要る。
+本番は script 版なので、これは**運用中の穴**だった。次の 3 つを入れて閉じた。
+
+| 追加 | 中身 |
+|---|---|
+| `loop(procs, url)` | 20 秒周期。トンネルの `poll()` を見て、死んでいたら 1 回だけ張り直す。30 周（= 600 秒 = 10 分）ごとに `_public_health(url)` を叩き、失敗を `data["tunnel_dead"]` に数える |
+| `restart_tunnel(procs)` | `pkill -x cloudflared` → `start_cloudflared()` → `publish_url(new_url)`。**公開に失敗しても張り直しは捨てない**（トンネルは生きているため） |
+| `save_evidence()` | `save()` のたびに `keepalive.txt`（ヘッダ + 毎周期の行）と `cleanup.txt`（`engine_cleanup` / `leftover`）を書き直す |
+
+`run()` は `loop()` のあと `tunnel_dead >= 2` なら `RuntimeError` にする
+（notebook 版の `fail` と同じ）。**「繋がらないのに ok: true」をやめた**のが
+この変更の主眼。
+
+周期は notebook 版に合わせた（`TUNNEL_CHECK_EVERY = 600 // LOOP_SLEEP` = 30 周。
+notebook は 60 秒 × 10 周 = 600 秒）。
+
+固定したテスト: `tests/test_serve_parity.py`（13 本）。`loop()` を偽の
+`time` / `procs` / `_public_health` で exec して、再起動が 1 回だけであること・
+2 回目で諦めること・`/healthz` の失敗を数えること・`keepalive.txt` の中身を
+見ている。**関数の同一性ではなく振る舞い**で書いてある（制御の流れは
+構造的に共有できないため）。
+
+## まだ残っている差
+
+- `loop()` の周期（20 秒 / 60 秒）と、`keepalive.txt` の行の形（notebook は
+  `cloudflared=alive | GPU: …`、script は `tunnel=cloudflared:alive | GPU: …`）。
+  名前は同じだが中身の書式は違う
+- notebook 版は `/tmp/public_url.txt` も書き換える（セル間の受け渡し）。
+  script 版は `url.txt`（`URL_FILE`）と `data["url"]` だけ
+- smoke / batch の分岐は script だけにある（notebook 版は別カーネル）
+
 
 ## なぜ 1 本にしていないか
 
@@ -58,7 +86,8 @@ script 版は起動時の `wait_public()` 1 回きりなので、
 
 ## 次にやるなら
 
-1. script 版の `loop()` に `/healthz` 監視を足す（`TUNNEL_CHECK_EVERY` 相当）。
-   再起動まで入れるかは別判断（再起動は URL が変わるので、再公開も要る）
-2. `keepalive.txt` 相当の証跡を script 版にも出す（`save()` に 1 キー足すだけ）
-3. 上の 2 つを「振る舞いの parity テスト」で固定する
+1. `loop()` の周期を揃える（script を 60 秒にするか、notebook を 20 秒にするか）。
+   いまは「10 分ごと」という**意味**だけを揃えてある
+2. `keepalive.txt` の行の書式を揃える（同じ列名で grep できるようにする）
+3. smoke / batch の分岐を notebook 側にも持たせるか、逆に script から外すか
+   （いまは script だけが 2 形態を持つ）

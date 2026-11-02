@@ -186,9 +186,10 @@ def test_smoke_returns_before_the_keepalive_loop(tmp_path):
     out, p = _build(tmp_path, "baseline_long")
     assert p.returncode == 0, (p.stdout + p.stderr)[-900:]
     src = (out / "main.py").read_text(encoding="utf-8")
-    # `reason = loop(procs)` は keepalive シナリオ側にもあるので、**本番経路**
-    # （最後の出現）と比べる。最初の出現と比べると常に「後ろ」に見える。
-    assert src.index('return "smoke"') < src.rindex("reason = loop(procs)"), (
+    # 本番経路は `loop(procs, url)`（公開 URL を渡す）。keepalive シナリオ側は
+    # `loop(procs)` なので、**引数の形で区別できる**（2026-11-02 に URL 監視を
+    # 足したとき、シナリオ側だけが残って rindex が別物を掴むようになった）。
+    assert src.index('return "smoke"') < src.rindex("reason = loop(procs, url)"), (
         "smoke の return が本番経路の keepalive ループより後ろにある")
     # 予算が実際に効いていること（表に書いただけになっていない）
     assert "os.environ.setdefault('VLLM_STARTUP_BUDGET', '7000')" in src

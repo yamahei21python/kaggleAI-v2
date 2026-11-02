@@ -1302,6 +1302,15 @@ TIMINGS = "/kaggle/working/timings.json"
 URL_FILE = "/kaggle/working/url.txt"
 WORK = "/tmp/vllm-serve"
 CONF = "/tmp/keepalive.conf"
+# 配信の証跡。notebook 版（`kaggle/serve-cells/keepalive.py`）と同じ名前で出す。
+# これが無いと、外から繋がらなかった回に「いつ URL が死んだか」を
+# 成果物から読めない（`notes/serve-parity.md`）。
+KEEPALIVE_LOG = "/kaggle/working/keepalive.txt"
+CLEANUP_LOG = "/kaggle/working/cleanup.txt"
+LOOP_SLEEP = 20                 # ループ周期（秒）
+# 公開 URL の疎通は 10 分ごと。notebook 版は 60 秒ループ × 10 周
+# （`TUNNEL_CHECK_EVERY = 10`）なので、周期が違うぶんを周回数に直す。
+TUNNEL_CHECK_EVERY = 600 // LOOP_SLEEP
 GIST_ID_DEFAULT = "2b44ac8cb115012a31d3c46661af933f"
 GIST_OWNER = "yamahei21python"
 # 公開 URL を置く掲示板カーネルの名前（owner は GIST_OWNER と同じ）。
@@ -1329,9 +1338,44 @@ CLEANUP = False              # cleanup() を停止時に呼ぶか
 
 data = {"engine": ENGINE, "stage": "init", "tunnel": TUNNEL_KIND, "model": MODEL_NAME, "context_length": CONTEXT_LENGTH, "smoke": SMOKE}
 T0 = time.time()
+# キープアライブの毎周期の控え。`save_evidence()` が keepalive.txt に落とす。
+# result.json に入れないのは、数百行になって成果物が読みにくくなるため。
+KEEPALIVE_LINES = []
 # 設定セルが TUNNEL_KIND を名乗っていても、実装が選んだ方を正とする
 # （設定と実装がずれると result.json の tunnel が嘘になる）。
 data["tunnel"] = TUNNEL
+
+
+def save_evidence():
+    """配信の証跡を書き出す（notebook 版の keepalive.txt / cleanup.txt 相当）。
+
+    **毎回書き直す**（追記にしない）。`save()` は段の変わり目に何度も呼ばれる
+    ので、追記だと同じ行が何度も入る。最後に呼ばれた時点の内容が正になる。
+    """
+    if KEEPALIVE_LINES:
+        dead = data.get("tunnel_dead", 0)
+        head = [
+            f"result={'DEAD' if dead >= 2 else data.get('stopped_by', '')}",
+            f"stopped_by={data.get('stopped_by')}",
+            f"cycles={len(KEEPALIVE_LINES)}",
+            f"tunnel={TUNNEL}",
+            f"tunnel_dead={dead}",
+            f"tunnel_restarted={data.get('tunnel_restarted', False)}",
+            f"url={data.get('url', '')}",
+            "",
+        ]
+        try:
+            with open(KEEPALIVE_LOG, "w") as f:
+                f.write("\n".join(head + KEEPALIVE_LINES) + "\n")
+        except OSError as e:
+            print(f"⚠ keepalive.txt を書けない: {type(e).__name__}: {e}")
+    if SERVE:
+        try:
+            with open(CLEANUP_LOG, "w") as f:
+                f.write(f"engine_cleanup={data.get('engine_cleanup', 'skipped')}\n"
+                        f"leftover={','.join(data.get('stop_remaining') or []) or 'none'}\n")
+        except OSError as e:
+            print(f"⚠ cleanup.txt を書けない: {type(e).__name__}: {e}")
 
 
 def save():
@@ -1349,6 +1393,7 @@ def save():
         pass
     with open(RESULT, "w") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    save_evidence()
 
 
 def sh(cmd, timeout=1800, env=None):
@@ -1619,7 +1664,7 @@ def find_cloudflared():
     return None
 
 
-def _wait_tunnel(proc, host, log_path, seconds):
+def _wait_tunnel(proc, host, log_path, seconds, key="tunnel_seconds"):
     """公開 URL が出るまで待つ。落ちていたら理由を添えて失敗させる。"""
     t0 = time.time()
     url = kc_wait_url(host, log_path, seconds=seconds)
@@ -1627,12 +1672,12 @@ def _wait_tunnel(proc, host, log_path, seconds):
         if proc.poll() is not None:
             raise RuntimeError(f"{host} 終了 ({proc.returncode})")
         raise RuntimeError(f"{host} の URL を取得できなかった")
-    data["tunnel_seconds"] = round(time.time() - t0, 1)
+    data[key] = round(time.time() - t0, 1)
     print(f"公開 URL ({host}): {url}")
     return proc, url
 
 
-def start_cloudflared():
+def start_cloudflared(key="tunnel_seconds"):
     cf = find_cloudflared()
     dst = f"{WORK}/cloudflared"
     if cf:
@@ -1651,7 +1696,7 @@ def start_cloudflared():
         p = subprocess.Popen([dst, "tunnel", "--url",
                               f"http://127.0.0.1:{PROXY_PORT}", "--no-autoupdate"],
                              stdout=log, stderr=subprocess.STDOUT)
-    return _wait_tunnel(p, "cloudflared", log_path, 120)
+    return _wait_tunnel(p, "cloudflared", log_path, 120, key=key)
 
 
 def start_tunnel():
@@ -1743,9 +1788,69 @@ def read_conf():
                         on_invalid="zero", quiet_clamp=True)
 
 
-def loop(procs):
+def _public_health(url):
+    """公開 URL の `/healthz` を 1 回叩く。**例外を投げない**（戻り値で返す）。"""
+    try:
+        with kc_urlopen_v4(url + "/healthz", timeout=15) as r:
+            return r.status == 200, f"HTTP{r.status}"
+    except Exception as e:
+        return False, type(e).__name__
+
+
+def restart_tunnel(procs):
+    """落ちたトンネルを **1 回だけ** 張り直し、新しい URL を返す（駄目なら ""）。
+
+    notebook 版（`kaggle/serve-cells/keepalive.py`）と同じ制御。URL が変わるので
+    `publish_url` まで呼ぶ。呼ばないと url.txt / Gist / ビーコンが失効 URL を
+    指したままになり、**外からは「動いているのに繋がらない」**状態が続く
+    （`notes/serve-parity.md`）。
+
+    再起動は 1 回だけ。2 回目以降は呼び出し側が `_exited` として終わらせる
+    （同じ原因で落ち続けるなら、起動を繰り返しても URL は生き残らない）。
+    """
+    try:
+        subprocess.run(["pkill", "-x", "cloudflared"], capture_output=True)
+        time.sleep(1)
+        proc, new_url = start_cloudflared(key="tunnel_restart_seconds")
+    except Exception as e:
+        data["tunnel_restart_error"] = f"{type(e).__name__}: {e}"
+        print(f"⚠ {TUNNEL} 再起動失敗: {type(e).__name__}: {e}")
+        return ""
+    # ここから先は失敗しても「トンネルは生きている」。公開の失敗で
+    # 張り直しを無かったことにしない（URL は生きているのに捨てることになる）。
+    procs[TUNNEL] = proc
+    data["tunnel_restarted"] = True
+    try:
+        publish_url(new_url)
+    except Exception as e:
+        data["publish_error"] = f"{type(e).__name__}: {e}"
+        print(f"⚠ 新 URL の公開に失敗（配信は続く）: {type(e).__name__}: {e}")
+    print(f"♻ {TUNNEL} 再起動 → 新URL: {new_url}")
+    return new_url
+
+
+def loop(procs, url=""):
+    """キープアライブ。**notebook 版と同じ監視を持つ**。
+
+    以前はエンジンの `poll()` しか見ておらず、quick tunnel の URL が途中で
+    失効しても `result.json` は `ok: true` のまま外から繋がらない状態で
+    走り続けた。いまは notebook 版（`serve-cells/keepalive.py`）と同じく
+
+      - トンネルのプロセスが死んだら **1 回だけ**張り直して URL を再公開
+      - 10 分ごとに `/healthz` を叩き、失敗を数える（2 回で失敗扱い）
+      - 毎周期の状態を `KEEPALIVE_LINES` に残す（`save_evidence()` が保存）
+
+    を回す。`url` が空（トンネルを張らない経路）なら疎通確認はしない。
+    """
     started = time.time()
+    restarted = 0
+    dead = 0
+    restarted_now = False
+    n = 0
+    print(f"🔋 キープアライブ開始（{LOOP_SLEEP}s 周期 / 公開URL確認は "
+          f"{TUNNEL_CHECK_EVERY * LOOP_SLEEP // 60} 分ごと）")
     while True:
+        n += 1
         if CONF_DRIVEN:
             run_flag, minutes, mtime = read_conf()
             if run_flag == 0:
@@ -1757,10 +1862,51 @@ def loop(procs):
             # 乾燥走行は配管テストなので keepalive を見ない（生成リクエストが
             # conf を書き換えて予算が延びるため）。
             return "budget"
+
+        # トンネルは先に見る。プロセスが生きていても URL は失効しうるが、
+        # 落ちている場合は張り直せる（他は張り直せないので終了）。
+        t = procs.get(TUNNEL)
+        if t is not None and t.poll() is not None:
+            if restarted:
+                return f"{TUNNEL}_exited({t.returncode})"
+            restarted = 1
+            new_url = restart_tunnel(procs)
+            if not new_url:
+                return f"{TUNNEL}_exited({t.returncode})"
+            url = new_url
+            # セッションの現在 URL は loop が持つ。`save_evidence()` の
+            # keepalive.txt も `data["url"]` を読むので、ここで必ず更新する
+            # （失効 URL が成果物に残ると、次に読む人がそれを叩いて混乱する）。
+            data["url"] = url
+            dead = 0                 # 別勘定。旧カウントを引き継がない
+            restarted_now = True     # 新 URL のエッジ伝播待ち中は判定しない
+
         for name, p in procs.items():
+            if name == TUNNEL:
+                continue             # 上で見た
             if p.poll() is not None:
                 return f"{name}_exited({p.returncode})"
-        time.sleep(20)
+
+        line = (f"[{time.strftime('%H:%M:%S')}] "
+                f"tunnel={TUNNEL}:"
+                f"{kc_proc_state(TUNNEL, 'exact')} | GPU: {kc_gpu_usage()}")
+        # pid だけでは tunnel の死は分からない（quick tunnel は URL 失効がありうる）。
+        # 張り直した直後は新 URL のエッジ伝播待ちなので判定しない。
+        if url and n % TUNNEL_CHECK_EVERY == 0 and not restarted_now:
+            ok, detail = _public_health(url)
+            if ok:
+                line += " | tunnel=OK"
+            else:
+                dead += 1
+                line += f" | tunnel=DEAD({detail}) x{dead}"
+                if not restarted:
+                    line += " ← プロセスは生存。URL だけ失効の可能性"
+                print(f"⚠ 公開 /healthz 失敗 {dead} 回目: {detail}")
+        restarted_now = False
+        KEEPALIVE_LINES.append(line)
+        data["tunnel_dead"] = dead
+        print(line)
+        time.sleep(LOOP_SLEEP)
 
 
 def run_keepalive_scenario(auth, procs):
@@ -1820,8 +1966,9 @@ def stop_all(procs):
     if CLEANUP:
         # VRAM を返してから落とす（先に落とすと解放されない実装がある）。
         try:
-            cleanup()
+            data["engine_cleanup"] = cleanup()
         except Exception as e:
+            data["engine_cleanup"] = f"failed: {type(e).__name__}: {e}"
             print(f"cleanup 失敗: {type(e).__name__}: {e}")
     for name, p in procs.items():
         if p is None or p.poll() is not None:
@@ -4250,9 +4397,18 @@ def run(procs):
     if VERIFY_PUBLIC:
         verify_public(auth, url)
 
-    reason = loop(procs)
+    reason = loop(procs, url)
     data["stopped_by"] = reason
     save()
+    # notebook 版と同じ判定: `/healthz` の失敗が 2 回以上なら「配信できていない」。
+    # ここを `ok: true` のまま終わらせると、**外から繋がらないのに成功に見える**
+    # （失効した URL を配ったまま COMPLETE する。`notes/serve-parity.md`）。
+    if data.get("tunnel_dead", 0) >= 2:
+        raise RuntimeError(
+            f"公開 URL が失効したままです（/healthz 連続失敗 "
+            f"{data['tunnel_dead']} 回・再起動 "
+            f"{'あり' if data.get('tunnel_restarted') else 'なし'}）。"
+            f"keepalive.txt を見てください。")
     return reason
 
 

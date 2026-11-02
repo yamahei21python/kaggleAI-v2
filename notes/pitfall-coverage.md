@@ -75,6 +75,7 @@ README 側も「114 本」「109 本」と実態（210 本）からずれてい�
 | 38 | **テストの関数切り出しが「上から最初の `def`」**だと、同名の関数があるとき黙って別物を掴んで緑になる（`reason = loop(procs)` が 2 箇所あった） | `tests/_cells.py` が `ast` で切り出し、同名が複数なら例外にする | `test_cells_helper.py::test_slice_def_refuses_ambiguous_names` |
 | 39 | **vLLM は prefetch を自分で辞退する**（`checkpoint total size (18.21 GiB) exceeds 90% of available RAM (6.x GiB)`）。辞退しても起動は続くので、遅いだけの回が「効かなかった回」として静かに混ざる | ポーリングで警告 1 行を拾い、`timings.prefetch.declined` に残す | `test_vllm_cells.py::test_prefetch_decline_is_detected_and_recorded` |
 | 40 | **予算で切った回を「起動に失敗しました」と報告する**。設定の誤りを疑ってログを 1 時間掘ることになる（実測 2026-11-02） | 待機の終了理由を `_why`（`started`/`died`/`budget`）に残し、`budget` は別の文言にする | `test_vllm_cells.py::test_budget_exhaustion_is_not_reported_as_a_startup_failure` |
+| 41 | **`ok: true` なのに外から繋がらない**。quick tunnel の URL は実行中でも失効し、プロセスの `poll()` だけ見ていると気づけない。失効 URL を配ったまま COMPLETE する | `/healthz` を 10 分ごとに叩いて数え、2 回で `RuntimeError`。`keepalive.txt` に毎周期の状態を残す | `test_serve_parity.py::test_script_fails_when_the_url_stayed_dead` |
 
 
 ## 既に別ファイルで固定済みのもの
