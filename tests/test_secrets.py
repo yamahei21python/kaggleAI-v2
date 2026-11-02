@@ -25,13 +25,9 @@ GENERATED = {
     ROOT / "kaggle" / "step2-script",
     ROOT / "kaggle" / "step2-vllm-script",
     ROOT / "kaggle" / "llama-server-script",
-    # 実験用 playground（同じく serve_script の生成物）。トンネル / Gist /
-    # keepalive を丸ごと飛ばすので、GIST_ID / NGROK_TOKEN 等の参照は
-    # テンプレートに残っているが**到達しない**。二重に数えない。
+    # 実験用 playground（同じく serve_script の生成物）。トンネル / keepalive を
+    # 丸ごと飛ばすので参照は**到達しない**が、テンプレート側と同じ数え方をする。
     ROOT / "kaggle" / "vllm-playground",
-    # gist-probe は runtime/gist.py をそのまま埋め込んだ生成物。参照は
-    # 真実源（runtime/gist.py）側で台帳に載っている。
-    ROOT / "kaggle" / "cpu-tests" / "gist",
 }
 
 

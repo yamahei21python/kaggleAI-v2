@@ -17,9 +17,9 @@ MODULES = {
     "keepalive": "keepalive.py",
     "proxy": "proxy.py",
     "quota": "quota.py",
-    "gist": "gist.py",
-    # 公開 URL の置き場。Gist の代わりにカーネル自体を掲示板にする
-    # （Secrets 不要・専用アカウントで完結）。notes/url-publishing.md。
+    # 公開 URL の置き場。カーネル自体を掲示板にする（Secrets 不要・
+    # 専用アカウントで完結）。Gist 版は 2026-11-02 に廃止した
+    # （notes/url-publishing.md）。
     "beacon": "beacon.py",
     "ollama": "engines/ollama.py",
     "lmdeploy": "engines/lmdeploy.py",

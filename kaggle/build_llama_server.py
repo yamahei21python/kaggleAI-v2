@@ -181,8 +181,7 @@ print(f"  モデル {{MODEL_GIB}} GiB + KV(q8_0) {{kv_used:.2f}} GiB = {{MODEL_G
 print(f"MTP        : {{'有効' if USE_MTP else '無効'}}")
 
 # ---- Secrets の既定値（config.env 由来。Secret があれば上書きされる）----
-GIST_ID_DEFAULT = "{CFG["GIST_ID"]}"
-GIST_OWNER = "{CFG["GIST_OWNER"]}"
+KAGGLE_OWNER = "{CFG["KAGGLE_OWNER"]}"
 
 # ---- キープアライブ ----
 MAX_MINUTES = 480

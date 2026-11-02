@@ -48,8 +48,9 @@ def test_exl3_build():
                   f"{mode}: プロキシへ API_PASS を渡していない")
             check("--no-quota" not in body,
                   f"{mode}: --no-quota が残っている")
-            check("def publish_url" in body, f"{mode}: Gist 配布が無い")
-            check("GIST_ID_DEFAULT" in body, f"{mode}: Gist 既定値が無い")
+            check("def publish_url" in body, f"{mode}: URL 配布が無い")
+            check("KAGGLE_OWNER" in body, f"{mode}: ビーコンの owner が無い")
+            check("GIST" not in body, f"{mode}: Gist が残っている")
             check((out / "kernel-metadata.json").is_file(),
                   f"{mode}: metadata が無い")
 

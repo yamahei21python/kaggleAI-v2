@@ -61,8 +61,7 @@ SETTINGS = render_env(KERNEL.bake_env) + render_settings(CELLS / "00_settings.py
     "__TUNNEL__": TUNNEL,
     "__PROXY_B64__": PROXY_SRC_B64,
     "__CHAT_B64__": CHAT_SRC_B64,
-    "__GIST_ID__": CFG.get("GIST_ID", ""),
-    "__GIST_OWNER__": CFG.get("GIST_OWNER", ""),
+    "__KAGGLE_OWNER__": CFG.get("KAGGLE_OWNER", ""),
 })
 
 ENGINE_CODE = (
@@ -113,12 +112,10 @@ if __name__ == "__main__":
         ENGINE,
         META,
         run_minutes=60,
-        runtime=source_bundle("net", "proc", "storage", "keepalive", "proxy",
-                              "gist"),
+        runtime=source_bundle("net", "proc", "storage", "keepalive", "proxy"),
         proxy_b64=PROXY_SRC_B64,
         html_b64=CHAT_SRC_B64,
-        gist_id=CFG.get("GIST_ID", ""),
-        gist_owner=CFG.get("GIST_OWNER", ""),
+        kaggle_owner=CFG.get("KAGGLE_OWNER", ""),
         port=VLLM_PORT,
         proxy_port=PROXY_PORT,
         hard_max_minutes=180,

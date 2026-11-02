@@ -107,7 +107,7 @@
 | 準現役 | `bench-mtp-orcarouter-qwen3-8-27b-script` | `kaggle/bench_mtp/script/` | 同上 ← `build_bench_mtp` | ✓ |
 
 - 上 5 本は **骨格版**（`kbuild/serve_script.py`）。`stage_install()` と
-  `launch(model_dir)` だけを渡し、proxy / tunnel / gist / keepalive / 予算ループは骨格が持つ。
+  `launch(model_dir)` だけを渡し、proxy / tunnel / ビーコン / keepalive / 予算ループは骨格が持つ。
 - 下 7 本は **セル連結版**。`build_batch_script.py` が元ビルダーの `cells` をそのまま
   1 ファイルへ連結する（`SERVE=False` の単発モード）。セルの中身には手を触れていない。
 - `-script` の出力先は**親ディレクトリ配下の別名**（`kaggle/step2-script/`）にして、
@@ -198,11 +198,11 @@ Secrets は**カーネル単位**で UI から登録する（コードからは�
 | カーネル | 必須 Secret |
 |---|---|
 | `step1-orcarouter-qwen38-27b-dl` | `KAGGLE_USERNAME`, `KAGGLE_KEY` |
-| `step2-…-cloudflared` / `step2-vllm-…-cloudflared` | `GIST_ID`, `GITHUB_TOKEN` |
+| `step2-…-cloudflared` / `step2-vllm-…-cloudflared` | なし（2026-11-02 に Gist を廃止） |
 | `prepare-vllm-dataset` | `HF_TOKEN` |
-| `exl3-serve` / `-dryrun` / `-keepalive` | `EXL3_API_USER`, `EXL3_API_PASS`, `GIST_ID`, `GITHUB_TOKEN` |
+| `exl3-serve` / `-dryrun` / `-keepalive` | `EXL3_API_USER`, `EXL3_API_PASS` |
 | `exl3-dataset-upload` | `KAGGLE_USERNAME`, `KAGGLE_KEY` |
-| **`…-script`（骨格版 3 本）** | `API_USER`, `API_PASS`, `GIST_ID`, `GITHUB_TOKEN`（台帳は `kbuild/serve_script.py`） |
+| **`…-script`（骨格版 3 本）** | `API_USER`, `API_PASS`（台帳は `kbuild/serve_script.py`） |
 | **`…/script`（セル連結版 7 本）** | 元の notebook 版と同じ（`step1` は `KAGGLE_*`、`prepare-vllm-dataset` は `HF_TOKEN`、他はなし） |
 | `keepalive-test` / `ci-cpu` / その他の CPU 検証 | なし |
 

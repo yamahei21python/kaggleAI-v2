@@ -99,7 +99,7 @@ EOS
 # cloudflared の quick tunnel は URL が毎回変わる。その URL を「掲示板カーネル」
 # に書かせて読むのがビーコン（`notes/url-publishing.md`）。ngrok を 2026-11-01
 # に廃止してから、ここが URL の一次情報。**Secrets は要らない。**
-# 読めなければ空を返す（呼び出し側が Gist などに落ちる）。
+# 読めなければ空を返す（URL の出所はここだけ。Gist 版は 2026-11-02 に廃止）。
 kc_beacon_url() {
   local u
   # `cli beacon` は 0=使える / 1=読めたが捨てた / 2=引けなかった。

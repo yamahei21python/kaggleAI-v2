@@ -688,7 +688,7 @@ Gist 方式の代わりに、**カーネルのコードそのもの**を公開 U
 個人アカウントのものが残る。ビーコンは**アカウント・Secrets・外部サービスを
 増やさずに**同じことができる。経緯は `notes/url-publishing.md`。
 
-この層の方針は Gist と同じ: **失敗しても配信を止めない。ただし理由は必ず返す。**
+この層の方針は旧 Gist 層から引き継いだ: **失敗しても配信を止めない。ただし理由は必ず返す。**
 2026-11-01 に「Gist が 10/28 から一度も更新されていないことに誰も気づかない」
 という失敗をしているので、`(ok, detail)` を返さない関数はここに置かない。
 
@@ -1036,9 +1036,8 @@ kv_used = KV_KIB_PER_TOK_Q8 * CONTEXT_LENGTH / 1024 / 1024
 print(f"コンテキスト: {CONTEXT_LENGTH:,} tokens")
 print(f"  モデル {MODEL_GIB} GiB + KV(q8_0) {kv_used:.2f} GiB = {MODEL_GIB + kv_used:.2f} GiB")
 
-# ---- Secrets の既定値（config.env 由来。Secret があれば上書きされる）----
-GIST_ID_DEFAULT = "2b44ac8cb115012a31d3c46661af933f"
-GIST_OWNER = "yamahei21python"
+# ---- アカウント（ビーコンの slug に使う。config.env の KAGGLE_OWNER）----
+KAGGLE_OWNER = "yamahei21python"
 
 # ---- キープアライブ ----
 MAX_MINUTES = 480                 # セル開始からの合計上限（Kaggle 9h より短く）
@@ -1116,7 +1115,7 @@ PROXY_PORT = 11435        # 認証プロキシ（公開）
 TP = 2
 RUN_MINUTES = 60
 HARD_MAX_MINUTES = 480
-# smoke: トンネル / Gist / keepalive を省略し、疎通だけ見て終了する（GPU 時間の節約）
+# smoke: トンネル / URL 配布 / keepalive を省略し、疎通だけ見て終了する（GPU 時間の節約）
 SMOKE = True
 ENGINE_PATTERN = "-x ollama"
 TUNNEL = "cloudflared"              # 実際に張るトンネル（cloudflared のみ）
@@ -1136,9 +1135,8 @@ LOOP_SLEEP = 20                 # ループ周期（秒）
 # 公開 URL の疎通は 10 分ごと。notebook 版は 60 秒ループ × 10 周
 # （`TUNNEL_CHECK_EVERY = 10`）なので、周期が違うぶんを周回数に直す。
 TUNNEL_CHECK_EVERY = 600 // LOOP_SLEEP
-GIST_ID_DEFAULT = "2b44ac8cb115012a31d3c46661af933f"
-GIST_OWNER = "yamahei21python"
-# 公開 URL を置く掲示板カーネルの名前（owner は GIST_OWNER と同じ）。
+KAGGLE_OWNER = "yamahei21python"
+# 公開 URL を置く掲示板カーネルの名前（owner は KAGGLE_OWNER と同じ）。
 # カーネルから push できるのは自分のカーネルだけなので、配信カーネルと
 # 同じアカウントに置く。中身はビルダーが生成する（kaggle/serve-url-beacon/）。
 BEACON_NAME = "serve-url-beacon"
@@ -1154,7 +1152,7 @@ INSTALL = True              # stage_install() を呼ぶか
 NEEDS_MODEL = False      # find_model() を要求するか
 TP_REQUIRED = False      # GPU が TP 枚必要か
 KEEPALIVE_SCENARIO = False   # keepalive 実測シナリオを回すか
-PUBLISH = True              # 公開 URL を Gist へ書くか
+PUBLISH = True              # 公開 URL をビーコンへ書くか
 VERIFY_PUBLIC = True  # 公開 URL 経由の疎通も見るか
 CONF_DRIVEN = True      # 停止判断を keepalive.conf に従うか
 SERVE = True                  # 配信カーネルか（False = 単発のバッチ処理）
@@ -1546,49 +1544,26 @@ def start_tunnel():
 
 
 def publish_url(url):
-    """公開 URL を url.txt / Gist / ビーコンに書く。**失敗しても配信は続ける。**
+    """公開 URL を url.txt とビーコンに書く。**失敗しても配信は続ける。**
 
-    3 経路あるのは移行途中だから:
+    2 経路あるのは役割が違うから:
       - `url.txt` … 同じカーネルの中から読む用（従来どおり）
-      - Gist      … 個人アカウント時代の読み手。Secrets が無ければスキップ
       - ビーコン  … カーネルのコードを掲示板にする方式。**Secrets 不要**なので
                     専用アカウント運用でも使える（`notes/url-publishing.md`）
 
-    Gist の分岐で早期 return しないこと。以前ここが `return` だったので、
-    Secrets が無い環境ではビーコンまで届かなかった。
+    Gist 版は 2026-11-02 に廃止した。`notes/url-publishing.md` のとおり、
+    Kaggle の Secret は**カーネルごとに紐付ける**必要があり、未紐付けの
+    `get_secret()` は `ConnectionError`（＝通信障害に見える）を返す。
+    ビーコンはその作業ごと不要にする。
     """
     with open(URL_FILE, "w") as f:
         f.write(url + "\n")
-    _publish_gist(url)
     _publish_beacon(url)
-
-
-def _publish_gist(url):
-    gist_id = (secret("GIST_ID") or GIST_ID_DEFAULT or "").strip()
-    token = (secret("GITHUB_TOKEN") or "").strip()
-    if not gist_id or not token:
-        data["publish"] = "skipped (GIST_ID / GITHUB_TOKEN なし)"
-        print("Gist 公開: スキップ（GIST_ID / GITHUB_TOKEN なし）")
-        return
-    body = json.dumps({"files": {"url.txt": {"content": url + "\n"}}}).encode()
-    req = urllib.request.Request(
-        f"https://api.github.com/gists/{gist_id}", data=body, method="PATCH",
-        headers={"Authorization": "Bearer " + token,
-                 "Accept": "application/vnd.github+json",
-                 "User-Agent": f"{ENGINE}-serve-kernel"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data["publish"] = f"gist ok ({r.status})"
-        print("Gist 公開: " + "https://gist.githubusercontent.com/"
-              f"{GIST_OWNER}/{gist_id}/raw/url.txt")
-    except Exception as e:
-        data["publish"] = f"gist failed: {type(e).__name__}: {e}"
-        print(f"Gist 公開 失敗（続行）: {e}")
 
 
 def _publish_beacon(url):
     """ビーコン（掲示板カーネル）を更新する。成否は `data["beacon"]` に残す。"""
-    slug = f"{GIST_OWNER}/{BEACON_NAME}" if GIST_OWNER else ""
+    slug = f"{KAGGLE_OWNER}/{BEACON_NAME}" if KAGGLE_OWNER else ""
     ok, why = kc_beacon_publish(url, stage="serving", slug=slug)
     data["beacon"] = why
     print(("ビーコン公開: " + why) if ok else ("ビーコン公開 失敗（続行）: " + why))
@@ -1626,7 +1601,7 @@ def restart_tunnel(procs):
     """落ちたトンネルを **1 回だけ** 張り直し、新しい URL を返す（駄目なら ""）。
 
     notebook 版（`kaggle/serve-cells/keepalive.py`）と同じ制御。URL が変わるので
-    `publish_url` まで呼ぶ。呼ばないと url.txt / Gist / ビーコンが失効 URL を
+    `publish_url` まで呼ぶ。呼ばないと url.txt / ビーコンが失効 URL を
     指したままになり、**外からは「動いているのに繋がらない」**状態が続く
     （`notes/serve-parity.md`）。
 
@@ -2451,13 +2426,13 @@ def run(procs):
 
     if SMOKE:
         # GPU 時間の節約: install → launch → 会話 → 終了。
-        # proxy / トンネル / Gist / keepalive は CPU 側で検証済みなので省略する。
+        # proxy / トンネル / ビーコン / keepalive は CPU 側で検証済みなので省略する。
         # direct=True: base はエンジン直。proxy が返すチャット UI は存在しない。
         verify(None, f"http://127.0.0.1:{PORT}", key="verify_direct", direct=True)
         data["timings"] = {"install_seconds": data.get("install_seconds"),
                            "load_seconds": data.get("load_seconds")}
         save()
-        print("smoke 完了（トンネル / Gist / keepalive は省略）")
+        print("smoke 完了（トンネル / ビーコン / keepalive は省略）")
         return "smoke"
 
     proxy, auth = start_proxy(engine.pid)

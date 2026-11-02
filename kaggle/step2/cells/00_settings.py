@@ -73,9 +73,8 @@ kv_used = KV_KIB_PER_TOK_Q8 * CONTEXT_LENGTH / 1024 / 1024
 print(f"コンテキスト: {CONTEXT_LENGTH:,} tokens")
 print(f"  モデル {MODEL_GIB} GiB + KV(q8_0) {kv_used:.2f} GiB = {MODEL_GIB + kv_used:.2f} GiB")
 
-# ---- Secrets の既定値（config.env 由来。Secret があれば上書きされる）----
-GIST_ID_DEFAULT = "__GIST_ID__"
-GIST_OWNER = "__GIST_OWNER__"
+# ---- アカウント（ビーコンの slug に使う。config.env の KAGGLE_OWNER）----
+KAGGLE_OWNER = "__KAGGLE_OWNER__"
 
 # ---- キープアライブ ----
 MAX_MINUTES = 480                 # セル開始からの合計上限（Kaggle 9h より短く）

@@ -599,154 +599,6 @@ def kc_assert_no_auth(port, path="/api/tags", fail=None, timeout=10):
             fail(msg)
         raise
 
-# ── runtime/gist.py ───────────────────────────────────────
-"""Gist への進捗書き込み（生成コードへ埋め込む）。
-
-Kaggle の UI ログは長大で貼りにくく、`kaggle kernels output` は**完了まで
-何も返さない**。起動に失敗した回は「どこで止まったか」を外から見る手段が
-要るので、待機中は 30 秒ごとに Gist へ流している。
-
-ところが 2026-11-01 の `vllm-playground` は Gist を 10/28 から一度も
-更新していなかった。理由（トークン無し / 401 / 404）はどこにも残らず、
-外からは「何も起きていない」と区別がつかなかった。**黙って落ちるのが
-一番高い**ので、この層は必ず理由を返す。
-
-**この経路は専用アカウント運用とは両立しない。** Kaggle の Secret は
-アカウントに登録するだけでは読めず、**カーネルごとに紐付ける**必要があり、
-未紐付けの `get_secret()` は `ConnectionError` を返す（通信障害に見える）。
-専用アカウント側では公開 URL を**ビーコンカーネル**（カーネルのコードを
-掲示板にする方式）へ移した。経緯と実測は `notes/url-publishing.md`。
-ここが生きているのは、進捗（起動待ちの状況）を運ぶ経路がまだ他に無いため。
-
-`kc_` 接頭辞は生成コードの名前空間で衝突しないため（runtime/__init__.py）。
-"""
-import json
-import os
-import time
-import urllib.error
-import urllib.request
-
-_GIST_API = "https://api.github.com/gists/"
-
-
-def kc_gh_token_detail():
-    """`(token, detail)`。detail は**どこで解決したか / どこで転んだか**。
-
-    `detail` を返すのは、`""` の 1 語では対処が決まらないため。Kaggle の
-    Secret は**アカウントに登録するだけでは足りず、カーネルごとに紐付ける**
-    必要がある。2026-11-01 に新しく push した `gist-probe` は
-    `token_present=false` で、登録漏れなのか紐付け漏れなのかを
-    `""` からは読み取れなかった（Kaggle は「この notebook には無い」を
-    例外で返すので、そこまで拾わないと区別できない）。
-    """
-    tok = os.environ.get("GITHUB_TOKEN", "").strip()
-    if tok:
-        return tok, "env:GITHUB_TOKEN"
-    try:
-        from kaggle_secrets import UserSecretsClient
-    except Exception as e:
-        return "", f"kaggle_secrets を import できない（{type(e).__name__}: {e}）"
-    try:
-        tok = (UserSecretsClient().get_secret("GITHUB_TOKEN") or "").strip()
-    except Exception as e:
-        # ここに来る典型は「このカーネルに Secret が紐付いていない」。
-        return "", (f"Secret を読めない（{type(e).__name__}: {e}）"
-                    " — アカウントに登録済みでも、カーネルごとの紐付けが"
-                    "無いと読めない")
-    if not tok:
-        return "", "Secret は読めたが中身が空"
-    return tok, "secrets:GITHUB_TOKEN"
-
-
-def kc_gist_write(gist_id, filename, text, token=None, timeout=10):
-    """Gist の 1 ファイルを更新する。戻り値は `(ok, detail)`。
-
-    `detail` は**失敗の理由**（成功なら空文字）。呼び出し側が 1 回だけ声に
-    出すために使う。HTTP の本文も拾うのは、401（トークン不正）と
-    404（Gist ID 違い / 権限なし）を取り違えないため。
-
-    `token` を明示できるのはテストの口。省略時は env → Secrets の順で解決する。
-    """
-    if not gist_id:
-        return False, "GIST_ID が空（settings の GIST_ID_DEFAULT も未設定）"
-    if token is None:
-        tok, why = kc_gh_token_detail()
-        if not tok:
-            return False, why
-    else:
-        tok = token
-        if not tok:
-            return False, "トークンが空（引数で明示された）"
-    body = json.dumps({"files": {filename: {"content": text}}}).encode()
-    req = urllib.request.Request(
-        _GIST_API + gist_id, data=body, method="PATCH",
-        headers={"Authorization": "Bearer " + tok,
-                 "Accept": "application/vnd.github+json",
-                 "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            r.read()
-        return True, ""
-    except urllib.error.HTTPError as e:
-        try:
-            msg = e.read().decode("utf-8", "replace")[:200]
-        except Exception:
-            msg = ""
-        return False, f"HTTP {e.code}: {msg}"
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-
-
-def kc_gist_selftest(gist_id, filename="vllm_status.txt", token=None,
-                     timeout=10):
-    """PATCH して GET で**読み返す**。往復が通ったときだけ ok=True。
-
-    書けたつもりで読めない（別 Gist を指している / 権限が片方だけ）を
-    分けるため、書き込みだけで判定しない。CPU だけで完結するので、
-    GPU を使う前に Kaggle のコンテナから 1 回走らせておく。
-    """
-    stamp = "selftest " + time.strftime("%Y-%m-%d %H:%M:%S")
-    if token is None:
-        tok, token_why = kc_gh_token_detail()
-    else:
-        tok, token_why = token, "引数で明示"
-    out = {"ok": False, "gist_id": gist_id, "filename": filename,
-           "token_present": bool(tok), "token_detail": token_why, "stamp": stamp,
-           "write_ok": False, "write_detail": "", "read_ok": False,
-           "read_detail": "", "matched": False, "files": []}
-    if not tok:
-        # 解決に失敗した**理由**をそのまま write_detail に置く。ここで
-        # kc_gist_write に空トークンを渡すと「引数で明示された」という
-        # 無意味な理由に潰れて、紐付け漏れが分からなくなる。
-        out["write_detail"] = token_why
-        return out
-    ok, detail = kc_gist_write(gist_id, filename, stamp + "\n",
-                              token=tok, timeout=timeout)
-    out["write_ok"], out["write_detail"] = ok, detail
-    if not ok:
-        return out
-    req = urllib.request.Request(
-        _GIST_API + gist_id,
-        headers={"Accept": "application/vnd.github+json",
-                 "Authorization": "Bearer " + tok})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            d = json.loads(r.read() or b"{}")
-        out["read_ok"] = True
-        files = d.get("files") or {}
-        out["files"] = sorted(files)
-        content = (files.get(filename) or {}).get("content") or ""
-        out["matched"] = stamp in content
-        if not out["matched"]:
-            out["read_detail"] = (f"{filename} が読めない、または中身が違う"
-                                  f"（Gist 内: {sorted(files)}）")
-    except urllib.error.HTTPError as e:
-        out["read_detail"] = f"HTTP {e.code}"
-    except Exception as e:
-        out["read_detail"] = f"{type(e).__name__}: {e}"
-    out["ok"] = out["read_ok"] and out["matched"]
-    return out
-
 # ── runtime/beacon.py ─────────────────────────────────────
 """ビーコンカーネル（Kaggle のカーネルを掲示板として使う）。
 
@@ -762,7 +614,7 @@ Gist 方式の代わりに、**カーネルのコードそのもの**を公開 U
 個人アカウントのものが残る。ビーコンは**アカウント・Secrets・外部サービスを
 増やさずに**同じことができる。経緯は `notes/url-publishing.md`。
 
-この層の方針は Gist と同じ: **失敗しても配信を止めない。ただし理由は必ず返す。**
+この層の方針は旧 Gist 層から引き継いだ: **失敗しても配信を止めない。ただし理由は必ず返す。**
 2026-11-01 に「Gist が 10/28 から一度も更新されていないことに誰も気づかない」
 という失敗をしているので、`(ok, detail)` を返さない関数はここに置かない。
 
@@ -1195,9 +1047,8 @@ PROXY_AUTH = {
     "API_PASS": os.environ.get("API_PASS", ""),
 }
 
-# ---- Secrets の既定値（config.env 由来。Secret があれば上書きされる）----
-GIST_ID_DEFAULT = "2b44ac8cb115012a31d3c46661af933f"
-GIST_OWNER = "yamahei21python"
+# ---- アカウント（ビーコンの slug に使う。config.env の KAGGLE_OWNER）----
+KAGGLE_OWNER = "yamahei21python"
 
 # ---- キープアライブ ----
 # 上限。チャット 1 回で proxy が MINUTES=60 を書くため、上限が無いと
@@ -1288,7 +1139,7 @@ PROXY_PORT = 11435        # 認証プロキシ（公開）
 TP = 2
 RUN_MINUTES = 60
 HARD_MAX_MINUTES = 180
-# smoke: トンネル / Gist / keepalive を省略し、疎通だけ見て終了する（GPU 時間の節約）
+# smoke: トンネル / URL 配布 / keepalive を省略し、疎通だけ見て終了する（GPU 時間の節約）
 SMOKE = True
 ENGINE_PATTERN = "-f vllm"
 TUNNEL = "cloudflared"              # 実際に張るトンネル（cloudflared のみ）
@@ -1308,9 +1159,8 @@ LOOP_SLEEP = 20                 # ループ周期（秒）
 # 公開 URL の疎通は 10 分ごと。notebook 版は 60 秒ループ × 10 周
 # （`TUNNEL_CHECK_EVERY = 10`）なので、周期が違うぶんを周回数に直す。
 TUNNEL_CHECK_EVERY = 600 // LOOP_SLEEP
-GIST_ID_DEFAULT = "2b44ac8cb115012a31d3c46661af933f"
-GIST_OWNER = "yamahei21python"
-# 公開 URL を置く掲示板カーネルの名前（owner は GIST_OWNER と同じ）。
+KAGGLE_OWNER = "yamahei21python"
+# 公開 URL を置く掲示板カーネルの名前（owner は KAGGLE_OWNER と同じ）。
 # カーネルから push できるのは自分のカーネルだけなので、配信カーネルと
 # 同じアカウントに置く。中身はビルダーが生成する（kaggle/serve-url-beacon/）。
 BEACON_NAME = "serve-url-beacon"
@@ -1326,7 +1176,7 @@ INSTALL = True              # stage_install() を呼ぶか
 NEEDS_MODEL = False      # find_model() を要求するか
 TP_REQUIRED = True      # GPU が TP 枚必要か
 KEEPALIVE_SCENARIO = False   # keepalive 実測シナリオを回すか
-PUBLISH = True              # 公開 URL を Gist へ書くか
+PUBLISH = True              # 公開 URL をビーコンへ書くか
 VERIFY_PUBLIC = True  # 公開 URL 経由の疎通も見るか
 CONF_DRIVEN = True      # 停止判断を keepalive.conf に従うか
 SERVE = True                  # 配信カーネルか（False = 単発のバッチ処理）
@@ -1718,49 +1568,26 @@ def start_tunnel():
 
 
 def publish_url(url):
-    """公開 URL を url.txt / Gist / ビーコンに書く。**失敗しても配信は続ける。**
+    """公開 URL を url.txt とビーコンに書く。**失敗しても配信は続ける。**
 
-    3 経路あるのは移行途中だから:
+    2 経路あるのは役割が違うから:
       - `url.txt` … 同じカーネルの中から読む用（従来どおり）
-      - Gist      … 個人アカウント時代の読み手。Secrets が無ければスキップ
       - ビーコン  … カーネルのコードを掲示板にする方式。**Secrets 不要**なので
                     専用アカウント運用でも使える（`notes/url-publishing.md`）
 
-    Gist の分岐で早期 return しないこと。以前ここが `return` だったので、
-    Secrets が無い環境ではビーコンまで届かなかった。
+    Gist 版は 2026-11-02 に廃止した。`notes/url-publishing.md` のとおり、
+    Kaggle の Secret は**カーネルごとに紐付ける**必要があり、未紐付けの
+    `get_secret()` は `ConnectionError`（＝通信障害に見える）を返す。
+    ビーコンはその作業ごと不要にする。
     """
     with open(URL_FILE, "w") as f:
         f.write(url + "\n")
-    _publish_gist(url)
     _publish_beacon(url)
-
-
-def _publish_gist(url):
-    gist_id = (secret("GIST_ID") or GIST_ID_DEFAULT or "").strip()
-    token = (secret("GITHUB_TOKEN") or "").strip()
-    if not gist_id or not token:
-        data["publish"] = "skipped (GIST_ID / GITHUB_TOKEN なし)"
-        print("Gist 公開: スキップ（GIST_ID / GITHUB_TOKEN なし）")
-        return
-    body = json.dumps({"files": {"url.txt": {"content": url + "\n"}}}).encode()
-    req = urllib.request.Request(
-        f"https://api.github.com/gists/{gist_id}", data=body, method="PATCH",
-        headers={"Authorization": "Bearer " + token,
-                 "Accept": "application/vnd.github+json",
-                 "User-Agent": f"{ENGINE}-serve-kernel"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data["publish"] = f"gist ok ({r.status})"
-        print("Gist 公開: " + "https://gist.githubusercontent.com/"
-              f"{GIST_OWNER}/{gist_id}/raw/url.txt")
-    except Exception as e:
-        data["publish"] = f"gist failed: {type(e).__name__}: {e}"
-        print(f"Gist 公開 失敗（続行）: {e}")
 
 
 def _publish_beacon(url):
     """ビーコン（掲示板カーネル）を更新する。成否は `data["beacon"]` に残す。"""
-    slug = f"{GIST_OWNER}/{BEACON_NAME}" if GIST_OWNER else ""
+    slug = f"{KAGGLE_OWNER}/{BEACON_NAME}" if KAGGLE_OWNER else ""
     ok, why = kc_beacon_publish(url, stage="serving", slug=slug)
     data["beacon"] = why
     print(("ビーコン公開: " + why) if ok else ("ビーコン公開 失敗（続行）: " + why))
@@ -1798,7 +1625,7 @@ def restart_tunnel(procs):
     """落ちたトンネルを **1 回だけ** 張り直し、新しい URL を返す（駄目なら ""）。
 
     notebook 版（`kaggle/serve-cells/keepalive.py`）と同じ制御。URL が変わるので
-    `publish_url` まで呼ぶ。呼ばないと url.txt / Gist / ビーコンが失効 URL を
+    `publish_url` まで呼ぶ。呼ばないと url.txt / ビーコンが失効 URL を
     指したままになり、**外からは「動いているのに繋がらない」**状態が続く
     （`notes/serve-parity.md`）。
 
@@ -3438,62 +3265,6 @@ def launch(model_dir):
     proc = None
     argv_used = None
     started = False
-    # 起動中の進捗を Gist に流す。Kaggle の UI ログは長大で貼りにくく、
-    # `kaggle kernels output` は完了まで何も返さないため、外から見える場所が要る。
-    _GIST_ID = (os.environ.get("GIST_ID") or GIST_ID_DEFAULT)
-    # 書けたかどうかを数える。**黙って落ちるのが一番高い**——2026-11-01 の
-    # vllm-playground は Gist を 10/28 から一度も更新しておらず、理由
-    # （トークン無し / 401 / 404）はログにも result.json にも残っていなかった。
-    # 外からは「何も起きていない」と区別がつかず、起動待ち 30 分を
-    # 目視で追うことになる。
-    _GIST_STATE = {"gist_id": _GIST_ID, "attempts": 0, "ok": 0, "last_error": ""}
-    _GIST_SAID = [False]
-
-
-    def _gist_status(text):
-        """起動状況を Gist（vllm_status.txt）に書く。失敗は**1 回だけ**声に出す。
-
-        毎回出すと 30 秒ごとに同じ行が並んでログが埋まるので、初回だけ警告し、
-        以降は `_GIST_STATE` に数える。呼び出し側は戻り値を見ない（進捗書き込みで
-        起動を止めない）が、結果は `_gist_summary()` で 1 行にできる。
-        """
-        _GIST_STATE["attempts"] += 1
-        ok, detail = kc_gist_write(_GIST_ID, "vllm_status.txt", text)
-        if ok:
-            _GIST_STATE["ok"] += 1
-            return True
-        _GIST_STATE["last_error"] = detail
-        if not _GIST_SAID[0]:
-            _GIST_SAID[0] = True
-            print(f"⚠ Gist 進捗を書けません: {detail}")
-            print("   以降は黙って続行し、最後にまとめて出します"
-                  "（CPU で確かめるには gist-probe カーネル）")
-        return False
-
-
-    def _gist_summary():
-        """書き込みの成否を 1 行にする。0 件なら**それ自体**が異常。"""
-        s = _GIST_STATE
-        if s["attempts"] == 0:
-            return "ℹ Gist 進捗: 一度も呼ばれていない（待機ループに到達していない）"
-        if s["ok"] == 0:
-            return (f"⚠ Gist 進捗: 0/{s['attempts']} 成功 — 外から見えていない。"
-                    f" 理由: {s['last_error']}")
-        return f"ℹ Gist 進捗: {s['ok']}/{s['attempts']} 成功"
-
-
-    # 待機ループへ入る**前に** 1 回だけ往復を試す。理由は 2 つ:
-    #  - ログの先頭は残る。30 分待って落ちた回でも「トークンが無かった」が読める
-    #  - 進捗ファイル（vllm_status.txt）とは**別名**にする。前回の最終状態を
-    #    起動直後に消さないため（Gist 側に「最後に通った時刻」も残る）
-    _GIST_SELFTEST = kc_gist_selftest(_GIST_ID, "vllm_selftest.txt")
-    if _GIST_SELFTEST["ok"]:
-        print(f"Gist 往復: OK（{_GIST_SELFTEST['token_detail']}）")
-    else:
-        _why = (_GIST_SELFTEST.get("write_detail")
-                or _GIST_SELFTEST.get("read_detail") or "理由不明")
-        print(f"Gist 往復: NG — {_why}")
-        print(f"  トークン解決: {_GIST_SELFTEST.get('token_detail', '')}")
     # GPU クォータは有限。ラダーを全部試すと 1 時間超になり、途中で打ち切られると
     # 成果物が残らない。総予算を切って、必ずログを残して終わるようにする。
     # クォータ残 39 分（2,395s）で pip install に 5 分前後かかる前提の値。
@@ -4032,12 +3803,6 @@ def launch(model_dir):
                 # RAM の内訳も毎回残す。重みロードで固まる原因は「空きが少ない」
                 # だけでは特定できない（cache なのか anon なのか /dev/shm なのか）。
                 print(f"     {_mem_line()} / 上位: {_top_rss()}")
-                _gist_status(
-                    f"attempt {idx}/{len(PLAN)} label={label} maxlen={maxlen}\n"
-                    f"elapsed={int(_now)}s / limit={int(_tmo)}s\n"
-                    f"last_log: {_last_line}\n"
-                    f"milestone: {_mark}\n"
-                    f"{_mem_line()}\n")
             time.sleep(5)
 
         # **なぜ待つのをやめたか**を残す。これが無いと、予算で切った回も
@@ -4059,7 +3824,6 @@ def launch(model_dir):
             kc_save_timings({"prefetch": _PF_STATE})
 
         smoke_fail = ""
-        print(_gist_summary())      # 外から見えていたか（0 件は異常）
         if started:
             # 起動できても初回 forward でカーネルが落ちる領域（sm75 + 量子化 +
             # GDN Triton）があるため、1 回生成させて通ったときだけ成功とする。
@@ -4187,12 +3951,6 @@ def launch(model_dir):
     elif _WARM_CACHE.get("skipped"):
         print(f"  ⏭ キャッシュ退避なし: {_WARM_CACHE['skipped']}")
     kc_save_timings({"warm_cache": _WARM_CACHE})
-    # Gist の往復結果も残す。ログを貼らずに `kaggle kernels output` だけで
-    # 「外から見えていたか」を判定できるようにする（timings と二重化）。
-    save_output("gist_selftest.json",
-                json.dumps(_GIST_SELFTEST, ensure_ascii=False, indent=2))
-    kc_save_timings({"gist_selftest": _GIST_SELFTEST})
-
     if not started:
         save_output("vllm_startup.log", tail)
         save_output("vllm_attempts.txt", "\n\n".join(_attempts) + "\n")
@@ -4365,13 +4123,13 @@ def run(procs):
 
     if SMOKE:
         # GPU 時間の節約: install → launch → 会話 → 終了。
-        # proxy / トンネル / Gist / keepalive は CPU 側で検証済みなので省略する。
+        # proxy / トンネル / ビーコン / keepalive は CPU 側で検証済みなので省略する。
         # direct=True: base はエンジン直。proxy が返すチャット UI は存在しない。
         verify(None, f"http://127.0.0.1:{PORT}", key="verify_direct", direct=True)
         data["timings"] = {"install_seconds": data.get("install_seconds"),
                            "load_seconds": data.get("load_seconds")}
         save()
-        print("smoke 完了（トンネル / Gist / keepalive は省略）")
+        print("smoke 完了（トンネル / ビーコン / keepalive は省略）")
         return "smoke"
 
     proxy, auth = start_proxy(engine.pid)

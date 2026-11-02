@@ -6,7 +6,7 @@ exl3 / LMDeploy / SGLang は**同じ骨格**で生成する。エンジンごと
   flow        … 段の有無（install / model / tp / keepalive / publish /
                 verify_public / conf）
 
-proxy / トンネル / keepalive / 検証 / Gist 配布は `runtime/` の kc_* と
+proxy / トンネル / keepalive / 検証 / URL 配布は `runtime/` の kc_* と
 このテンプレートの共通実装をそのまま使う。エンジン側に配管を書かない。
 トンネルは cloudflared の quick tunnel だけ（`tunnel=` で選ぶ）。ngrok は
 2026-11-01 に廃止した（`notes/url-publishing.md`）。
@@ -120,7 +120,7 @@ PROXY_PORT = $PROXY_PORT        # 認証プロキシ（公開）
 TP = $TP
 RUN_MINUTES = $RUN_MINUTES
 HARD_MAX_MINUTES = $HARD_MAX_MINUTES
-# smoke: トンネル / Gist / keepalive を省略し、疎通だけ見て終了する（GPU 時間の節約）
+# smoke: トンネル / URL 配布 / keepalive を省略し、疎通だけ見て終了する（GPU 時間の節約）
 SMOKE = $SMOKE
 ENGINE_PATTERN = "$ENGINE_PATTERN"
 TUNNEL = "$TUNNEL"              # 実際に張るトンネル（cloudflared のみ）
@@ -140,9 +140,8 @@ LOOP_SLEEP = 20                 # ループ周期（秒）
 # 公開 URL の疎通は 10 分ごと。notebook 版は 60 秒ループ × 10 周
 # （`TUNNEL_CHECK_EVERY = 10`）なので、周期が違うぶんを周回数に直す。
 TUNNEL_CHECK_EVERY = 600 // LOOP_SLEEP
-GIST_ID_DEFAULT = "$GIST_ID"
-GIST_OWNER = "$GIST_OWNER"
-# 公開 URL を置く掲示板カーネルの名前（owner は GIST_OWNER と同じ）。
+KAGGLE_OWNER = "$KAGGLE_OWNER"
+# 公開 URL を置く掲示板カーネルの名前（owner は KAGGLE_OWNER と同じ）。
 # カーネルから push できるのは自分のカーネルだけなので、配信カーネルと
 # 同じアカウントに置く。中身はビルダーが生成する（kaggle/serve-url-beacon/）。
 BEACON_NAME = "serve-url-beacon"
@@ -158,7 +157,7 @@ INSTALL = $INSTALL              # stage_install() を呼ぶか
 NEEDS_MODEL = $NEEDS_MODEL      # find_model() を要求するか
 TP_REQUIRED = $TP_REQUIRED      # GPU が TP 枚必要か
 KEEPALIVE_SCENARIO = $KEEPALIVE_SCENARIO   # keepalive 実測シナリオを回すか
-PUBLISH = $PUBLISH              # 公開 URL を Gist へ書くか
+PUBLISH = $PUBLISH              # 公開 URL をビーコンへ書くか
 VERIFY_PUBLIC = $VERIFY_PUBLIC  # 公開 URL 経由の疎通も見るか
 CONF_DRIVEN = $CONF_DRIVEN      # 停止判断を keepalive.conf に従うか
 SERVE = $SERVE                  # 配信カーネルか（False = 単発のバッチ処理）
@@ -550,49 +549,26 @@ def start_tunnel():
 
 
 def publish_url(url):
-    """公開 URL を url.txt / Gist / ビーコンに書く。**失敗しても配信は続ける。**
+    """公開 URL を url.txt とビーコンに書く。**失敗しても配信は続ける。**
 
-    3 経路あるのは移行途中だから:
+    2 経路あるのは役割が違うから:
       - `url.txt` … 同じカーネルの中から読む用（従来どおり）
-      - Gist      … 個人アカウント時代の読み手。Secrets が無ければスキップ
       - ビーコン  … カーネルのコードを掲示板にする方式。**Secrets 不要**なので
                     専用アカウント運用でも使える（`notes/url-publishing.md`）
 
-    Gist の分岐で早期 return しないこと。以前ここが `return` だったので、
-    Secrets が無い環境ではビーコンまで届かなかった。
+    Gist 版は 2026-11-02 に廃止した。`notes/url-publishing.md` のとおり、
+    Kaggle の Secret は**カーネルごとに紐付ける**必要があり、未紐付けの
+    `get_secret()` は `ConnectionError`（＝通信障害に見える）を返す。
+    ビーコンはその作業ごと不要にする。
     """
     with open(URL_FILE, "w") as f:
         f.write(url + "\n")
-    _publish_gist(url)
     _publish_beacon(url)
-
-
-def _publish_gist(url):
-    gist_id = (secret("GIST_ID") or GIST_ID_DEFAULT or "").strip()
-    token = (secret("GITHUB_TOKEN") or "").strip()
-    if not gist_id or not token:
-        data["publish"] = "skipped (GIST_ID / GITHUB_TOKEN なし)"
-        print("Gist 公開: スキップ（GIST_ID / GITHUB_TOKEN なし）")
-        return
-    body = json.dumps({"files": {"url.txt": {"content": url + "\n"}}}).encode()
-    req = urllib.request.Request(
-        f"https://api.github.com/gists/{gist_id}", data=body, method="PATCH",
-        headers={"Authorization": "Bearer " + token,
-                 "Accept": "application/vnd.github+json",
-                 "User-Agent": f"{ENGINE}-serve-kernel"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data["publish"] = f"gist ok ({r.status})"
-        print("Gist 公開: " + "https://gist.githubusercontent.com/"
-              f"{GIST_OWNER}/{gist_id}/raw/url.txt")
-    except Exception as e:
-        data["publish"] = f"gist failed: {type(e).__name__}: {e}"
-        print(f"Gist 公開 失敗（続行）: {e}")
 
 
 def _publish_beacon(url):
     """ビーコン（掲示板カーネル）を更新する。成否は `data["beacon"]` に残す。"""
-    slug = f"{GIST_OWNER}/{BEACON_NAME}" if GIST_OWNER else ""
+    slug = f"{KAGGLE_OWNER}/{BEACON_NAME}" if KAGGLE_OWNER else ""
     ok, why = kc_beacon_publish(url, stage="serving", slug=slug)
     data["beacon"] = why
     print(("ビーコン公開: " + why) if ok else ("ビーコン公開 失敗（続行）: " + why))
@@ -630,7 +606,7 @@ def restart_tunnel(procs):
     """落ちたトンネルを **1 回だけ** 張り直し、新しい URL を返す（駄目なら ""）。
 
     notebook 版（`kaggle/serve-cells/keepalive.py`）と同じ制御。URL が変わるので
-    `publish_url` まで呼ぶ。呼ばないと url.txt / Gist / ビーコンが失効 URL を
+    `publish_url` まで呼ぶ。呼ばないと url.txt / ビーコンが失効 URL を
     指したままになり、**外からは「動いているのに繋がらない」**状態が続く
     （`notes/serve-parity.md`）。
 
@@ -904,13 +880,13 @@ def run(procs):
 
     if SMOKE:
         # GPU 時間の節約: install → launch → 会話 → 終了。
-        # proxy / トンネル / Gist / keepalive は CPU 側で検証済みなので省略する。
+        # proxy / トンネル / ビーコン / keepalive は CPU 側で検証済みなので省略する。
         # direct=True: base はエンジン直。proxy が返すチャット UI は存在しない。
         verify(None, f"http://127.0.0.1:{PORT}", key="verify_direct", direct=True)
         data["timings"] = {"install_seconds": data.get("install_seconds"),
                            "load_seconds": data.get("load_seconds")}
         save()
-        print("smoke 完了（トンネル / Gist / keepalive は省略）")
+        print("smoke 完了（トンネル / ビーコン / keepalive は省略）")
         return "smoke"
 
     proxy, auth = start_proxy(engine.pid)
@@ -1052,7 +1028,7 @@ def _data_init(engine: dict) -> str:
 
 
 def render(engine: dict, *, run_minutes: int, runtime: str, proxy_b64: str,
-           html_b64: str, gist_id: str, gist_owner: str,
+           html_b64: str, kaggle_owner: str,
            port: int = 8000, proxy_port: int = 11435,
            hard_max_minutes: int = 180, smoke: bool = False,
            mode: str = "serve", tunnel: str = "cloudflared",
@@ -1103,7 +1079,7 @@ def render(engine: dict, *, run_minutes: int, runtime: str, proxy_b64: str,
         code = EXTERNAL_ENGINE_CODE.substitute(**ext)
     # ビーコンは骨格側で必ず足す。各ビルダーに `"beacon"` を書かせると
     # 1 本書き忘れただけで「URL が更新されないのに配信は続く」状態になる
-    # （2026-11-01 に Gist で同じ穴を踏んだ）。公開しない構成でも、束ねて
+    # （2026-11-01 に URL 配布で同じ穴を踏んだ）。公開しない構成でも、束ねて
     # おけば `publish_url` が NameError にならない。
     runtime = runtime + module_source("beacon")
     subs = dict(
@@ -1144,8 +1120,7 @@ def render(engine: dict, *, run_minutes: int, runtime: str, proxy_b64: str,
         SERVE=flow["serve"],
         WARMUP=flow["warmup"],
         CLEANUP=flow["cleanup"],
-        GIST_ID=gist_id,
-        GIST_OWNER=gist_owner,
+        KAGGLE_OWNER=kaggle_owner,
     )
     # 引数の過不足はここで落とす。`substitute()` は「足りない」しか見ないので、
     # テンプレートからトークンを消したときに `render()` 側の名前が残る。

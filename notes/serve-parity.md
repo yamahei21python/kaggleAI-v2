@@ -9,7 +9,7 @@
 | 実行 | セルを上から順に（モジュール直下） | `main()` → `run(procs)` の 1 本道 |
 | 共有部分 | `runtime/` の `kc_*` | 同じ `kc_*` |
 
-`runtime/` に寄せてある部分（proxy 起動 / cloudflared 起動 / Gist / 公開待ち /
+`runtime/` に寄せてある部分（proxy 起動 / cloudflared 起動 / ビーコン / 公開待ち /
 conf の読み方 / 期限判定）は**同じ関数を呼んでいる**ので、差分にはならない。
 差分が出るのは「制御の流れ」——何を監視し、何を証跡に残すか。
 
@@ -19,7 +19,7 @@ conf の読み方 / 期限判定）は**同じ関数を呼んでいる**ので�
 |---|---|---|---|
 | proxy 起動 | `proxy.py` → `kc_start_proxy` | `start_proxy()` → `kc_start_proxy` | 同等 |
 | トンネル起動 | `tunnel_cloudflared.py` | `start_cloudflared()` | 同等 |
-| Gist 公開 | `gist.py` の `publish_url` | `publish_url()` → `_publish_gist` / `_publish_beacon` | 同等 |
+| URL 配布 | `publish.py` の `publish_url` → `_publish_beacon` | `publish_url()` → `_publish_beacon` | 同等（2026-11-02 に Gist を全廃して 1 本化） |
 | 公開待ち | `verify.py` 冒頭の `kc_wait_http` | `wait_public()`（失敗しても続行） | ほぼ同等 |
 | 疎通判定 | `verify.py` の `_judge`（SKIP は失敗に数えない） | `verify()` 内の `judge` | **同じ契約**（SKIP の扱いを含む） |
 | エンジン確認項目 | `engine_checks(judge, retry, url)` | `engine_checks(judge, retry, base, auth, direct)` | 引数が 2 個多い（smoke 用の `direct`） |
@@ -39,7 +39,7 @@ script 版は起動時の `wait_public()` 1 回きりで、`loop()` はエンジ
 
 - 途中で URL が失効しても `loop()` は走り続ける
 - `result.json` は `ok: true` のまま、外からは繋がらない
-- `url.txt` / Gist / ビーコンは失効 URL を指したまま
+- `url.txt` / ビーコンは失効 URL を指したまま
 
 本番は script 版なので、これは**運用中の穴**だった。次の 3 つを入れて閉じた。
 
@@ -83,9 +83,9 @@ notebook は 60 秒 × 10 周 = 600 秒）。
 | `runtime/` `kbuild/` `cli/` `tests/` ルート | 430 | 5 → **2 を削除** | 残り 3 つは `kaggle/`（生成物）から使われていた |
 | `TEMPLATE` の中 | 32 | 2 | `sh` / `wait_http`。どちらも `EXTERNAL_ENGINE_CODE`（LMDeploy / SGLang）から使う |
 
-削除したのは `runtime/gist.py` の `kc_gh_token()`（`kc_gh_token_detail()` の
-薄い包みで呼び出しゼロ。gist.py を埋め込む生成物すべてに写っていた）と
-`tests/_cells.py` の `cell_def()`。テンプレート側は 0 件だった。
+削除したのは `tests/_cells.py` の `cell_def()`。テンプレート側は 0 件だった。
+`runtime/gist.py` の `kc_gh_token()` も同じ理由で消したが、こちらは同日の
+**Gist 全廃**でモジュールごと無くなった（`notes/url-publishing.md`）。
 
 ## テンプレートの引数は両方向で突き合わせる（2026-11-02）
 
@@ -116,12 +116,8 @@ notebook は 60 秒 × 10 周 = 600 秒）。
 
 ## まだ残っている差
 
-- **Gist への書き込みだけ二重実装のまま**。notebook 版は `runtime/gist.py` の
-  `kc_gist_write`（401 と 404 を HTTP 本文で区別する）、script 版は
-  `TEMPLATE` 内の `_publish_gist`（`type(e).__name__: e` に潰す）。前者に寄せれば
-  区別は揃うが、**UA ヘッダ（`{ENGINE}-serve-kernel`）が消える**ぶんの挙動差を
-  GPU 無しで確かめられないので、v17 の結果を見るまで触らない。なお公開 URL の
-  主経路はもうビーコンで、Gist は残置（`notes/url-publishing.md`）
+- ~~Gist への書き込みだけ二重実装~~ → **2026-11-02 に解消**。Gist を全廃し、
+  両実装とも `kc_beacon_publish` を呼ぶだけになった（`notes/url-publishing.md`）
 - `loop()` の周期（20 秒 / 60 秒）と、`keepalive.txt` の行の形（notebook は
   `cloudflared=alive | GPU: …`、script は `tunnel=cloudflared:alive | GPU: …`）。
   名前は同じだが中身の書式は違う

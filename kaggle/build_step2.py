@@ -111,8 +111,7 @@ SETTINGS = render_settings(CELLS_DIR / "00_settings.py", {
     "__TUNNEL__": TUNNEL,
     "__PROXY_B64__": PROXY_SRC_B64,
     "__CHAT_B64__": CHAT_SRC_B64,
-    "__GIST_ID__": CFG["GIST_ID"],
-    "__GIST_OWNER__": CFG["GIST_OWNER"],
+    "__KAGGLE_OWNER__": CFG["KAGGLE_OWNER"],
 })
 
 flow = Flow(

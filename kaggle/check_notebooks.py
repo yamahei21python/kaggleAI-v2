@@ -55,8 +55,8 @@ def main():
     failed = []
     with tempfile.TemporaryDirectory(prefix="kc-nbcheck-") as tmp:
         # コミットするノートは config.env（既定値）で生成したものが基準。
-        # config.local.env の個人値はノートに焼き込まず、Kaggle 側は Secrets
-        # （GIST_ID）で上書きする前提なので、ここでは写さない。
+        # config.local.env の個人値（アカウント名など）はノートに焼き込まない
+        # 前提なので、ここでは写さない。
         if (ROOT / "config.local.env").is_file():
             print("ℹ config.local.env は無視して既定値で比較します"
                   "（個人値で再生成したノートは不一致になります）\n")

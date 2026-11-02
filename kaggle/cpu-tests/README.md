@@ -9,10 +9,12 @@ GPU を使わずに「高度化の前提」だけを潰す置き場。1 ディ�
 | `tiny-ollama/` | 本番 `OLLAMA_ENV` の ctx / KV 量子化（4096・32k・128k、f16・q8_0）。`/api/ps` の実値で env の無言無視を検出 + CPU t/s | `python3 -m cli push tiny-ollama-probe --yes` |
 | `vllm-flags/` | vLLM 0.32.0 のフラグ実在・選択肢・argv 受理（`--speculative-config` / `--kv-cache-dtype` / `--enforce-eager` / `--attention-backend`）。CUDA 前段で判定 | `python3 -m cli push vllm-flag-probe --yes` |
 | `whl-probe/` | （`kaggle/whl-probe`）vLLM wheelhouse の `--no-index` 解決可否 | `python3 -m cli push vllm-whl-probe --yes` |
-| `gist/` | 起動待ちの進捗 Gist が**本当に外から見えるか**。PATCH → GET の往復 + 存在しない Gist への書き込みで「失敗が失敗として返る」ことまで確認 | `python3 -m cli push gist-probe --yes` |
 
 どれも tiny モデル（0.4〜0.5B）を実行時に落とす。GPU カーネルは 1 本も回さない。
-例外は `gist/` で、モデルも Dataset も使わず HTTP の往復だけを見る（数十秒で終わる）。
+
+`gist/`（`gist-probe`）は 2026-11-02 に廃止した。公開 URL の配布をビーコン
+カーネルへ移し、Gist への進捗書き込みもしなくなったため（`notes/url-publishing.md`）。
+ビーコンの往復を見るのは `beacon/`（`beacon-probe`）。
 
 ## CPU で確定できること / できないこと
 

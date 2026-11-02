@@ -73,7 +73,7 @@
 ### 3-1. 何も要らない（#1〜#3）
 
 **smoke は Secrets を 1 つも使わない。** `kbuild/serve_script.py` は `SMOKE` のとき
-proxy / トンネル / Gist / keepalive を丸ごと飛ばし、エンジンへ直接
+proxy / トンネル / URL 配布 / keepalive を丸ごと飛ばし、エンジンへ直接
 `/v1/chat/completions` を投げて終わる（`serve_script.py` の 649 行目）。
 
 ```python
@@ -92,7 +92,7 @@ if SMOKE:
 | Secret | 必須か | 無いとどうなる |
 |---|---|---|
 | `NGROK_TOKEN` | **必須** | `ngrok config add-authtoken` が失敗し、トンネルが張れない |
-| `GIST_ID` + `GITHUB_TOKEN` | 実質必須 | 公開 URL の共有（Gist 更新）ができない。`result.json` は残る |
+| ~~`GIST_ID` + `GITHUB_TOKEN`~~ | ~~実質必須~~ | **2026-11-02 に廃止**。公開 URL はビーコンが持つ（Secrets 不要） |
 | `NGROK_DOMAIN` | 任意 | 埋め込み既定値にフォールバックする |
 | `API_USER` / `API_PASS` | 任意 | 空だと proxy の Basic 認証が無効になる（URL を知っていれば誰でも叩ける） |
 
@@ -573,8 +573,8 @@ group_size=32 のみ。turbomind の OOM も同じ根（形式を解釈できず
   `compressed-tensors` は sglang 側にも実装があり、`get_min_capability() = 70`、
   `group_size in (32, 128)` なので **LMDeploy と違ってこの AWQ を読める見込み**。
 - **#4**（ngrok 実配線・smoke 無し）は Secrets が要る。`NGROK_TOKEN` は必須、
-  `GIST_ID` + `GITHUB_TOKEN` が実質必須。ローカルの `config.env` には無い
-  （Kaggle 側の Secrets に登録が必要）。
+  `GIST_ID` + `GITHUB_TOKEN` が実質必須だったが、**Gist は 2026-11-02 に全廃**
+  したのでもう要らない（URL はビーコンが持つ）。
 - #5（keepalive / `/stop` / UI）は**検証済み**（CPU・GPU 0 秒。上の表）。
 - `vllm-wheelhouse` は patch と 2 点セットなら解決する（`notes/dataset-inventory.md`）。
 

@@ -200,17 +200,8 @@ KERNELS = (
            "yamahei21python/vllm-warm-cache"),
        builder="build_vllm_playground", status=SEMI),
     # ---- 観測系（CPU・無料）----
-    # Gist への進捗書き込みが通るかを、GPU を使わずに確かめる。2026-11-01 の
-    # vllm-playground は 10/28 から Gist を一度も更新しておらず、その理由が
-    # どこにも残っていなかった。起動待ちは 30 分あるので、外から見えないまま
-    # 待つと**その 30 分が丸ごと無駄になる**。往復は CPU で 1 分で試せる。
-    #
-    # `status=SEMI` の理由は playground と同じ（常用ではない）。ただし
-    # こちらは環境変数で出力が変わらないので、`check_scripts` に載せても
-    # 生成物は安定する。GPU を使わない点だけが違う。
-    _K("gist-probe", "gist probe", "script",
-       "kaggle/cpu-tests/gist", "main.py", gpu=False,
-       ds=(), builder="build_gist_probe", status=SEMI),
+    # Gist への進捗書き込みを見る `gist-probe` は 2026-11-02 に廃止した
+    # （公開 URL の配布をビーコンへ移し、進捗も Gist に流さなくなったため）。
     # ---- 公開 URL のビーコン（カーネルのコードを掲示板にする）----
     # **実行しないカーネル**。配信カーネルが `kernels_push` で main.py を
     # 書き換え、読み手は `kernels pull` で URL を読む。Secrets も外部

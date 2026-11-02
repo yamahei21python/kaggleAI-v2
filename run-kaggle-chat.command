@@ -70,17 +70,6 @@ open_ui() {  # $1=base url
   fi
 }
 
-gist_url() {
-  local g u
-  g="https://gist.githubusercontent.com/${CFG_GIST_OWNER}/${CFG_GIST_ID}/raw/url.txt"
-  u="$(curl -fsS -m 10 "${g}?t=$(date +%s)" 2>/dev/null || true)"
-  # Gist は誰でも書き換え可能な前提で扱う。想定ホスト以外は信用しない
-  # （前方一致だと `https://a.trycloudflare.com.evil.tld` を通す）。
-  if [[ "${u}" =~ '^https://[a-z0-9-]+\.trycloudflare\.com/?$' ]]; then
-    printf '%s' "${u%/}"
-  fi
-}
-
 echo "▶ tunnel=${TUNNEL}"
 BASE=""
 
@@ -117,11 +106,10 @@ tries=0
 while (( $(date +%s) < deadline )); do
   tries=$(( tries + 1 ))
 
-  # URL の出所は 2 つ。ビーコンが本命（Secrets 不要）、Gist は旧経路。
+  # URL の出所はビーコンだけ（Secrets 不要）。Gist 版は 2026-11-02 に廃止した。
   # 一度取れたら覚えておく（ビーコンは push 直後まだ空のことがある）。
   if [[ -z "${BASE}" ]]; then
     BASE="$(kc_beacon_url)"
-    [[ -n "${BASE}" ]] || BASE="$(gist_url)"
   fi
 
   if [[ -n "${BASE}" ]]; then

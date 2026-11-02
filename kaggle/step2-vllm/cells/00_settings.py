@@ -152,9 +152,8 @@ PROXY_AUTH = {
     "API_PASS": os.environ.get("API_PASS", ""),
 }
 
-# ---- Secrets の既定値（config.env 由来。Secret があれば上書きされる）----
-GIST_ID_DEFAULT = "__GIST_ID__"
-GIST_OWNER = "__GIST_OWNER__"
+# ---- アカウント（ビーコンの slug に使う。config.env の KAGGLE_OWNER）----
+KAGGLE_OWNER = "__KAGGLE_OWNER__"
 
 # ---- キープアライブ ----
 # 上限。チャット 1 回で proxy が MINUTES=60 を書くため、上限が無いと

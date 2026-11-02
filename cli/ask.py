@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Kaggle 上の Qwen3.8-27B と対話するクライアント。
 
-公開URLは cloudflared quick tunnel で毎回変わるため、固定の Gist
-（url.txt）から現在の URL を取得する。
+公開URLは cloudflared quick tunnel で毎回変わるため、**ビーコンカーネル**
+（同じアカウントの掲示板カーネル）から現在の URL を取得する。Gist 版は
+2026-11-02 に廃止した（Secrets をカーネルごとに紐付ける作業が要るため）。
 
 ノートの既定は **認証なし**。環境変数 API_PASS（または ~/.orcarouter_pass）が
 あるときだけ Basic 認証を付ける。
@@ -10,7 +11,7 @@
 使い方:
     python3 ask.py "こんにちは"          # 1回だけ
     python3 ask.py                      # 対話モード（履歴保持）
-    python3 ask.py --url https://... "..."  # Gist を介さず直接
+    python3 ask.py --url https://... "..."  # ビーコンを介さず直接
     python3 ask.py --model orcarouter/Qwen3.8-27B-Uncensored:latest "..."
 """
 import argparse
@@ -20,20 +21,15 @@ import os
 import pathlib
 import re
 import sys
-import time
 import urllib.error
 import urllib.request
 
-from cli import config as kcconfig
-
-_CFG = kcconfig.load()
-GIST_RAW = ("https://gist.githubusercontent.com/%s/%s/raw/url.txt"
-            % (_CFG.get("GIST_OWNER", ""), _CFG.get("GIST_ID", "")))
 DEFAULT_MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 PASS_FILE = pathlib.Path.home() / ".orcarouter_pass"
-# Gist は書き換えられうる前提で扱う。cloudflared の quick tunnel 以外は信用しない
-# （API_PASS を設定していると、任意ホストに Basic 認証を送ってしまうため）。
-GIST_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com/?")
+# ビーコンの中身は誰でも書き換えられる前提で扱う。cloudflared の quick tunnel
+# 以外は信用しない（API_PASS を設定していると、任意ホストに Basic 認証を
+# 送ってしまうため）。前方一致ではなく fullmatch で見る。
+PUBLIC_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com/?")
 
 
 class AskError(Exception):
@@ -41,27 +37,27 @@ class AskError(Exception):
 
 
 def fixed_url(explicit=None):
-    """--url / LLM_URL で固定された URL。無ければ None（Gist を使う）。"""
+    """--url / LLM_URL で固定された URL。無ければ None（ビーコンを使う）。"""
     url = explicit or os.environ.get("LLM_URL", "").strip()
     return url.rstrip("/") if url else None
 
 
 def resolve_url(explicit=None):
-    """現在の公開URLを決める。Gist は CDN キャッシュ対策で毎回クエリを変える。"""
+    """現在の公開URLを決める（出所はビーコンカーネル）。
+
+    捨てる条件（probe / 古すぎる）は `cli.beacon.judge` と共通にしてある。
+    ここで独自に判定すると、`cli beacon` が ok と言う値を `ask` が掴む
+    （またはその逆）という食い違いが出る。
+    """
     fixed = fixed_url(explicit)
     if fixed:
         return fixed
-    req = urllib.request.Request(
-        GIST_RAW + "?t=" + str(int(time.time())),
-        headers={"Cache-Control": "no-cache"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            url = r.read().decode().strip()
-    except (urllib.error.URLError, TimeoutError) as e:
-        raise AskError("Gist から URL を取得できません: %s" % e) from e
-    if not GIST_URL_RE.fullmatch(url):
-        raise AskError("Gist の内容が想定外の URL です: " + repr(url))
+    from cli.beacon import resolve_url as beacon_url
+    url, why = beacon_url()
+    if not url:
+        raise AskError("公開 URL をビーコンから取得できません: " + why)
+    if not PUBLIC_URL_RE.fullmatch(url):
+        raise AskError("ビーコンの内容が想定外の URL です: " + repr(url))
     return url.rstrip("/")
 
 
@@ -69,7 +65,7 @@ def resolve_auth():
     """認証情報を決める。無ければ (None, None) = 認証なし。
 
     優先順: 環境変数 → ~/.orcarouter_pass。
-    Gist にはもう pass.txt を置かない（既定が認証なしのため）。
+    公開側には pass を置かない（既定が認証なしのため）。
     """
     user = os.environ.get("API_USER", "").strip() or "ollama"
     pw = os.environ.get("API_PASS", "").strip()
@@ -117,7 +113,7 @@ def ask(url, user, pw, model, messages, temperature, max_tokens,
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")[:500]
         # 530/502/504 = tunnel 失効（cloudflared 再起動で URL が変わった）。
-        # Gist から取り直して1回だけ再試行する。
+        # ビーコンから取り直して1回だけ再試行する。
         if allow_retry and e.code in (502, 503, 504, 530) and not fixed:
             print("# tunnel 失効 (HTTP %s) → URL を取り直して再試行" % e.code,
                   file=sys.stderr)
@@ -146,7 +142,7 @@ def ask(url, user, pw, model, messages, temperature, max_tokens,
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="cli ask")
     ap.add_argument("prompt", nargs="*", help="空なら対話モード")
-    ap.add_argument("--url", help="公開URL（Gist を介さない）")
+    ap.add_argument("--url", help="公開URL（ビーコンを介さない）")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--system", default="日本語で簡潔に答える。")
     ap.add_argument("--temperature", type=float, default=0.7)

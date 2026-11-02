@@ -32,7 +32,7 @@ NOTEBOOKS = [
 ]
 
 # 配管セルの並び。ここが「カーネルの形」そのもの。
-ORDER = ["proxy.py", "{tunnel}", "gist.py", "verify.py",
+ORDER = ["proxy.py", "{tunnel}", "publish.py", "verify.py",
          "connection.py", "keepalive.py"]
 
 # エンジン名。共有セルに現れたら「1 本化が崩れた」合図。
@@ -101,7 +101,7 @@ def test_settings_defines_the_contract():
         "PORT", "UPSTREAM_PORT", "PROXY_PORT", "CHAT_PATH", "PROXY_PATH",
         "PROXY_AUTH", "PROXY_EXTRA_ARGS", "PROXY_CHECK_PATH",
         "MODEL_NAME", "MODEL_DISPLAY", "ENGINE_DISPLAY", "CONTEXT_LENGTH",
-        "GIST_ID_DEFAULT", "GIST_OWNER",
+        "KAGGLE_OWNER",
         "MAX_MINUTES", "KEEPALIVE_RESET_MINUTES", "TUNNEL_CHECK_EVERY",
         "ENGINE_LABEL", "ENGINE_PROCS", "CLEANUP_TARGETS", "ENGINE_LOG",
         "OUT_DIRS", "save_output", "fail",

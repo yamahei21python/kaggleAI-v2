@@ -70,8 +70,6 @@ Notebook を開き、右側 **Add-ons → Secrets → Add a Secret**:
 |---|---|---|
 | `API_PASS` | 設定すると Basic 認証が有効になる | 不要（既定は認証なし） |
 | `API_USER` | Basic 認証のユーザー名（`API_PASS` 設定時のみ） | 不要（既定 `ollama`） |
-| `GITHUB_TOKEN` | gist 権限つきトークン（`gh auth token` の出力） | 任意（Gist 自動配布を使う場合） |
-| `GIST_ID` | 配布先 Gist の ID | 任意（既定 Gist を使用） |
 | `KAGGLE_USERNAME` | Kaggle ユーザー名 | Step1 のみ |
 | `KAGGLE_KEY` | API Key（`kaggle.json` の key） | Step1 のみ |
 
@@ -193,17 +191,14 @@ python3 -m cli beacon --json | jq -r .url   # シェル置換用
 
 - 配信カーネルが起動直後に掲示板（`serve-url-beacon`）の `main.py` を
   `kernels_push` で書き換え、こちらは `kernels_pull` で読む（実測 0.26 秒）
-- **Secrets 不要**。専用アカウントでも動く（Gist は `GITHUB_TOKEN` が要る）
+- **Secrets 不要**。専用アカウントでも動く（Gist 版が要していた
+  `GITHUB_TOKEN` の紐付け作業ごと不要）
 - 既定で **`STAGE == "probe"` と 6 時間より古い値を捨てる**。
   捨てたときは理由が出る（黙って古い URL を返さない）
 - 戻り値: `0` = 使える / `1` = 読めたが捨てた / `2` = 引けなかった
 
-旧経路の **Gist** も残っています（`GITHUB_TOKEN` と `GIST_ID` があるときだけ動く。
-無ければスキップして配信は続く）。
-
-```
-https://gist.githubusercontent.com/yamahei21python/2b44ac8cb115012a31d3c46661af933f/raw/url.txt
-```
+Gist 版は 2026-11-02 に全廃しました（`notes/url-publishing.md`）。
+URL の出所はビーコンだけです。
 
 ```bash
 python3 -m cli ask "自己紹介して"        # 1回だけ
@@ -211,12 +206,11 @@ python3 -m cli ask                      # 対話モード（履歴保持, /reset
 python3 -m cli ask --url https://xxx.trycloudflare.com "..."   # どちらも介さない
 ```
 
-- `GITHUB_TOKEN` 未設定なら Gist 更新はスキップ（接続情報セルは常に出る）
-- Gist は **secret（非公開 URL）** だが、URL を知れば誰でも読める。
+- URL は**非公開の掲示板カーネル**に置くが、URL を知れば誰でも入れる。
   認証を有効にした場合は URL 自体が入口になる点に注意
 - `ask.py` は `API_USER` / `API_PASS`（環境変数 → `~/.orcarouter_pass`）があれば
   Basic 認証を付ける。無ければそのまま送る（既定の認証なし構成で動く）
-- raw は CDN キャッシュが効くので `ask.py` は毎回 `?t=<epoch>` を付ける
+- `ask.py` はビーコンを `kernels pull` で引く（1 回数秒）。`--url` を渡せば引かない
 - 取得した URL が古い（`530`）ときは、カーネルが起動中か確認 → 再実行
 
 `opencode.json` の例は Step2 の「接続情報」セルが出力します。

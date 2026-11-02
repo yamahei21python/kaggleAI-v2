@@ -300,7 +300,7 @@ def _render_min(**engine_over):
     engine = {**MIN_ENGINE, **engine_over}
     return serve_script.render(
         engine, run_minutes=1, runtime="# rt\n",
-        proxy_b64="", html_b64="", gist_id="g", gist_owner="o")
+        proxy_b64="", html_b64="", kaggle_owner="o")
 
 
 def test_template_tokens_match_render_arguments():

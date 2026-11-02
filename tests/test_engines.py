@@ -129,7 +129,7 @@ def _render(tmp, name, smoke=False):
         pathlib.Path(tmp) / name, engine, bes.METADATA[name],
         run_minutes=60,
         runtime="\n# runtime\n",
-        proxy_b64="", html_b64="", gist_id="g", gist_owner="o",
+        proxy_b64="", html_b64="", kaggle_owner="o",
         smoke=smoke,
     )
     return (pathlib.Path(tmp) / name / "main.py").read_text()
@@ -184,7 +184,7 @@ def _render_tunnel(tmp, tunnel, name="sglang"):
         pathlib.Path(tmp) / tunnel, engine, bes.METADATA[name],
         run_minutes=60,
         runtime="\n# runtime\n",
-        proxy_b64="", html_b64="", gist_id="g", gist_owner="o",
+        proxy_b64="", html_b64="", kaggle_owner="o",
         tunnel=tunnel,
     )
     return (pathlib.Path(tmp) / tunnel / "main.py").read_text()

@@ -109,7 +109,7 @@ while i < limit:
                 # zip 側も更新しないと、成果物には失効URLが残る
                 save_output("public_url.txt", url + "\n")
                 print(f"♻ {TUNNEL_NAME} 再起動 → 新URL: {url}")
-                # 固定URL配布（Gist）も更新しないと、クライアントは失効URLを掴む
+                # URL 配布（ビーコン）も更新しないと、クライアントは失効URLを掴む
                 if "publish_url" in globals():
                     publish_url(url)
                 tunnel_st = "alive(restarted)"

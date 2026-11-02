@@ -1,14 +1,18 @@
 # 公開 URL と進捗の伝え方（Gist → ビーコンカーネル）
 
-**いまは両方入っている。** Gist（`runtime/gist.py` の `kc_gist_write`）は
-残置で、`GITHUB_TOKEN` が読めたときだけ動く。**ビーコンは
-`runtime/beacon.py` に実装済みで、serve の `publish_url` から必ず呼ばれる**
+**いまはビーコンだけ。** Gist は 2026-11-02 に**全廃**した（コード・設定・
+Secret・クライアントの解決経路まで）。URL は `runtime/beacon.py` に実装した
+ビーコンカーネルが持ち、serve の `publish_url` から必ず呼ばれる
 （`kbuild/serve_script.py` の `render()` が `beacon` モジュールを無条件で
 足すので、ビルダーが書き忘れることがない）。
 
-この文書は「なぜ置き換えたか」「何を実測したか」「どこまで確認できたか」の記録。
+この文書は「なぜ置き換えたか」「何を実測したか」「何を失ったか」の記録。
+Gist 時代の記述は**経緯として**残してあるが、いまの実装には存在しない。
 
-## 1. Gist 方式（残置・実質動かない）
+## 1. Gist 方式（2026-11-02 に全廃）
+
+以下は当時の実装の記録。`runtime/gist.py` も `serve-cells/gist.py` も
+`gist-probe` カーネルももう無い（`tests/test_no_gist.py` が戻らないよう見ている）。
 
 - serve カーネルがトンネル確立後に `publish_url(u)` を呼び、Gist の
   `url.txt` を PATCH する
@@ -163,51 +167,46 @@ v16 はこの 3 例目で、しかも**予算切れが「起動失敗」と報�
 
 | 対象 | 状態 |
 |---|---|
-| URL（配信） | **ビーコンに移行済み**。`publish_url` が Gist とビーコンの両方を呼ぶ |
-| URL（読み取り） | `python3 -m cli beacon` で読める。古い値と `probe` は既定で捨てる |
-| 進捗（起動中） | **未着手**。§4 のとおり、まだ外から見えない |
+| URL（配信） | **ビーコンのみ**。`publish_url` は `url.txt` とビーコンに書く |
+| URL（読み取り） | `python3 -m cli beacon`。古い値と `probe` は既定で捨てる。`cli ask` も同じ判定を通る |
+| 進捗（起動中） | **外から見えない**。Gist 版を消したので、待っている間の現在地はどこにも出ない |
 
-### `runtime/gist.py` は残す（2026-11-01 判断）
+### Gist を消した（2026-11-02）
 
-消さない。理由は 3 つ。
+消したもの:
 
-1. **URL の経路としてはもう主役ではない**が、`publish_url` の片翼としては生きている
-   （`GITHUB_TOKEN` が読める環境なら動く）。読み手の `cli/ask.py` と
-   ランチャーの `gist_url` も同じ。
-2. **進捗を運ぶ唯一の実装**。§4 の穴はまだ埋まっていないので、ここを消すと
-   「設計も実装も無い」状態になる。
-3. **`kaggle/step2-vllm/cells/03_vllm_serve.py` が `vllm_status.txt` を書いている**。
-   これは起動待ちの現在地を外に出す唯一の口で、消すにはビーコンの
-   ステータス版を先に作る必要がある。
-
-ただし**このアカウントでは動かない**。`gist-probe`（2026-11-01 09:39 UTC）の実測:
-
-```json
-{"token_present": false,
- "token_detail": "Secret を読めない（ConnectionError: Connection error trying to
-                  communicate with service.） — アカウントに登録済みでも、
-                  カーネルごとの紐付けが無いと読めない",
- "negative_ok": true}
-```
-
-`negative_ok: true` は「壊れたときは必ず理由を返す」という設計が効いている証拠で、
-黙って落ちることは無い。つまり**死んでいることが観測できる**。だから残しても
-事故らない。次の一手は §4 のステータス用ビーコン（`runtime/gist.py` を消すのは
-その後）。
-
-### 進捗が見えないコスト（2026-11-01 22:40 実測）
-
-`vllm-playground` の `cache` 実験を回している間、**外から状態を知る手段が
-3 つとも空**だった:
-
-| 手段 | 結果 |
+| 場所 | 何 |
 |---|---|
-| `kaggle kernels logs` | 空（実行中は返らない） |
-| `kaggle kernels output` | 空（完了まで何も落ちてこない） |
-| `kaggle kernels files` | `--no-run` で保存した**スタブ**（各 841〜865 B、9:47 UTC）だけ |
+| `runtime/gist.py` | `kc_gist_write` / `kc_gist_selftest` / `kc_gh_token*`（モジュールごと削除） |
+| `kaggle/serve-cells/gist.py` | 配布セル。`publish.py`（ビーコンのみ）に置き換え |
+| `kaggle/step2-vllm/cells/03_vllm_serve.py` | 起動待ちの進捗を `vllm_status.txt` に流す `_gist_status()` 一式 |
+| `kaggle/build_gist_probe.py` / `kaggle/cpu-tests/gist/` | `gist-probe` カーネル（台帳からも削除） |
+| `cli/ask.py` / `run-kaggle-chat.command` | Gist を読む URL 解決。ビーコンに一本化 |
+| `config.env` | `GIST_OWNER` / `GIST_ID`。`KAGGLE_OWNER` に置き換え |
+| `kbuild/secrets.py` | `GIST_ID` / `GITHUB_TOKEN` の台帳エントリ |
 
-`kernels list --sort-by dateRun` で `lastRunTime` を見るまで、79 分経過を
-3 時間半と読み違えた（ファイルの時刻は**保存時**のもの）。§4 の
-「詰まっているのか遅いだけか分からない」はこれ。
+`GIST_OWNER` は**ビーコンの slug**（同じアカウントに置く）にも使っていたので、
+名前だけ `KAGGLE_OWNER` に変えて残した。
 
+### 失ったもの: 起動待ちの現在地
 
+§4 の穴は**広がった**。Gist 時代は「動かないなりに口が 1 つあった」が、
+いまは無い。`kaggle kernels logs` も `output` も実行中は空なので、
+待っている間は `kernels list --sort-by dateRun` の `lastRunTime` を見るしかない。
+
+代わりに残っているのは**終わってから読めるもの**だけ:
+
+- `result.json` の `_why`（`started` / `died` / `budget`）と `timings.prefetch`
+- `keepalive.txt` / `cleanup.txt`
+- `cli timings` の `prefetch` 列（辞退したかどうか）
+
+次にやるなら**ステータス用のビーコン**（§4 の案）。ただし
+`kernels_push` はバージョンを 1 つ消費するので、30 秒ごとではなく
+「段が変わったとき + 5 分ごと」にしないと版が爆発する。
+
+### 経緯: `runtime/gist.py` を残していた理由（2026-11-01 判断・撤回済み）
+
+当時は 3 つ理由を挙げて残した。(1) `publish_url` の片翼として生きている、
+(2) 進捗を運ぶ唯一の実装、(3) `03_vllm_serve.py` が `vllm_status.txt` を
+書いている。**2026-11-02 に利用者判断で全廃**し、(1) はビーコンへ、
+(2)(3) は「無い」ことを受け入れた（上の「失ったもの」）。

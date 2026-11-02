@@ -134,7 +134,7 @@ SETTINGS = render_env(spec.find(SLUG).bake_env) + _tpl(
     _cell("00_settings.py"),
     DATASET_SLUG=DATASET_SLUG, SERVED=SERVED_NAME, TUNNEL=TUNNEL,
     PROXY_B64=PROXY_SRC_B64, CHAT_B64=CHAT_SRC_B64,
-    GIST_ID=CFG["GIST_ID"], GIST_OWNER=CFG["GIST_OWNER"],
+    KAGGLE_OWNER=CFG["KAGGLE_OWNER"],
 )
 
 LAUNCH_MD = '''---
@@ -185,15 +185,12 @@ kaggle kernels output __SLUG__ -p out/
 cat out/verify_result.txt out/connection_info.txt
 ```
 """.replace("__SLUG__", f"{OWNER}/step2-vllm-qwen38-27b-{TUNNEL}"),
-    # `03_vllm_serve.py` は起動待ちの進捗を Gist へ流す（`kc_gist_write`）。
-    # 既定の束に無いので明示する。vLLM 系だけに足すのは、他エンジンは
-    # この経路を使わないため（生成物に死んだコードを増やさない）。
-    runtime=("net", "proc", "storage", "keepalive", "proxy",
-             "gist", "beacon"),
+    # `beacon` は URL 配布に使う。既定の束に無いので明示する。
+    runtime=("net", "proc", "storage", "keepalive", "proxy", "beacon"),
 )
 
 if SMOKE:
-    # ここから先（トンネル / Gist / keepalive / 後片付け）は CPU 側で検証済みなので
+    # ここから先（トンネル / ビーコン / keepalive / 後片付け）は CPU 側で検証済みなので
     # 生成しない。ウォームアップの code セルまでで打ち切る。
     cells = flow.cells()
     _warm = max(i for i, (_kind, src) in enumerate(cells) if src == flow.warmup)

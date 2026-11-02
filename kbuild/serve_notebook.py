@@ -20,7 +20,7 @@ notebook 形式で push する配信カーネルは Ollama / llama-server / vLLM
     実体パス    CHAT_PATH / PROXY_PATH
     プロキシ    PROXY_AUTH / PROXY_EXTRA_ARGS / PROXY_CHECK_PATH
     モデル      MODEL_NAME / MODEL_DISPLAY / ENGINE_DISPLAY / CONTEXT_LENGTH
-    Secrets     GIST_ID_DEFAULT / GIST_OWNER
+    アカウント  KAGGLE_OWNER（ビーコンの slug に使う）
     keepalive   MAX_MINUTES / KEEPALIVE_RESET_MINUTES / TUNNEL_CHECK_EVERY
                 ENGINE_LABEL / ENGINE_PROCS / CLEANUP_TARGETS / ENGINE_LOG
     後片付け    engine_cleanup()  ← 必須。未使用のエンジンは None を返す
@@ -51,10 +51,11 @@ MD_WARMUP = "---\n### 🔥 ウォームアップ（初回ロードは数分か�
 MD_TUNNEL = {
     "cloudflared": "---\n### 🔗 cloudflared トンネル → 公開URL\n",
 }
-MD_GIST = ("---\n### 📌 固定URL配布（quick tunnel の URL を Gist に反映）\n\n"
-           "quick tunnel の URL は毎回変わるので、**取得先だけ固定**します。\n"
-           "クライアントは `https://gist.githubusercontent.com/.../raw/url.txt` を\n"
-           "1回 GET して現在の URL を得ます（GITHUB_TOKEN 未設定ならスキップ）。\n")
+MD_PUBLISH = ("---\n### 📡 公開URLの配布（ビーコンカーネル）\n\n"
+              "quick tunnel の URL は毎回変わるので、**取得先だけ固定**します。\n"
+              "同じアカウントの掲示板カーネル（`serve-url-beacon`）の `main.py` を\n"
+              "書き換え、クライアントは `kaggle kernels pull` で URL を読みます。\n"
+              "Secrets も外部サービスも要りません（`notes/url-publishing.md`）。\n")
 MD_VERIFY = ("---\n### ✅ 公開URL経由の疎通確認\n\n"
              "確認項目はエンジンごとに `engine_checks()` が持つ。\n"
              "失敗は raise（検証不能のまま放置しない）。\n")
@@ -116,8 +117,8 @@ class Flow:
         out += [
             ("markdown", MD_TUNNEL[self.tunnel]),
             ("code", cell(f"tunnel_{self.tunnel}.py")),
-            ("markdown", MD_GIST),
-            ("code", cell("gist.py")),
+            ("markdown", MD_PUBLISH),
+            ("code", cell("publish.py")),
             ("markdown", self.verify_md),
             ("code", self.verify_checks),
             ("code", cell("verify.py")),

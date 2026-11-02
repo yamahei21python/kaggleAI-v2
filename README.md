@@ -47,7 +47,7 @@ python3 -m cli push step2-vllm-qwen38-27b-cloudflared --yes
 # 3a) script 版を push する（同じエンジン・別 id）
 python3 -m cli push step2-vllm-qwen38-27b-cloudflared-script --yes
 
-# 3b) 起動と会話だけ試す（トンネル / keepalive / Gist を省略して GPU 時間を節約）
+# 3b) 起動と会話だけ試す（トンネル / keepalive / URL 配布を省略して GPU 時間を節約）
 python3 -m cli push step2-lmdeploy-qwen38-27b-cloudflared --smoke --yes
 
 # 4) 実行結果の内訳を比べる（GPU 不要）
@@ -75,7 +75,7 @@ push 前に残量が表示される。`--yes` を付けない限り push しな�
 ### ローカルから対話する
 
 ```bash
-python3 -m cli ask "こんにちは"                 # Gist（url.txt）から URL を解決
+python3 -m cli ask "こんにちは"                 # ビーコンカーネルから URL を解決
 python3 -m cli ask --url https://xxx.trycloudflare.com "..."
 ```
 
@@ -102,7 +102,7 @@ archive/                    # 生成物・ログの退避先（gitignore。中�
 # ---- kaggle/ ----
 kaggle/
   build_*.py                  # ビルダー（18 本。notebook / script を生成）
-  serve-cells/                # notebook 配信の共有セル（proxy / tunnel / gist / verify …）
+  serve-cells/                # notebook 配信の共有セル（proxy / tunnel / publish / verify …）
   step1/ step2/               # 生成物（Ollama 系 notebook）
   step2-ngrok/                # 退役（2026-11-01）。履歴として残置、再生成不可
   llama-server/               # llama-server 直起動（cells/ + cloudflared 版の出力先）
@@ -224,7 +224,7 @@ script 側の作り方は 3 通り:
 
 1. **骨格版（配信）** — `build_step2_script.py` / `build_step2_vllm_script.py` /
    `build_llama_server_script.py`。`stage_install()` と `launch(model_dir)` を
-   渡すだけで、proxy / tunnel（cloudflared）/ gist / keepalive / 予算ループは
+   渡すだけで、proxy / tunnel（cloudflared）/ ビーコン / keepalive / 予算ループは
    骨格が持つ。`--smoke` は `smoke-cloudflared/` へ別書きする。
 2. **セル連結版（配信しない）** — `build_batch_script.py` が `KC_BATCH`（元ビルダー）と
    `KC_BATCH_OUT`（出力先）を受け、`cells` をそのまま 1 ファイルへ連結する。
@@ -265,7 +265,7 @@ script 側の作り方は 3 通り:
   `--disable-cuda-graph` / `mem-fraction-static 0.75`。
   公式は sm75 以上（T4 含む）対応だが、sm75+ の FlashInfer 問題の回避策が
   この 2 つ。CUDA graph も落ちる報告があるため既定で無効。
-- 配管は exl3 と同一（`kbuild/serve_script.py`）: pip → launch → proxy → tunnel → Gist → 予算ループ。
+- 配管は exl3 と同一（`kbuild/serve_script.py`）: pip → launch → proxy → tunnel → ビーコン → 予算ループ。
 - `result.json` に `engine` / `version` / `tp` / `knobs` / `spec_decode=false` を残す。
 - 詳細と実測手順: `notes/engine-rollout.md`。
 
@@ -403,7 +403,7 @@ CPU でできることは一通り終わっている（2026-10-30 に「先に�
 `verify_direct.checks` が全 true / `stop_remaining=[]`。
 
 この 3 回で**骨格が Kaggle で起動して会話できること**までが確定する。smoke は
-proxy / トンネル / Gist / keepalive を省略するので、そこは次の別枠:
+proxy / トンネル / URL 配布 / keepalive を省略するので、そこは次の別枠:
 
 | # | 内容 | 回数 | 備考 |
 |---|---|---|---|
@@ -436,6 +436,7 @@ proxy / トンネル / Gist / keepalive を省略するので、そこは次の�
 - **push は即実行**。GPU カーネルは 1 回で決める。CPU カーネルは無料。
 - カーネルは有限時間で自分から止まる（`RUN_MINUTES` / `HARD_MAX_MINUTES`）。
   keepalive は proxy 経由で延長する。`/stop` は `X-Kc-Stop` ヘッダ必須。
-- 公開 URL は Gist（`url.txt`）に書く。cloudflared の quick tunnel は毎回変わる。
+- 公開 URL はビーコンカーネル（`serve-url-beacon`）の `main.py` に書く。
+  cloudflared の quick tunnel は毎回変わるので、取得先だけ固定する。
 - Dataset は slug 指定で最新版がマウントされる。版は `result.json` に残す。
 - 古いカーネルは削除せず `kaggle/archive/` に残す（検索用）。

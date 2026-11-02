@@ -207,7 +207,7 @@ def test_tunnel_none_is_rejected_outside_smoke():
         serve_script.render(
             {"name": "x", "alias": "y"}, tunnel="none",
             run_minutes=1, runtime="", proxy_b64="", html_b64="",
-            gist_id="", gist_owner="")
+            kaggle_owner="")
 
 
 def test_prefetch1_is_one_knob_against_baseline_long():

@@ -33,8 +33,7 @@ from runtime.constants import (  # noqa: E402
 )
 
 CFG = config.load(ROOT)
-GIST_ID_DEFAULT = CFG.get("GIST_ID", "")
-GIST_OWNER = CFG.get("GIST_OWNER", "")
+KAGGLE_OWNER = CFG.get("KAGGLE_OWNER", "")
 
 ALIAS = "qwen38-exl3"
 CACHE_TOKENS = 8192
@@ -201,8 +200,7 @@ def write(mode, out_dir, meta, run_minutes, smoke=False):
         runtime=RUNTIME,
         proxy_b64=PROXY_B64,
         html_b64=HTML_B64,
-        gist_id=GIST_ID_DEFAULT,
-        gist_owner=GIST_OWNER,
+        kaggle_owner=KAGGLE_OWNER,
         port=CHAT_PORT,
         proxy_port=PROXY_PORT,
         hard_max_minutes=EXL3_HARD_MAX_MINUTES,

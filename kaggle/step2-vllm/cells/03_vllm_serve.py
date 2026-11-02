@@ -671,62 +671,6 @@ def _smoke(attempts=2, timeout=90):
 proc = None
 argv_used = None
 started = False
-# 起動中の進捗を Gist に流す。Kaggle の UI ログは長大で貼りにくく、
-# `kaggle kernels output` は完了まで何も返さないため、外から見える場所が要る。
-_GIST_ID = (os.environ.get("GIST_ID") or GIST_ID_DEFAULT)
-# 書けたかどうかを数える。**黙って落ちるのが一番高い**——2026-11-01 の
-# vllm-playground は Gist を 10/28 から一度も更新しておらず、理由
-# （トークン無し / 401 / 404）はログにも result.json にも残っていなかった。
-# 外からは「何も起きていない」と区別がつかず、起動待ち 30 分を
-# 目視で追うことになる。
-_GIST_STATE = {"gist_id": _GIST_ID, "attempts": 0, "ok": 0, "last_error": ""}
-_GIST_SAID = [False]
-
-
-def _gist_status(text):
-    """起動状況を Gist（vllm_status.txt）に書く。失敗は**1 回だけ**声に出す。
-
-    毎回出すと 30 秒ごとに同じ行が並んでログが埋まるので、初回だけ警告し、
-    以降は `_GIST_STATE` に数える。呼び出し側は戻り値を見ない（進捗書き込みで
-    起動を止めない）が、結果は `_gist_summary()` で 1 行にできる。
-    """
-    _GIST_STATE["attempts"] += 1
-    ok, detail = kc_gist_write(_GIST_ID, "vllm_status.txt", text)
-    if ok:
-        _GIST_STATE["ok"] += 1
-        return True
-    _GIST_STATE["last_error"] = detail
-    if not _GIST_SAID[0]:
-        _GIST_SAID[0] = True
-        print(f"⚠ Gist 進捗を書けません: {detail}")
-        print("   以降は黙って続行し、最後にまとめて出します"
-              "（CPU で確かめるには gist-probe カーネル）")
-    return False
-
-
-def _gist_summary():
-    """書き込みの成否を 1 行にする。0 件なら**それ自体**が異常。"""
-    s = _GIST_STATE
-    if s["attempts"] == 0:
-        return "ℹ Gist 進捗: 一度も呼ばれていない（待機ループに到達していない）"
-    if s["ok"] == 0:
-        return (f"⚠ Gist 進捗: 0/{s['attempts']} 成功 — 外から見えていない。"
-                f" 理由: {s['last_error']}")
-    return f"ℹ Gist 進捗: {s['ok']}/{s['attempts']} 成功"
-
-
-# 待機ループへ入る**前に** 1 回だけ往復を試す。理由は 2 つ:
-#  - ログの先頭は残る。30 分待って落ちた回でも「トークンが無かった」が読める
-#  - 進捗ファイル（vllm_status.txt）とは**別名**にする。前回の最終状態を
-#    起動直後に消さないため（Gist 側に「最後に通った時刻」も残る）
-_GIST_SELFTEST = kc_gist_selftest(_GIST_ID, "vllm_selftest.txt")
-if _GIST_SELFTEST["ok"]:
-    print(f"Gist 往復: OK（{_GIST_SELFTEST['token_detail']}）")
-else:
-    _why = (_GIST_SELFTEST.get("write_detail")
-            or _GIST_SELFTEST.get("read_detail") or "理由不明")
-    print(f"Gist 往復: NG — {_why}")
-    print(f"  トークン解決: {_GIST_SELFTEST.get('token_detail', '')}")
 # GPU クォータは有限。ラダーを全部試すと 1 時間超になり、途中で打ち切られると
 # 成果物が残らない。総予算を切って、必ずログを残して終わるようにする。
 # クォータ残 39 分（2,395s）で pip install に 5 分前後かかる前提の値。
@@ -1265,12 +1209,6 @@ for idx, (label, spec, maxlen, env_extra, use_opt, extra_args,
             # RAM の内訳も毎回残す。重みロードで固まる原因は「空きが少ない」
             # だけでは特定できない（cache なのか anon なのか /dev/shm なのか）。
             print(f"     {_mem_line()} / 上位: {_top_rss()}")
-            _gist_status(
-                f"attempt {idx}/{len(PLAN)} label={label} maxlen={maxlen}\n"
-                f"elapsed={int(_now)}s / limit={int(_tmo)}s\n"
-                f"last_log: {_last_line}\n"
-                f"milestone: {_mark}\n"
-                f"{_mem_line()}\n")
         time.sleep(5)
 
     # **なぜ待つのをやめたか**を残す。これが無いと、予算で切った回も
@@ -1292,7 +1230,6 @@ for idx, (label, spec, maxlen, env_extra, use_opt, extra_args,
         kc_save_timings({"prefetch": _PF_STATE})
 
     smoke_fail = ""
-    print(_gist_summary())      # 外から見えていたか（0 件は異常）
     if started:
         # 起動できても初回 forward でカーネルが落ちる領域（sm75 + 量子化 +
         # GDN Triton）があるため、1 回生成させて通ったときだけ成功とする。
@@ -1420,12 +1357,6 @@ if _WARM_CACHE.get("path"):
 elif _WARM_CACHE.get("skipped"):
     print(f"  ⏭ キャッシュ退避なし: {_WARM_CACHE['skipped']}")
 kc_save_timings({"warm_cache": _WARM_CACHE})
-# Gist の往復結果も残す。ログを貼らずに `kaggle kernels output` だけで
-# 「外から見えていたか」を判定できるようにする（timings と二重化）。
-save_output("gist_selftest.json",
-            json.dumps(_GIST_SELFTEST, ensure_ascii=False, indent=2))
-kc_save_timings({"gist_selftest": _GIST_SELFTEST})
-
 if not started:
     save_output("vllm_startup.log", tail)
     save_output("vllm_attempts.txt", "\n\n".join(_attempts) + "\n")
