@@ -1456,3 +1456,86 @@ vllm    3200.0  300.0      1100.0  1400.0  -     ok        …
 
 
 
+
+## 25. 本番 v17（2026-11-02 09:30）— 重み 6,128 秒。辞退の理由が**式で説明できた**
+
+### 結果
+
+| 項目 | 値 |
+|---|---|
+| `ok` | false（予算 7,000 秒超過） |
+| `elapsed_seconds` | 7,324.1 |
+| install（wheelhouse） | 267.5 |
+| **重みロード（本体 18.21 GiB）** | **6,127.8** |
+| 重みロード（MTP 0.79 GiB） | 315.2 |
+| `Model loading took` | 6,451.9 |
+| backbone `torch.compile` / profiling | 61.7 / 366.6 |
+| 実効速度（19.5 GB ÷ 6,128 秒） | **3.2 MB/s** |
+
+予算は `02:26:40`（JST 11:26）に切れた。engine 起動まで**あと 300 秒**だった
+（`eagle_head` の compile が 02:31:56 に終わっている）。
+
+### 同じコードの重みロード実測（n=1 の積み上げ）
+
+| 回 | 重みロード | 実効 |
+|---|---|---|
+| v4（11-01） | 1,304 秒 | 15.0 MB/s |
+| v3 | 2,640 秒 | 7.4 MB/s |
+| `baseline_long` | 2,877 秒 | 6.8 MB/s |
+| `cache` | 4,000 秒超（未完） | — |
+| `prefetch1`（辞退されず） | 1,186 秒 | 16.5 MB/s |
+| 本番 v16 | 3,008 秒 | 6.5 MB/s |
+| **本番 v17** | **6,128 秒** | **3.2 MB/s** |
+
+**同じコードで 5 倍振れる。** 予算では解けない（§4 の結論と同じ）。
+
+### 辞退の理由 — §24 の「こちらからは制御できない」は**撤回**
+
+vLLM 0.32 の `weight_utils.py:1108` は `vllm/utils/cpu_resource_utils.py` の
+`get_available_memory()` を呼ぶ。中身はこう:
+
+```python
+return min(psutil.virtual_memory().available,
+           max(0, cgroup_limit - cgroup_usage))
+```
+
+**cgroup の使用量に page cache が含まれる。** v17 のノードの実測:
+
+| 値 | MiB |
+|---|---|
+| `MemAvailable`（こちらが見ていた） | 30,159 |
+| cgroup 上限（`memory.max`） | 32,098 |
+| cgroup 使用量（`memory.current`） | 約 25,800 |
+| → `min(30,159, 32,098 − 25,800)` | **6,298 = 6.16 GiB** |
+
+18.21 GiB > 0.9 × 6.16 GiB（= 5.5 GiB）なので辞退。ログの `Available RAM: 6.16 GiB`
+と 1 MiB 単位で合う。**判定基準の違いは式で説明でき、こちらで計算できる。**
+
+### 変えたこと（GPU 0 秒）
+
+| 変更 | 内容 |
+|---|---|
+| `_cgroup_mib()` | `/sys/fs/cgroup/memory.{max,current}` を MiB で読む（読めなければ `None`） |
+| `_prefetch_avail_mib()` | vLLM と同じ `min(MemAvailable, 上限 − 使用量)` |
+| 起動前の表示 | `🧮 vLLM の式での空き … → 通る / 辞退される見込み`（不明なら「判定できない」） |
+| 試行ループのゲート | `MemAvailable` → `_prefetch_avail_mib()`。外れたら内訳と ETA を出す |
+| 先読みの自動化 | `KC_PREWARM` 未設定でも**辞退される見込みの回だけ**試す。probe で速度を測り、予算に収まらなければ始めない。`KC_PREWARM=0` で停止 |
+
+`tests/test_vllm_cells.py` に 4 本（式の一致・`min` の向き・自動で立つ条件・ETA の警告）。
+
+### まだ分からないこと
+
+- **同じノード種で 3.2 MB/s と 15.0 MB/s がなぜ出るか。** gcsfuse のスループットで、
+  こちらからは選べない。今回は n=1。
+- **自動 prewarm が効くか。** v17 のノードは probe で `over budget` になり
+  始まらない見込み（3 MB/s なら 18.21 GiB に 6,100 秒）。効くのは「辞退されるが
+  回線は速い」ノード（1 本読みで 110〜130 MiB/s の実測あり）。
+- **page cache 25 GiB の出どころ。** 起動 0 秒の時点で既に 25,608 MiB あった
+  （前のジョブの残り）。`drop_caches` は Kaggle では書けない（read-only）ので、
+  こちらから捨てる道は無い。
+
+### 次の一手
+
+- v18 で「辞退される見込み」の表示と自動 prewarm の判断が正しく出るか（GPU 1 往復）
+- 予算 7,000 秒は**辞退された回には足りない**（今回は 7,300 秒必要）。上げるなら
+  `VLLM_STARTUP_BUDGET` と `VLLM_ATTEMPT_TIMEOUT` の両方（§24 の表と同じ理由）

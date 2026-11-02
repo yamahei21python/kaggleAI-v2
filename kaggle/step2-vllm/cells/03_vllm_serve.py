@@ -522,14 +522,54 @@ def _mem_available_mib():
     return _mem_info().get("MemAvailable", -1)
 
 
+def _cgroup_mib():
+    """cgroup v2 の上限と現在使用量（MiB）。読めなければ `(None, None)`。
+
+    vLLM の prefetch 判定は `min(psutil.available, 上限 - 使用量)` で、
+    **使用量に page cache が含まれる**（`vllm/utils/cpu_resource_utils.py` の
+    `get_available_memory`）。ここを `MemAvailable` で代用すると、同じ瞬間に
+    「30 GiB 空いている」と「6 GiB しか無い」が両立して食い違う。
+
+    実測 v17（2026-11-02）: こちら `MemAvailable` 30,159 MiB / vLLM 6.16 GiB。
+    上限 32,098 MiB − 使用量 約 25,800 MiB ≒ 6.3 GiB で説明が付く。
+    """
+    out = []
+    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"):
+        v = None
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = f.read().strip()
+            v = None if raw in ("", "max") else int(raw) // 2**20
+        except (OSError, ValueError):
+            v = None
+        out.append(v)
+    return out[0], out[1]
+
+
+def _prefetch_avail_mib():
+    """vLLM が prefetch 可否に使う「空き」（MiB）。**式を合わせる**のが目的。
+
+    自前の判定と vLLM の判定が食い違うと、ログが「足りている」と言ったまま
+    実際には辞退される（v17 がそれ）。`get_available_memory` と同じ
+    `min(MemAvailable, cgroup 上限 - 使用量)` を返す。
+    """
+    avail = _mem_available_mib()
+    limit, used = _cgroup_mib()
+    if limit is None or used is None:
+        return avail
+    return max(0, min(avail, limit - used))
+
+
 def _mem_line():
     """1 行にまとめた RAM の内訳。無音区間の原因を後から追うための控え。"""
     m = _mem_info()
     if not m:
         return "RAM: 取得できません"
+    limit, used = _cgroup_mib()
+    cg = f" / cgroup {used}/{limit}" if limit is not None and used is not None else ""
     return (f"RAM 空き {m.get('MemAvailable', -1)} / 空 {m.get('MemFree', -1)}"
             f" / cache {m.get('Cached', -1)} / shm {m.get('Shmem', -1)} MiB"
-            f"（全 {m.get('MemTotal', -1)}）")
+            f"（全 {m.get('MemTotal', -1)}{cg}）")
 
 
 def _top_rss(n=3):
@@ -743,7 +783,15 @@ def _drop_caches():
 _WEIGHTS_GIB = _weights_gib()
 # vLLM のしきい値（90%）に少し余裕を足す。ここを割ると prefetch が切られる。
 _NEED_MIB = int(_WEIGHTS_GIB * 1024 / 0.9 * 1.05) if _WEIGHTS_GIB else 0
+_PF_AVAIL = _prefetch_avail_mib()
+# 空きが読めない（-1）ときは「辞退される」と決めつけない。判定できないだけ。
+_PF_OK = (not _NEED_MIB) or _PF_AVAIL < 0 or _PF_AVAIL >= _NEED_MIB
 print(f"🧮 重み {_WEIGHTS_GIB} GiB / prefetch に必要な空き {_NEED_MIB} MiB")
+if not _NEED_MIB or _PF_AVAIL < 0:
+    print(f"🧮 vLLM の式での空き {_PF_AVAIL} MiB → 判定できない")
+else:
+    print(f"🧮 vLLM の式での空き {_PF_AVAIL} MiB → prefetch "
+          + ("通る" if _PF_OK else "辞退される見込み（重みロードが 5 倍遅い経路）"))
 
 
 def _read_range(path, off, nbytes, threads=1, chunk_mib=32):
@@ -1030,14 +1078,24 @@ def _capture_warm_cache(limit_bytes=3e9):
 # 競合する。v14 の `ram_trace.txt` は `Cached` が 20〜23 GiB のまま推移しており、
 # この押し出しと矛盾しない。
 #
-# したがって既定は **OFF**。`KC_PREWARM=1` で明示したときだけ試す（A/B 用の口は残す）。
+# したがって `KC_PREWARM=1` の明示が原則。ただし **prefetch が辞退される見込みの
+# 回だけは自動で試す**（`KC_PREWARM` 未設定時）。辞退されると vLLM は GCSFUSE 上の
+# safetensors をテンソル単位で読む経路に落ち、実測 v17 は 18.21 GiB に **6,128 秒**
+# （3.2 MB/s）かかった。同じノードでも 1 本の逐次読みなら桁が違う（110〜130 MiB/s の
+# 実測あり）ので、probe で速さを測ってから決める。遅いノードでは probe だけで
+# `over budget` になり、先読みは**始まらない**（`_prewarm_weights` が判定する）。
+# `KC_PREWARM=0` を明示すれば自動も止まる。
 _PREWARM = None
-if _WEIGHTS_GIB and os.environ.get("KC_PREWARM", "0") != "0":
+_pw_mode = os.environ.get("KC_PREWARM", "").strip().lower()
+_pw_auto = (_pw_mode in ("", "auto")) and not _PF_OK
+_pw_want = _pw_mode not in ("", "auto", "0") or _pw_auto
+if _WEIGHTS_GIB and _pw_want:
     # 既定は **1 本**。並列は GCSFUSE で 13〜50 倍遅い（実測 2026-11-01）。
     _pw_threads = int(os.environ.get("KC_PREWARM_THREADS", "1"))
     _pw_budget = int(os.environ.get("KC_PREWARM_BUDGET", "300"))
     print(f"🔥 重みを先に読む（{_WEIGHTS_GIB} GiB / {_pw_threads} 本 / "
-          f"予算 {_pw_budget}s）…")
+          f"予算 {_pw_budget}s"
+          f"{' / prefetch 辞退の見込みで自動' if _pw_auto else ''}）…")
     _PREWARM = _prewarm_weights(threads=_pw_threads, budget_s=_pw_budget)
     if _PREWARM and _PREWARM.get("skipped"):
         print(f"   ⏭ 先読みしない（{_PREWARM['skipped']} / "
@@ -1047,6 +1105,8 @@ if _WEIGHTS_GIB and os.environ.get("KC_PREWARM", "0") != "0":
         print(f"   {_PREWARM['mib_s']} MiB/s / {_PREWARM['seconds']}s"
               f" / {_PREWARM['threads']} 本 / probe {_PREWARM['probe']}"
               f"{' / ⚠ 予算切れ（部分）' if _PREWARM['aborted'] else ''}")
+    if _PREWARM:
+        _PREWARM["decided_by"] = "auto（prefetch が辞退される見込み）" if _pw_auto else "KC_PREWARM"
     kc_save_timings({"prewarm": _PREWARM})
 
 # キャッシュの「起動前の顔ぶれ」を控える。試行後に差分を取れば
@@ -1110,16 +1170,24 @@ for idx, (label, spec, maxlen, env_extra, use_opt, extra_args,
           f"staged={n_staged} files ---")
     # 起動の直前に空きを確保し直す。ここを飛ばすと「prefetch 無効の遅い経路」に
     # 入り、重みロードが 800 秒進まないまま試行上限を焼く（実測 2026-11-01）。
-    _avail = _mem_available_mib()
+    # 判定は **vLLM と同じ式**（`_prefetch_avail_mib`）。`MemAvailable` だけで
+    # 見ると「足りている」と言ったまま実際には辞退される（実測 v17）。
+    _avail = _prefetch_avail_mib()
     if _NEED_MIB and 0 <= _avail < _NEED_MIB:
-        print(f"  🧠 空き {_avail} MiB < 必要 {_NEED_MIB} MiB → prefetch が切られる。"
-              f" page cache を捨てて再測定")
+        _limit, _used = _cgroup_mib()
+        print(f"  🧠 prefetch 用の空き {_avail} MiB < 必要 {_NEED_MIB} MiB"
+              f"（min(MemAvailable {_mem_available_mib()},"
+              f" cgroup {_used}/{_limit})）→ 辞退される")
         _ok, _detail = _drop_caches()
         print(f"  🧹 drop_caches: {'OK' if _ok else 'NG'} {_detail}")
-        _avail = _mem_available_mib()
+        _avail = _prefetch_avail_mib()
         if 0 <= _avail < _NEED_MIB:
-            print(f"  ⚠ それでも足りない（{_avail} MiB）。重みロードで詰まる可能性。"
-                  f" 症状は「tqdm が 50% で止まったまま無進捗」")
+            _rate = (_PREWARM or {}).get("mib_s") or 0
+            _eta = (f"実測 {_rate} MiB/s なら重みだけで "
+                    f"{int(_WEIGHTS_GIB * 1024 / _rate)} 秒"
+                    if _rate else "先読みの実測が無いので ETA は出せない")
+            print(f"  ⚠ それでも足りない（{_avail} MiB）。prefetch 無しの遅い経路"
+                  f"に入る（{_eta}）。予算 {STARTUP_BUDGET}s に収まるか確認")
     with open(log_path, "w") as log:
         _pre = _gpu_used_mib()
         if _pre > 3000:

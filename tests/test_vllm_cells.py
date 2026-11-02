@@ -176,8 +176,8 @@ def test_prewarm_stops_at_the_time_budget(tmp_path):
     assert out.get("bytes", 0) == 0, "予算 0 なのに読んでいる"
 
 
-def test_prewarm_defaults_to_off():
-    """先読みの既定は **OFF**（2026-11-01 に反転）。
+def test_prewarm_does_not_run_unconditionally():
+    """先読みは**無条件には走らない**（2026-11-01 に既定 OFF）。
 
     先読みは「152.5 秒の純コスト」では済まない。後続の重みロードまで遅くする。
     - out2g（先読みなし）: 重みロード 約 181s → 起動 642.4s → 31.7 t/s
@@ -185,11 +185,15 @@ def test_prewarm_defaults_to_off():
 
     同じマシンで 181s と 705s。先読み自身が測った 122.2 MiB/s なら 18.21 GiB は
     約 150s なので、181s は説明がつき 705s は説明がつかない（4.7 倍遅い）。
-    既定に戻すと 1 回 20 分を捨てるので、ここで固定する。
+
+    2026-11-02 に「vLLM が prefetch を辞退する見込みの回だけ自動」へ狭めた
+    （v17 が辞退されたまま 6,128 秒を焼いたため）。prefetch が通るノードでは
+    v14 と同じ構成＝先読みなしのまま。`KC_PREWARM=0` の明示で自動も止まる。
     """
     src = _cells.cell(*SERVE)
-    assert 'os.environ.get("KC_PREWARM", "0")' in src, (
-        "先読みが既定 ON に戻っている（v14 で 1876.7s / 4.5 t/s になった構成）")
+    assert 'os.environ.get("KC_PREWARM", "0")' not in src, (
+        "無条件の既定 ON に戻っている（v14 で 1876.7s / 4.5 t/s になった構成）")
+    assert 'if _WEIGHTS_GIB and _pw_want:' in src, "条件で囲まれていない"
 
 
 def test_prewarm_can_still_be_forced_on():
@@ -773,3 +777,91 @@ def test_budget_exhaustion_is_not_reported_as_a_startup_failure():
     budget_msg = src[i_budget:i_fail]
     assert "予算" in budget_msg and "設定の誤りではない" in budget_msg
     assert "起動に失敗" not in budget_msg
+
+
+# ── prefetch 可否の判定（v17 の 6,128 秒）─────────────────────
+def _ram_block(src):
+    """RAM を見る関数だけを切り出す（`_mem_line` の直前まで）。"""
+    return src[src.index("def _mem_info("):src.index("def _mem_line(")]
+
+
+def test_prefetch_decision_uses_the_same_formula_as_vllm():
+    """prefetch の可否は vLLM と同じ式で判定する。
+
+    実測 2026-11-02（本番 v17）: こちらの `MemAvailable` は 30,159 MiB で
+    「足りている」と出したのに、vLLM は `Available RAM: 6.16 GiB` と判定して
+    prefetch を辞退した。理由は `vllm/utils/cpu_resource_utils.py` の
+    `get_available_memory` が
+
+        min(psutil.virtual_memory().available, cgroup 上限 - 使用量)
+
+    で、**cgroup の使用量に page cache が含まれる**ため。このノードは
+    page cache が 25 GiB 張り付いており、32,098 − 約 25,800 ≒ 6.3 GiB。
+    辞退されると GCSFUSE 上の safetensors をテンソル単位で読む経路に落ち、
+    18.21 GiB に **6,128 秒**（3.2 MB/s）かかった。同じノードの逐次読みは
+    110〜130 MiB/s なので、判定を間違えると 5 倍の時間を焼く。
+    """
+    src = _cells.cell(*SERVE)
+    assert "def _cgroup_mib(" in src, "cgroup を読んでいない"
+    assert "/sys/fs/cgroup/memory.max" in src, "上限を読んでいない"
+    assert "/sys/fs/cgroup/memory.current" in src, "使用量を読んでいない"
+    assert "def _prefetch_avail_mib(" in src, "vLLM と同じ式の関数が無い"
+    block = src[src.index("def _prefetch_avail_mib("):src.index("def _mem_line(")]
+    assert "min(avail, limit - used)" in block, "min() で束ねていない"
+    # 試行ループのゲートも同じ式を通す（片方だけ直す事故を防ぐ）
+    loop = src[src.index("for idx, (label, spec, maxlen"):]
+    assert "_avail = _prefetch_avail_mib()" in loop, \
+        "ゲートが MemAvailable のまま（vLLM と食い違う）"
+
+
+def test_prefetch_avail_is_the_minimum_of_memavailable_and_cgroup():
+    """式そのものを動かして確かめる（`min` の向きを間違えても気づける形で）。"""
+    ns = {}
+    exec(_ram_block(_cells.cell(*SERVE)), ns)      # noqa: S102 - 自前ソースのみ
+
+    # 実測 v17 の数字（MemAvailable 30,159 / 上限 32,098 / 使用 25,800）
+    ns["_mem_info"] = lambda: {"MemAvailable": 30159}
+    ns["_cgroup_mib"] = lambda: (32098, 25800)
+    assert ns["_prefetch_avail_mib"]() == 32098 - 25800, \
+        "cgroup の空きで頭打ちになっていない"
+    # cgroup に余裕があれば MemAvailable が答え
+    ns["_cgroup_mib"] = lambda: (32098, 1000)
+    assert ns["_prefetch_avail_mib"]() == 30159
+    # cgroup が読めない環境では従来どおり MemAvailable
+    ns["_cgroup_mib"] = lambda: (None, None)
+    assert ns["_prefetch_avail_mib"]() == 30159
+    # 使用量が上限を超えていても負にしない
+    ns["_cgroup_mib"] = lambda: (32098, 99999)
+    assert ns["_prefetch_avail_mib"]() == 0
+
+
+def test_prewarm_turns_on_by_itself_only_when_prefetch_will_be_declined():
+    """辞退される見込みの回だけ、自前の逐次読みに切り替える。
+
+    v17 は `KC_PREWARM` 無効のまま 6,128 秒を焼いた。同じノードでも 1 本の
+    逐次読みは桁が違うので、**辞退が確実な回に限り**自動で試す。ただし
+    先読みは `_prewarm_weights` が probe で速度を測り、予算に収まらなければ
+    **始まらない**（遅いノードで時間だけ払う形にしない）。
+    `KC_PREWARM=0` の明示は自動も止める（A/B の対照群を守る）。
+    """
+    src = _cells.cell(*SERVE)
+    assert '_pw_auto = (_pw_mode in ("", "auto")) and not _PF_OK' in src, \
+        "自動で立つ条件が無い"
+    assert '_pw_mode not in ("", "auto", "0") or _pw_auto' in src, \
+        "KC_PREWARM=0 で止められない"
+    assert '"decided_by"' in src, "どちらで立ったかが残らない"
+    # 予算に収まらない見込みなら始めない（probe → over budget）
+    assert "over budget" in src
+
+
+def test_declined_prefetch_reports_an_expected_load_time():
+    """辞退されたときに「このままだと何秒か」を出す。
+
+    v17 は辞退されたあと 6,128 秒を無言で焼き、予算 7,000 秒を超えて
+    「起動失敗」に見える形で落ちた。先読みの実測レートがあれば、
+    重みの残り時間は割り算で出せる。
+    """
+    src = _cells.cell(*SERVE)
+    assert "prefetch 用の空き" in src, "辞退の理由（式の内訳）を出していない"
+    assert "予算 {STARTUP_BUDGET}s に収まるか確認" in src, \
+        "予算に入るかの警告が無い"
