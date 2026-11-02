@@ -1539,3 +1539,101 @@ return min(psutil.virtual_memory().available,
 - v18 で「辞退される見込み」の表示と自動 prewarm の判断が正しく出るか（GPU 1 往復）
 - 予算 7,000 秒は**辞退された回には足りない**（今回は 7,300 秒必要）。上げるなら
   `VLLM_STARTUP_BUDGET` と `VLLM_ATTEMPT_TIMEOUT` の両方（§24 の表と同じ理由）
+
+## 26. 辞退そのものを消す — `KC_PREFETCH_PATCH`（2026-11-02・CPU 実装）
+
+§25 で「辞退の理由は式で説明できる」ところまで来た。269993d は**予測と保険**で、
+速度は変わっていない。ここでは原因（page cache を空きに数えない）を直接消す。
+
+### なぜ「親で monkeypatch」では効かないか
+
+`vllm serve` は `subprocess.Popen` で起動し、TP worker はさらに別プロセスで
+`vllm` を **import し直す**（`multiprocessing` の spawn）。親で
+`vllm.utils.cpu_resource_utils.get_available_memory = ...` しても、子の
+プロセスには届かない。prefetch の判定はワーカー側（`weight_utils.py`）で走る。
+
+→ **site-packages のファイルへ追記する。** 全プロセスが同じ関数を読む。
+`sitecustomize` を使う手もあるが、既存の `sitecustomize` を潰す危険があるので採らない。
+
+### 何を書くか
+
+`_patch_vllm_avail_memory()` が `vllm/utils/cpu_resource_utils.py` の末尾に
+`get_available_memory` を**再定義**する（Python は後勝ち）。`marker`
+（`KC_PREFETCH_PATCH`）で冪等。`.pyc` も消す。
+
+```python
+# 元（vLLM 0.32）
+min(psutil.virtual_memory().available, cgroup 上限 - memory.current)
+
+# 差し替え後
+used = anon + shmem + kernel + file_dirty + file_writeback     # file は追い出せる
+min(psutil.virtual_memory().available, cgroup 上限 - used)
+```
+
+`file`（page cache・tmpfs の cache）だけを除外し、`shmem` は**残す**（tmpfs は
+追い出せない）。`memory.stat` に `kernel` が無いカーネル（5.15 未満）では
+`slab` で代用**しない**（`kernel_stack` / `sock` / `pagetables` が抜けて過大評価に
+なる）。`None` を返して**元の式（`memory.current`）に戻す**。同じ理由で、
+こちら側のゲートも内訳が読めないときは従来式に戻し、`_PF_PATCH_OK` を false にする。
+
+v17 の数字を当てると `min(30,159, 32,098 − 6,300) = 25,798 MiB`。必要 21,754 MiB
+なので**通る**（元の式は 6,298 MiB で辞退）。
+
+### 起動ログ / timings
+
+```
+🩹 vLLM の空き判定を差し替え（page cache を除外）: /opt/conda/.../cpu_resource_utils.py
+🧮 差し替え後の空き 25798 MiB（元の式なら 6298 MiB） → prefetch 通る
+🧮 vLLM の式での空き 25798 MiB → prefetch 通る
+```
+
+`timings.prefetch_patch` に `patched` / `paths` / `failed` / `avail_before_mib` /
+`avail_after_mib` / `need_mib`。**差し替えに失敗しても起動は続ける**（`failed` に理由）。
+
+### 戻し方
+
+`KC_PREFETCH_PATCH=0`（`VLLM_BAKE_ENV` は `os.environ.setdefault` なので、
+Kaggle の環境変数で上書きできる）。v17 と同じ挙動が対照群になる。
+
+### v19 の判定基準
+
+| 見る場所 | 期待 |
+|---|---|
+| 起動ログ | `🩹 … 差し替え` が出る（`差し替えなし` なら原因を読む） |
+| ワーカーログ | `exceeds 90% of available RAM` が**消える** |
+| 重みロード | 1,200 秒台（v17 は 6,128 秒） |
+| `timings.prefetch` | `declined` が false |
+
+3 行目が外れたら「辞退は消えたが速くならない」= gcsfuse の別要因（§25 の
+3.2 vs 15.0 MB/s）を疑う。その場合 patch は無害なので残してよい。
+
+### 想定リスク
+
+- **OOM**: 実際に anon が増えているノードでは `used` も増えるので辞退される。
+  過大評価するのは「`kernel` に計上されない分」だけ。30 GiB 機で 18.21 GiB を
+  載せる前提なら余裕は 3 GiB 強。
+- **0.32 以外**: 関数名・モジュールパスが違えば `patched: false` で素通り
+  （`weight_utils` 側が `from ... import get_available_memory` で**値を固定**して
+  いる版では、追記では効かない。その場合は `weight_utils.py` 側も見る）。
+- **page cache の追い出し**: prefetch が通っても、ワーカーの 8.88 GiB × 2 で
+  cache が押し出される可能性は残る（§25 の推定）。そのときは「辞退は消えたが
+  6,000 秒」になる。`timings` の `prefetch.declined` と実時間で切り分ける。
+
+## 27. 本番 v18（2026-11-02）— 辞退を消した回
+
+§26 の `KC_PREFETCH_PATCH` を入れて回す。**v17 との差は 1 つだけ**
+（page cache を空きに数えるか）。ノード・データ・予算は同じ 7,000 秒。
+
+| 項目 | 値 |
+|---|---|
+| カーネル | `step2-vllm-qwen38-27b-cloudflared-script` |
+| 変更 | `KC_PREFETCH_PATCH=1`（bake 済み） |
+| 予算 | `VLLM_STARTUP_BUDGET` = `VLLM_ATTEMPT_TIMEOUT` = 7,000（据え置き） |
+| 対照群 | v17（6,128 秒・辞退） |
+
+見る場所（§26 と同じ）: `🩹` 行 / ワーカーログの `exceeds 90% of available RAM`
+の有無 / 重みロード秒数 / `timings.prefetch_patch`。
+
+### 結果
+
+（実行後に追記）

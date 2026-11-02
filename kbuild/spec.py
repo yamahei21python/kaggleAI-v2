@@ -32,6 +32,12 @@ ACTIVE, SEMI, RETIRED = "active", "semi", "retired"
 VLLM_BAKE_ENV = (
     ("VLLM_SAFETENSORS_STRATEGY", "prefetch"),
     ("VLLM_SAFETENSORS_PREFETCH_THREADS", "1"),
+    # vLLM の prefetch 判定は `min(MemAvailable, cgroup 上限 - memory.current)` で、
+    # `memory.current` に **page cache が含まれる**。前のジョブが張った cache で
+    # 「RAM が 6 GiB しか無い」と誤判定し、prefetch を辞退して 5 倍遅い経路に落ちる
+    # （実測 v17: 30,159 MiB 空き / 判定 6.16 GiB / 重みロード 6,128 秒）。
+    # `1` で差し替え（page cache を除外）、`0` で従来の挙動（A/B の対照群）。
+    ("KC_PREFETCH_PATCH", "1"),
     # 予算は**2 つ揃えて**上げる。`03_vllm_serve.py` の 1 試行の上限は
     #   _tmo = min(ATTEMPT_TIMEOUT, max(45, STARTUP_BUDGET - 経過))
     # なので、STARTUP_BUDGET だけ上げても ATTEMPT_TIMEOUT で切られる

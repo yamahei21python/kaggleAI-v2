@@ -10,8 +10,11 @@
 - ここは「セルの順序・版の出どころ」など**セル内部の契約**だけ
 """
 import glob as _glob  # noqa: E402
+import os  # noqa: E402
 import pathlib  # noqa: E402
 import re  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -865,3 +868,137 @@ def test_declined_prefetch_reports_an_expected_load_time():
     assert "prefetch 用の空き" in src, "辞退の理由（式の内訳）を出していない"
     assert "予算 {STARTUP_BUDGET}s に収まるか確認" in src, \
         "予算に入るかの警告が無い"
+
+
+def test_prefetch_patch_excludes_page_cache_from_the_formula():
+    """差し替え後の式なら、v17 のノードでも prefetch が通る。
+
+    実測 v17: `MemAvailable` 30,159 / 上限 32,098 / `memory.current` 25,800
+    （うち page cache が約 19,500）。page cache を除いた使用量を
+    anon 6,000 + kernel 300 とすると空きは 25,798 MiB で、必要 21,754 MiB を
+    上回る。**元の式では 6,298 MiB で辞退**していた。
+    """
+    ns = {"sys": sys, "os": os}
+    exec(_ram_block(_cells.cell(*SERVE)), ns)      # noqa: S102 - 自前ソースのみ
+    ns["_mem_info"] = lambda: {"MemAvailable": 30159}
+    ns["_cgroup_mib"] = lambda: (32098, 25800)
+    ns["_cgroup_unreclaimable_mib"] = lambda: 6300      # anon 6,000 + kernel 300
+
+    assert ns["_prefetch_avail_mib"]() == 32098 - 25800, \
+        "元の式（page cache 込み）が変わっている"
+    patched = ns["_prefetch_avail_mib"](exclude_cache=True)
+    assert patched == 32098 - 6300, "page cache を除けていない"
+    need = int(18.21 * 1024 / 0.9 * 1.05)
+    assert patched >= need, "差し替えても必要量に届かない（計算が違う）"
+
+    # 追い出せない分だけで上限に当たることを確認する（過大評価しない）
+    ns["_cgroup_unreclaimable_mib"] = lambda: 20500
+    assert ns["_prefetch_avail_mib"](exclude_cache=True) == 32098 - 20500
+
+    # 内訳が読めない環境では**従来式に戻す**（過大評価して OOM にしない）
+    ns["_cgroup_unreclaimable_mib"] = lambda: None
+    assert ns["_prefetch_avail_mib"](exclude_cache=True) == 32098 - 25800, \
+        "内訳不明のときに古い式へ戻っていない"
+
+
+def test_vllm_patch_appends_once_and_is_idempotent(tmp_path):
+    """追記は 1 回だけ。再実行で二重に積まない。
+
+    TP worker は別プロセスで `vllm` を import し直すので、親で monkeypatch
+    しても届かない。**ファイルへ追記**するのが唯一すべてのプロセスに効く形。
+    ただし同じ VM で再実行すると二度目が走るので、印（marker）で止める。
+    """
+    ns = {"sys": sys, "os": os}
+    exec(_ram_block(_cells.cell(*SERVE)), ns)      # noqa: S102 - 自前ソースのみ
+    p = tmp_path / "vllm" / "utils" / "cpu_resource_utils.py"
+    p.parent.mkdir(parents=True)
+    p.write_text("def get_available_memory():\n    return 0\n", encoding="utf-8")
+    ns["_vllm_cpu_utils_paths"] = lambda: [str(p)]
+
+    r = ns["_patch_vllm_avail_memory"]()
+    assert r["patched"], r
+    assert r["paths"] == [str(p)]
+    src = p.read_text(encoding="utf-8")
+    assert src.count(ns["_PF_PATCH_MARK"]) == 1, "同じものを二重に追記している"
+
+    r2 = ns["_patch_vllm_avail_memory"]()
+    assert r2["patched"], "2 回目が失敗扱いになっている"
+    assert p.read_text(encoding="utf-8").count(ns["_PF_PATCH_MARK"]) == 1
+
+    # 追記した関数が実際に読み込めて、int を返すこと（構文と名前の担保）
+    mod = {}
+    exec(compile(src, str(p), "exec"), mod)        # noqa: S102 - 自前ソースのみ
+    assert callable(mod["get_available_memory"])
+    assert isinstance(mod["get_available_memory"](), int)
+
+
+def test_patch_is_on_by_default_and_the_gate_uses_the_same_formula():
+    """既定で ON。表示・ゲート・vLLM の 3 つが同じ式を見る。
+
+    OFF は `KC_PREFETCH_PATCH=0` の明示だけ（v17 と同じ挙動を対照群に残す）。
+    """
+    from kbuild import spec
+
+    assert dict(spec.VLLM_BAKE_ENV)["KC_PREFETCH_PATCH"] == "1", \
+        "既定で差し替えないと v17 の再現に戻る"
+    src = _cells.cell(*SERVE)
+    assert 'os.environ.get("KC_PREFETCH_PATCH", "1")' in src, "既定が ON でない"
+    assert "_PF_AVAIL = _prefetch_avail_mib(exclude_cache=_PF_PATCH_OK)" in src, \
+        "起動前の表示が差し替え後の式を見ていない"
+    assert "_avail = _prefetch_avail_mib(exclude_cache=_PF_PATCH_OK)" in src, \
+        "試行前のゲートが差し替え後の式を見ていない"
+    assert '"prefetch_patch"' in src, "差し替えたかどうかが timings に残らない"
+    assert "and _cgroup_unreclaimable_mib() is not None" in src, \
+        "内訳が読めない環境で差し替えを有効扱いしている"
+
+
+def test_patch_reports_failure_and_does_not_claim_success(tmp_path):
+    """1 つでも書けなければ `patched: False`。
+
+    一部だけ成功して true を返すと、ゲートだけ緩んで**実際には辞退された**
+    ときに原因が分からなくなる（v17 の再現）。失敗は `failed` に残す。
+    """
+    ns = {"sys": sys, "os": os}
+    exec(_ram_block(_cells.cell(*SERVE)), ns)      # noqa: S102 - 自前ソースのみ
+    ns["_vllm_cpu_utils_paths"] = lambda: [str(tmp_path / "missing.py")]
+    r = ns["_patch_vllm_avail_memory"]()
+    assert r["patched"] is False
+    assert r["failed"], "失敗の理由が残っていない"
+
+    # 1 本でも失敗したら全体を成功扱いにしない
+    good = tmp_path / "vllm" / "utils" / "cpu_resource_utils.py"
+    good.parent.mkdir(parents=True)
+    good.write_text("def get_available_memory():\n    return 0\n", encoding="utf-8")
+    ns["_vllm_cpu_utils_paths"] = lambda: [str(good), str(tmp_path / "missing.py")]
+    r2 = ns["_patch_vllm_avail_memory"]()
+    assert r2["patched"] is False, "部分成功を全体成功にしている"
+
+
+def test_patched_function_wins_for_from_import_in_a_child_process(tmp_path):
+    """TP worker と同じ「別プロセスで import し直す」経路で差し替えが効く。
+
+    `weight_utils.py` は `from ...cpu_resource_utils import get_available_memory`
+    で**名前を固定**してから使う。追記が import より前なら、この形でも
+    差し替え後の関数が掴まれる（親での monkeypatch では届かない理由でもある）。
+    """
+    pkg = tmp_path / "vllm" / "utils"
+    pkg.mkdir(parents=True)
+    (tmp_path / "vllm" / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "cpu_resource_utils.py").write_text(
+        "def get_available_memory():\n    return 1234\n", encoding="utf-8")
+
+    ns = {"sys": sys, "os": os}
+    exec(_ram_block(_cells.cell(*SERVE)), ns)      # noqa: S102 - 自前ソースのみ
+    ns["_vllm_cpu_utils_paths"] = lambda: [str(pkg / "cpu_resource_utils.py")]
+    assert ns["_patch_vllm_avail_memory"]()["patched"]
+
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "from vllm.utils.cpu_resource_utils import get_available_memory as f\n"
+         "print(f())"],
+        capture_output=True, text=True, check=True,
+        env={**os.environ, "PYTHONPATH": str(tmp_path)})
+    value = int(out.stdout.strip())
+    assert value != 1234, "差し替え前の関数が掴まれている（追記が効いていない）"
+    assert value > 10**6, "cgroup が無い環境では psutil の空きを返すはず"

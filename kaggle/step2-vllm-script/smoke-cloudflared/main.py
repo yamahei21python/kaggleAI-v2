@@ -887,6 +887,7 @@ def kc_beacon_pull(slug="", dest=None, timeout=180, exe=""):
 import os
 os.environ.setdefault('VLLM_SAFETENSORS_STRATEGY', 'prefetch')
 os.environ.setdefault('VLLM_SAFETENSORS_PREFETCH_THREADS', '1')
+os.environ.setdefault('KC_PREFETCH_PATCH', '1')
 os.environ.setdefault('VLLM_STARTUP_BUDGET', '7000')
 os.environ.setdefault('VLLM_ATTEMPT_TIMEOUT', '7000')
 
@@ -3129,18 +3130,173 @@ def launch(model_dir):
         return out[0], out[1]
 
 
-    def _prefetch_avail_mib():
-        """vLLM が prefetch 可否に使う「空き」（MiB）。**式を合わせる**のが目的。
+    def _cgroup_unreclaimable_mib():
+        """cgroup v2 の**追い出せない**メモリ（MiB）。読めなければ `None`。
 
-        自前の判定と vLLM の判定が食い違うと、ログが「足りている」と言ったまま
-        実際には辞退される（v17 がそれ）。`get_available_memory` と同じ
-        `min(MemAvailable, cgroup 上限 - 使用量)` を返す。
+        `memory.current` は page cache を含むので、cache が張り付いたノードでは
+        「空き」を過小評価する（v17: 30,159 対 6,298 MiB）。`file` は追い出せるが
+        `anon` / `shmem` / `kernel` は追い出せない。
+
+        `kernel` が無いカーネル（5.15 未満）では**代用しない**。`slab` だけでは
+        `kernel_stack` / `sock` / `pagetables` が抜けて過大評価になるので、
+        `None` を返して呼び出し側を従来式（`memory.current`）に戻す。
+        """
+        want = ("anon", "shmem", "kernel")
+        got = {}
+        try:
+            with open("/sys/fs/cgroup/memory.stat", encoding="utf-8") as f:
+                for ln in f:
+                    parts = ln.split()
+                    if len(parts) == 2 and parts[0] in want:
+                        got[parts[0]] = int(parts[1])
+        except (OSError, ValueError):
+            return None
+        if "anon" not in got or "kernel" not in got:
+            return None
+        # 合算は **bytes のまま**。MiB に落としてから足すと切り捨てが積み上がる。
+        return (got["anon"] + got.get("shmem", 0) + got["kernel"]) // 2**20
+
+
+    def _prefetch_avail_mib(exclude_cache=False):
+        """vLLM が prefetch 可否に使う「空き」（MiB）。
+
+        `exclude_cache=False` は vLLM 0.32 の式そのもの
+        `min(MemAvailable, 上限 - memory.current)`。同じ瞬間に「30 GiB 空いている」
+        と「6 GiB しか無い」が両立する（v17）。
+
+        `exclude_cache=True` は `KC_PREFETCH_PATCH` で vLLM 側を差し替えたあとの式。
+        page cache を除いた使用量（`anon` / `shmem` / `kernel`）で数える。
+        内訳が読めないときは**従来式に戻す**（過大評価しない）。
+        **表示と実際の判定を一致させる**ために、こちらも同じ式で出す。
         """
         avail = _mem_available_mib()
         limit, used = _cgroup_mib()
         if limit is None or used is None:
             return avail
+        if exclude_cache:
+            used = _cgroup_unreclaimable_mib() or used
         return max(0, min(avail, limit - used))
+
+
+    _PF_PATCH_MARK = "KC_PREFETCH_PATCH"
+
+    # vLLM の `get_available_memory` を置き換える本体。**ファイルへ追記**するのが
+    # 要点で、親で monkeypatch しても TP worker（別プロセスで `vllm` を import し
+    # 直す）には届かない。追記なら全プロセスが同じ関数を読む。
+    _SITE_PATCH = '''# --- KC_PREFETCH_PATCH ---
+    # vLLM の get_available_memory は cgroup の memory.current を使う。この値には
+    # **page cache が含まれる**ため、前のジョブが張った cache で「RAM が足りない」と
+    # 誤判定する（実測 v17: MemAvailable 30,159 MiB を 6.16 GiB と判定）。
+    # page cache は追い出せるので、追い出せない分だけで数え直す。
+    # 内訳が読めない環境では**元の式に戻す**（過大評価して OOM にしない）。
+    def _kc_int(path):
+        try:
+            with open(path, encoding="utf-8") as _f:
+                _raw = _f.read().strip()
+            return None if _raw in ("", "max") else int(_raw)
+        except (OSError, ValueError):
+            return None
+
+
+    def _kc_stat():
+        _out = {}
+        try:
+            with open("/sys/fs/cgroup/memory.stat", encoding="utf-8") as _f:
+                for _ln in _f:
+                    _p = _ln.split()
+                    if len(_p) == 2:
+                        _out[_p[0]] = int(_p[1])
+        except (OSError, ValueError):
+            return None
+        return _out or None
+
+
+    def get_available_memory():
+        import psutil
+        _avail = psutil.virtual_memory().available
+        _limit = _kc_int("/sys/fs/cgroup/memory.max")
+        _stat = _kc_stat()
+        if _limit is None:
+            return _avail
+        if _stat is None or "anon" not in _stat or "kernel" not in _stat:
+            # 追い出せない分を正確に出せない → 元の式（memory.current）に任せる
+            _cur = _kc_int("/sys/fs/cgroup/memory.current")
+            return _avail if _cur is None else max(0, min(_avail, _limit - _cur))
+        _used = _stat["anon"] + _stat.get("shmem", 0) + _stat["kernel"]
+        return max(0, min(_avail, _limit - _used))
+    '''
+
+
+    def _vllm_cpu_utils_paths():
+        """site-packages の `vllm/utils/cpu_resource_utils.py` を探す（import しない）。
+
+        `import vllm` は重く、CUDA 初期化まで走り得る。パスだけ見れば足りる。
+        """
+        import site
+
+        roots = list(sys.path)
+        for getter in ("getsitepackages", "getusersitepackages"):
+            try:
+                got = getattr(site, getter)()
+            except Exception:                                   # noqa: BLE001
+                continue
+            roots += [got] if isinstance(got, str) else list(got)
+        seen, out = set(), []
+        for root in roots:
+            if not root or root in seen:
+                continue
+            seen.add(root)
+            p = os.path.join(root, "vllm", "utils", "cpu_resource_utils.py")
+            if os.path.isfile(p):
+                out.append(p)
+        return out
+
+
+    def _patch_vllm_avail_memory():
+        """vLLM の空き判定を page cache 除外版に差し替える（ファイル追記）。
+
+        `pip install` の**後**に呼ぶ。戻り値は timings に残す辞書。
+
+        追記は**一時ファイル + `os.replace`**（部分書き込みを残さない）。同じ VM で
+        再実行しても marker で二重追記しない。1 つでも失敗したら `failed` に入れ、
+        呼び出し側は差し替えを**有効扱いにしない**（ゲートだけ緩むのを防ぐ）。
+        """
+        paths = _vllm_cpu_utils_paths()
+        if not paths:
+            return {"patched": False, "reason": "cpu_resource_utils.py が見つからない"}
+        done, failed = [], []
+        for path in paths:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    src = f.read()
+                mode = os.stat(path).st_mode
+            except OSError as e:
+                failed.append(f"{path}: {type(e).__name__}: {e}")
+                continue
+            if _PF_PATCH_MARK not in src:
+                tmp = path + ".kc-patch.tmp"
+                try:
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        f.write(src + "\n\n" + _SITE_PATCH)
+                    os.chmod(tmp, mode)
+                    os.replace(tmp, path)
+                except OSError as e:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                    failed.append(f"{path}: {type(e).__name__}: {e}")
+                    continue
+                # 念のため .pyc を捨てる（mtime だけで判定されると古い本体が使われる）
+                cache = os.path.join(os.path.dirname(path), "__pycache__")
+                try:
+                    for fn in os.listdir(cache):
+                        if fn.startswith("cpu_resource_utils."):
+                            os.remove(os.path.join(cache, fn))
+                except OSError:
+                    pass
+            done.append(path)
+        return {"patched": bool(done) and not failed, "paths": done, "failed": failed}
 
 
     def _mem_line():
@@ -3366,15 +3522,46 @@ def launch(model_dir):
     _WEIGHTS_GIB = _weights_gib()
     # vLLM のしきい値（90%）に少し余裕を足す。ここを割ると prefetch が切られる。
     _NEED_MIB = int(_WEIGHTS_GIB * 1024 / 0.9 * 1.05) if _WEIGHTS_GIB else 0
-    _PF_AVAIL = _prefetch_avail_mib()
+
+    # 辞退の**原因**（page cache を空きに数えない）を消す。既定で入れる。
+    # `KC_PREFETCH_PATCH=0` で従来の挙動に戻せる（A/B の対照群）。
+    _PF_PATCH = None
+    if os.environ.get("KC_PREFETCH_PATCH", "1").strip().lower() not in (
+            "0", "off", "false", "no"):
+        _PF_PATCH = _patch_vllm_avail_memory()
+    else:
+        _PF_PATCH = {"patched": False, "reason": "KC_PREFETCH_PATCH=0"}
+    _PF_PATCH_OK = (bool(_PF_PATCH.get("patched"))
+                    and not _PF_PATCH.get("failed")
+                    # 内訳が読めない環境では差し替えても従来式に戻るので、
+                    # 「差し替え済み」と表示しない（ゲートだけ緩むのを防ぐ）。
+                    and _cgroup_unreclaimable_mib() is not None)
+
+    _PF_AVAIL_RAW = _prefetch_avail_mib()
+    _PF_AVAIL = _prefetch_avail_mib(exclude_cache=_PF_PATCH_OK)
     # 空きが読めない（-1）ときは「辞退される」と決めつけない。判定できないだけ。
     _PF_OK = (not _NEED_MIB) or _PF_AVAIL < 0 or _PF_AVAIL >= _NEED_MIB
     print(f"🧮 重み {_WEIGHTS_GIB} GiB / prefetch に必要な空き {_NEED_MIB} MiB")
+    if _PF_PATCH_OK:
+        print(f"🩹 vLLM の空き判定を差し替え（page cache を除外）: "
+              f"{', '.join(_PF_PATCH.get('paths') or [])}")
+        print(f"🧮 差し替え後の空き {_PF_AVAIL} MiB（元の式なら {_PF_AVAIL_RAW} MiB）"
+              f" → prefetch {'通る' if _PF_OK else '辞退される見込み'}")
+    else:
+        _why = _PF_PATCH.get("reason")
+        if not _why and _PF_PATCH.get("failed"):
+            _why = "; ".join(_PF_PATCH["failed"])
+        if not _why and _PF_PATCH.get("patched"):
+            _why = "memory.stat の内訳が読めない（従来式に戻る）"
+        print(f"🩹 差し替えなし（{_why or '不明'}）")
     if not _NEED_MIB or _PF_AVAIL < 0:
         print(f"🧮 vLLM の式での空き {_PF_AVAIL} MiB → 判定できない")
     else:
         print(f"🧮 vLLM の式での空き {_PF_AVAIL} MiB → prefetch "
               + ("通る" if _PF_OK else "辞退される見込み（重みロードが 5 倍遅い経路）"))
+    kc_save_timings({"prefetch_patch": {**_PF_PATCH, "avail_before_mib": _PF_AVAIL_RAW,
+                                        "avail_after_mib": _PF_AVAIL,
+                                        "need_mib": _NEED_MIB}})
 
 
     def _read_range(path, off, nbytes, threads=1, chunk_mib=32):
@@ -3755,15 +3942,21 @@ def launch(model_dir):
         # 入り、重みロードが 800 秒進まないまま試行上限を焼く（実測 2026-11-01）。
         # 判定は **vLLM と同じ式**（`_prefetch_avail_mib`）。`MemAvailable` だけで
         # 見ると「足りている」と言ったまま実際には辞退される（実測 v17）。
-        _avail = _prefetch_avail_mib()
+        # 差し替え済みなら vLLM も page cache を除いた式で見るので、こちらも合わせる。
+        _avail = _prefetch_avail_mib(exclude_cache=_PF_PATCH_OK)
         if _NEED_MIB and 0 <= _avail < _NEED_MIB:
             _limit, _used = _cgroup_mib()
+            _formula = ("page cache を除外" if _PF_PATCH_OK
+                        else f"cgroup {_used}/{_limit}")
             print(f"  🧠 prefetch 用の空き {_avail} MiB < 必要 {_NEED_MIB} MiB"
                   f"（min(MemAvailable {_mem_available_mib()},"
-                  f" cgroup {_used}/{_limit})）→ 辞退される")
-            _ok, _detail = _drop_caches()
-            print(f"  🧹 drop_caches: {'OK' if _ok else 'NG'} {_detail}")
-            _avail = _prefetch_avail_mib()
+                  f" {_formula})）→ 辞退される")
+            if _PF_PATCH_OK:
+                print("  🧹 drop_caches は試さない（差し替え済みで cache を除外している）")
+            else:
+                _ok, _detail = _drop_caches()
+                print(f"  🧹 drop_caches: {'OK' if _ok else 'NG'} {_detail}")
+                _avail = _prefetch_avail_mib()
             if 0 <= _avail < _NEED_MIB:
                 _rate = (_PREWARM or {}).get("mib_s") or 0
                 _eta = (f"実測 {_rate} MiB/s なら重みだけで "
