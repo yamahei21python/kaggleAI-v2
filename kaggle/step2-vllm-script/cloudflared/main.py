@@ -629,11 +629,6 @@ import urllib.request
 _GIST_API = "https://api.github.com/gists/"
 
 
-def kc_gh_token():
-    """GITHUB_TOKEN を env → Kaggle Secrets の順で解決する。無ければ空文字。"""
-    return kc_gh_token_detail()[0]
-
-
 def kc_gh_token_detail():
     """`(token, detail)`。detail は**どこで解決したか / どこで転んだか**。
 

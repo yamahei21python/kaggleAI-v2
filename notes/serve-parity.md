@@ -105,6 +105,12 @@ notebook は 60 秒 × 10 周 = 600 秒）。
 
 ## まだ残っている差
 
+- **Gist への書き込みだけ二重実装のまま**。notebook 版は `runtime/gist.py` の
+  `kc_gist_write`（401 と 404 を HTTP 本文で区別する）、script 版は
+  `TEMPLATE` 内の `_publish_gist`（`type(e).__name__: e` に潰す）。前者に寄せれば
+  区別は揃うが、**UA ヘッダ（`{ENGINE}-serve-kernel`）が消える**ぶんの挙動差を
+  GPU 無しで確かめられないので、v17 の結果を見るまで触らない。なお公開 URL の
+  主経路はもうビーコンで、Gist は残置（`notes/url-publishing.md`）
 - `loop()` の周期（20 秒 / 60 秒）と、`keepalive.txt` の行の形（notebook は
   `cloudflared=alive | GPU: …`、script は `tunnel=cloudflared:alive | GPU: …`）。
   名前は同じだが中身の書式は違う

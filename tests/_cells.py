@@ -65,8 +65,3 @@ def exec_def(src, name, **ns):
     """`slice_def` で切り出した関数を評価して返す（依存は `ns` で渡す）。"""
     exec(slice_def(src, name), ns)      # noqa: S102 - 自前ソースの切り出しのみ
     return ns[name]
-
-
-def cell_def(*parts, name, **ns):
-    """セルファイルから関数を 1 つ取り出す短縮形。"""
-    return exec_def(cell(*parts), name, **ns)
