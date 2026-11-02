@@ -2,7 +2,7 @@
 
     python3 -m cli check
 
-順番: 生成 → ruff → pytest → ノート一致 → script 一致 → 生成物の compileall。
+順番: 生成 → ruff → pytest → 生成物一致 → 生成物の compileall。
 どこかで落ちたら止める。
 """
 import shutil
@@ -48,10 +48,9 @@ def steps():
         ("build", [sys.executable, "-m", "cli", "build"]),
         ("ruff", _tool("ruff", "ruff", "check", ".")),
         ("pytest", _tool("pytest", "pytest", "tests", "-q")),
-        ("notebooks", [sys.executable, "kaggle/check_notebooks.py"]),
-        # script 側の突き合わせ。notebook と同じく「commit 済み = 再生成結果」を
-        # バイト比較する（生成し忘れた main.py が push されるのを防ぐ）。
-        ("scripts", [sys.executable, "kaggle/check_scripts.py"]),
+        # 生成物（notebook / script）とビルダー出力のバイト一致は
+        # `tests/test_generated.py` が `check_generated.py` を呼んで検査する
+        # （ここで別ステップにすると同じ再生成を 2 回走らせる）。
         ("compileall", [sys.executable, "-m", "compileall", "-q",
                         *_compile_targets()]),
     ]

@@ -51,7 +51,7 @@ SMOKE_OUT_DIR = HERE / "step2-vllm-kernel" / f"smoke-{TUNNEL}"
 # smoke: トンネル / ビーコン公開 / keepalive を省略し、起動と会話だけで終了する。
 # CPU 側（dryrun / proxy / keepalive のテスト）で確認済みの経路を GPU で
 # なぞらないためのフラグ。`cli push ... --smoke` が `--smoke` を渡す。
-# check_notebooks は引数を渡せないので KC_SMOKE=1 でも切り替えられる。
+# check_generated は引数を渡せないので KC_SMOKE=1 でも切り替えられる。
 SMOKE = "--smoke" in sys.argv or os.environ.get("KC_SMOKE") == "1"
 
 # prepare-vllm-dataset.ipynb / kernel-metadata.json と同じディレクトリに置くと

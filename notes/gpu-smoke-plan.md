@@ -23,7 +23,7 @@ GPU 時間を推論スタックの確認だけに使う。
 | `/v1` の形（SSE / 400 / 404） | `tests/test_exl3_server.py`（MockEngine） |
 | 生成物の再現性・AST・Secret 非混入 | `tests/test_exl3_build.py` / `tests/test_engines.py` |
 | notebook とビルダーの一致（13 冊） | `tests/test_notebooks.py` |
-| script とビルダーの一致（18 カーネル / 46 ファイル） | `python3 kaggle/check_scripts.py` |
+| 生成物とビルダーの一致（notebook / script 共通） | `python3 kaggle/check_generated.py` |
 | 起動 argv（TP / backend / 量子化） | `tests/test_engines.py` |
 
 → GPU では **install が通るか / 重みが VRAM に載るか / 会話が返るか** だけ見る。

@@ -120,9 +120,8 @@ kaggle/
   exl3-gpu-check/ exl3-dataset-upload/         # ビルダー無し（main.py が真実源）
   cpu-check/ exllama-cpu-preflight/            # CPU 検証
   ci-cpu/                     # CI を Kaggle の Python 3.13 で回す
-  check_notebooks.py          # notebook の一致検査
-  check_scripts.py            # script の一致検査（台帳から対象を引く）
-  _regen.py                   # 上記 2 本の共通部（写す・走らせる・比べる）
+  check_generated.py          # 生成物の一致検査（notebook / script 共通）
+  _regen.py                   # 上記の共通部（写す・走らせる・比べる・報告）
   archive/                    # 旧カーネルのスナップショット（参照しない。ルートの archive/ とは別）
 
 kbuild/      # 梱包の共通層（spec / embed / metadata / pack_nb / pack_script /
@@ -210,7 +209,7 @@ Kaggle は `kernel_type` が `notebook`（`.ipynb`）と `script`（`main.py` �
 | エンジン差の置き場 | `kaggle/<kernel>/cells/*.py` | 同じセルを `textwrap.indent` で関数化 |
 | トンネル | `kaggle/serve-cells/tunnel_cloudflared.py` | 骨格が持つ（`start_tunnel()` → cloudflared のみ） |
 | レビュー | GitHub で差分が見える | 骨格版は読める／セル連結版はほぼ読める |
-| 一致検査 | `kaggle/check_notebooks.py`（13 冊） | `kaggle/check_scripts.py`（18 カーネル / 46 ファイル） |
+| 一致検査 | `kaggle/check_generated.py`（共通・台帳から導出） | 同左 |
 | 状態 | 常用（実績あり） | 生成・CPU 検証まで完了。**GPU 実測は未実施** |
 
 script 側の作り方は 3 通り:
@@ -265,14 +264,14 @@ script 側の作り方は 3 通り:
 ## 生成物ポリシー（F-3）
 
 - **notebook は commit する**（GitHub で差分レビューでき、clone 直後に push できる）。
-  手で編集せず、必ずビルダーで再生成する。`kaggle/check_notebooks.py` が一致を検査。
+  手で編集せず、必ずビルダーで再生成する。`kaggle/check_generated.py` が一致を検査。
 - **script の `main.py` は種類で扱いが違う**:
 
   | 種類 | 出力先 | git（方針） | 一致検査 |
   |---|---|---|---|
-  | 骨格版（配信） | `kaggle/step2-script/` `step2-vllm-script/` `llama-server-script/` | commit | `check_scripts.py` |
-  | 骨格版の smoke | 同 `smoke-<tunnel>/`（`cli build --smoke` で生成） | commit | `check_scripts.py`（`KC_SMOKE=1` でもう一度走らせる） |
-  | セル連結版（配信しない） | `kaggle/{step1,step2,step2-vllm,…}/script/` | commit | `check_scripts.py` |
+  | 骨格版（配信） | `kaggle/step2-script/` `step2-vllm-script/` `llama-server-script/` | commit | `check_generated.py` |
+  | 骨格版の smoke | 同 `smoke-<tunnel>/`（`cli build --smoke` で生成） | commit | `check_generated.py`（`KC_SMOKE=1` でもう一度走らせる） |
+  | セル連結版（配信しない） | `kaggle/{step1,step2,step2-vllm,…}/script/` | commit | `check_generated.py` |
   | 旧 script（exl3 / lmdeploy / sglang） | `kaggle/exl3-serve-kernel/` など | gitignore | `tests/test_exl3_build.py`（sha256） |
 
   旧 script だけ gitignore なのは、base64 埋め込みが巨大でレビューが効かず、
@@ -281,7 +280,7 @@ script 側の作り方は 3 通り:
 
   > 骨格版・セル連結版の 10 ディレクトリ（約 4.2 MB）と smoke 5 つ
   > （約 2.2 MB）は**まだ未追跡**。commit するか gitignore に寄せるかは
-  > 未決定（下の残タスク #7）。`check_scripts.py` は git ではなくディスクを
+  > 未決定（下の残タスク #7）。`check_generated.py` は git ではなくディスクを
   > 見るので、どちらでも動く。
 - `build/` ディレクトリは作らない（生成物の二重パスを避ける）。
 - **commit 対象は notebook と script の `main.py`、ビルダー無しカーネルの `main.py`**。
@@ -290,7 +289,7 @@ script 側の作り方は 3 通り:
   > **旧 script 3 系統（exl3 / lmdeploy / sglang）だけ smoke の扱いが違う。**
   > これらは `smoke_out` を持たず、`--smoke` は同じディレクトリへ書き込む
   > （`cli push --smoke` が直前に再生成して押すので実害は出ないが、手元の
-  > 通常版は smoke 変種で上書きされる）。`check_scripts.py` が直後に
+  > 通常版は smoke 変種で上書きされる）。`check_generated.py` が直後に
   > 不一致として検出するので、`cli build` で戻す。gitignore 済みの生成物に
   > smoke 専用ディレクトリを増やすと、クリーン clone で `test_spec` が
   > 落ちるため、あえて揃えていない。
@@ -298,7 +297,7 @@ script 側の作り方は 3 通り:
 ## 開発時のチェック
 
 ```bash
-python3 -m cli check        # build → ruff → pytest → notebook 一致 → script 一致 → compileall
+python3 -m cli check        # build → ruff → pytest → 生成物一致 → compileall
 ```
 
 個別に回す場合:
@@ -309,18 +308,19 @@ python3 -m cli build --smoke                # smoke 変種も生成（別ディ�
 python3 kaggle/build_engine_serve.py        # LMDeploy / SGLang（cli build に含まれる）
 python3 -m ruff check .
 python3 -m pytest tests -q                  # 全テスト
-python3 kaggle/check_notebooks.py           # notebook がビルダー出力と一致
-python3 kaggle/check_scripts.py             # script がビルダー出力と一致
+python3 kaggle/check_generated.py           # 生成物（notebook / script）がビルダー出力と一致
 python3 -m compileall -q kaggle/exl3-serve-kernel kaggle/ci-cpu kaggle/step2-script
 ```
 
-`check_notebooks.py` と `check_scripts.py` は「一時ディレクトリへ写す → ビルダーを
-走らせる → commit 済みとバイト比較」で、その共通部は `kaggle/_regen.py` にある。
+`check_generated.py` は「一時ディレクトリへ写す → ビルダーを走らせる → commit 済みと
+バイト比較」で、その共通部は `kaggle/_regen.py` にある。notebook と script を
+**1 本で**見る（台帳の `kind` で分岐しない）。`code_file` と `metadata_file` の
+両方を比べるので、台帳と `dataset_sources` がずれたまま push されることもない。
 **写した生成物を先に消す**ので、ビルダーが黙って書き損ねたときに古いファイルと
 一致して通ることはない。
 
-`check_scripts.py` は台帳の `smoke_out` を見て、smoke 変種も `KC_SMOKE=1` で
-もう一度走らせて突き合わせる（通常版を smoke で上書きしていないことも同時に見る）。
+台帳の `smoke_out` を見て、smoke 変種も `KC_SMOKE=1` でもう一度走らせて
+突き合わせる（通常版を smoke で上書きしていないことも同時に見る）。
 
 CI は GitHub Actions（py3.10）と `ci-cpu` カーネル（py3.13）の二系統。
 どちらも生成物を ruff / compileall に掛ける。
@@ -408,7 +408,7 @@ proxy / トンネル / URL 配布 / keepalive を省略するので、そこは�
 
 | # | 内容 | 選択肢 |
 |---|---|---|
-| 7 | script 生成物 15 ディレクトリ（約 6.4 MB・現在未追跡）を commit するか | commit（`check_scripts.py` がそのまま効く）／gitignore（exl3 方式の sha256 決定性テストへ） |
+| 7 | script 生成物 15 ディレクトリ（約 6.4 MB・現在未追跡）を commit するか | commit（`check_generated.py` がそのまま効く）／gitignore（exl3 方式の sha256 決定性テストへ） |
 | 8 | `kernel_type` を**同一 id のまま**変更できるか | `kaggle kernels push --no-run`（QUICK_SAVE）で実験。**不可なら移行は id 増**（Secrets を UI で再登録） |
 | 9 | notebook を `kaggle/archive/` へ移して削除してよいか | GPU の #1〜#3（3 種）と #5 が通ってから。1 カーネルずつ（一括 `git rm` をしない） |
 
@@ -420,7 +420,7 @@ proxy / トンネル / URL 配布 / keepalive を省略するので、そこは�
 - bench / smoke / bench_mtp の notebook 版は消さない（semi で便益が小さい）。
 - 旧 script 3 系統（exl3 / lmdeploy / sglang）は smoke を同じディレクトリへ書く
   （gitignore 済みの生成物に smoke 専用パスを増やすと、クリーン clone で
-  `test_spec` が落ちるため）。`check_scripts.py` が検出するので事故らない。
+  `test_spec` が落ちるため）。`check_generated.py` が検出するので事故らない。
 
 ## 運用上の注意
 

@@ -9,11 +9,13 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from kbuild import pack_nb  # noqa: E402
+from kbuild import metadata, pack_nb, spec  # noqa: E402
 from runtime import source_bundle  # noqa: E402
 
 # 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
 OUT = str(HERE / "bench_mtp" / "bench-mtp-orcarouter-qwen38-27b.ipynb")
+# 台帳から引く。手書きすると id / gpu / datasets がずれても気づけない。
+KERNEL = spec.find("bench-mtp-spec-decoding-orcarouter-qwen3-8-27b")
 
 cells = []
 
@@ -346,3 +348,4 @@ cells.append(("markdown", """---
 
 if __name__ == "__main__":
     pack_nb.write(OUT, cells, cell_ids=True)
+    metadata.write(KERNEL.metadata_path, metadata.for_kernel(KERNEL), newline=True)

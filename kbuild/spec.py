@@ -81,20 +81,20 @@ class Kernel:
         return self.dir / self.metadata_file
 
 
-def _k(name, title, kind, out, code, gpu=False, ds=(), builder="", env=(),
+def _K(name, title, kind, out, code, gpu=False, ds=(), builder="", env=(),
        bake_env=(), status=ACTIVE, meta="kernel-metadata.json", smoke_out="",
        smoke=False):
+    """台帳の 1 行。`Kernel` の既定値を短く書くためだけのヘルパー。"""
     return Kernel(name=name, title=title, kind=kind, out=out, code_file=code,
                   gpu=gpu, datasets=tuple(ds), builder=builder,
                   env=tuple(env), bake_env=tuple(bake_env), status=status,
                   metadata_file=meta, smoke_out=smoke_out, smoke=smoke)
 
-
-_K = _k
-
 KERNELS = (
     # ---- step2 / Ollama GGUF ----
-    _K("step1-orcarouter-qwen38-27b-dl", "Step1: orcarouter Qwen3.8-27B DL",
+    # title は slug に解決できる必要がある（`metadata.validate`）。"Qwen3.8" は
+    # `qwen3-8` になるので、id の `qwen38` と一致しない。
+    _K("step1-orcarouter-qwen38-27b-dl", "Step1 orcarouter Qwen38 27B DL",
        "notebook", "kaggle/step1",
        "step1-orcarouter-qwen38-27b-dl.ipynb", builder="build_step1"),
     _K("step2-orcarouter-qwen38-27b-cloudflared",
@@ -163,7 +163,7 @@ KERNELS = (
     # いたが、smoke 変種は**同じ kernel id** なので、実験のたびに本番の
     # バージョン履歴が埋まる。実験の置き場を別 id で持つ。
     #
-    # `status=SEMI` にするのは、`cli build`（active のみ）と `check_scripts` に
+    # `status=SEMI` にするのは、`cli build`（active のみ）と `check_generated` に
     # 巻き込まないため。KC_EXPERIMENT は実験ごとに変わるので、生成物を
     # 「ビルダー出力と一致するか」で固定すると実験のたびに落ちる。
     # 代わりに `tests/test_vllm_playground.py` が骨組みを検証する。

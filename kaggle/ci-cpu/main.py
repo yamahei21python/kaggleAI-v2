@@ -58,6 +58,9 @@ def main():
             data["mode"] = "pytest"
             steps.append(("pytest",
                           [sys.executable, "-m", "pytest", "tests", "-q"]))
+            # 生成物とビルダー出力の一致は tests/test_generated.py が
+            # check_generated.py を呼んで見る（明示ステップにすると同じ
+            # 再生成を 2 回走らせる）。
         else:
             data["mode"] = "legacy"
             for name, rel in LEGACY_TESTS:

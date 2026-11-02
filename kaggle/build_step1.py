@@ -5,12 +5,14 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from kbuild import pack_nb  # noqa: E402
+from kbuild import metadata, pack_nb, spec  # noqa: E402
 
 MODEL = "orcarouter/Qwen3.8-27B-Uncensored:latest"
 DATASET_SLUG = "my-ollama-orcarouter-qwen38-27b"
 # 出力先は __file__ 基準（cwd 依存だと kaggle/ 直下などに別物ができる）
 OUT = str(HERE / "step1" / "step1-orcarouter-qwen38-27b-dl.ipynb")
+# 台帳から引く。手書きすると id / gpu / datasets がずれても気づけない。
+KERNEL = spec.find("step1-orcarouter-qwen38-27b-dl")
 
 cells = []
 
@@ -193,3 +195,4 @@ cells.append(("markdown", f"""---
 
 if __name__ == "__main__":
     pack_nb.write(OUT, cells)
+    metadata.write(KERNEL.metadata_path, metadata.for_kernel(KERNEL), newline=True)

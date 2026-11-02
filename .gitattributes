@@ -1,5 +1,5 @@
-# 生成物は「ビルダーの出力そのもの」をバイト比較で検査する（kaggle/check_scripts.py,
-# kaggle/check_notebooks.py）。つまり**中身は見ないが一致は見る**。
+# 生成物は「ビルダーの出力そのもの」をバイト比較で検査する
+# （kaggle/check_generated.py）。つまり**中身は見ないが一致は見る**。
 # 差分表示だけ止めて、base64 埋め込み（chat UI / proxy ソース）でレビューが
 # 埋もれるのを防ぐ。`-diff` でも `git diff --stat` と検査は効く。
 kaggle/**/script/main.py -diff

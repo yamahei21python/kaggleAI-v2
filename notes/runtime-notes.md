@@ -758,7 +758,7 @@ python3 kaggle/build_keepalive_test.py
 
 ```bash
 python3 -m pytest tests -q                  # runtime / ビルダー / proxy / exl3 / Secrets / ノート一致
-python3 kaggle/check_notebooks.py           # auth_proxy.py / llama-chat.html を直したら再生成漏れが無いか
+python3 kaggle/check_generated.py           # auth_proxy.py / llama-chat.html を直したら再生成漏れが無いか
 python3 kaggle/build_exl3_serve.py          # 生成物（serve / dryrun / keepalive）を作り直す
 ruff check . && python3 -m compileall -q kaggle/exl3-serve-kernel
 ```

@@ -4,7 +4,7 @@
 proxy / keepalive）だけ外した骨組みで動かすのが要点。ここだけ別実装にすると
 「playground では効いたのに本番では効かない」が起きる。
 
-`status=SEMI` なので `cli build` / `check_scripts` の対象外。代わりにここで
+`status=SEMI` なので `cli build` / `check_generated` の対象外。代わりにここで
 骨組みを見る（`KC_EXPERIMENT` ごとに生成物が変わるので、バイト一致では
 固定できない）。
 """

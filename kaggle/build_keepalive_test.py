@@ -5,10 +5,12 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from kbuild import embed, pack_nb  # noqa: E402
+from kbuild import embed, metadata, pack_nb, spec  # noqa: E402
 from runtime import proxy_source, source_bundle  # noqa: E402
 
 OUT = str(HERE / "step2" / "step2-keepalive-test.ipynb")
+# 台帳から引く。手書きすると id / gpu / datasets がずれても気づけない。
+KERNEL = spec.find("keepalive-test")
 pathlib.Path(OUT).parent.mkdir(parents=True, exist_ok=True)
 
 # auth_proxy.py 全体を埋め込む
@@ -308,3 +310,4 @@ for fname in ["keepalive_test_result.txt", "public_url.txt", "connection_info.tx
 
 if __name__ == "__main__":
     pack_nb.write(OUT, cells)
+    metadata.write(KERNEL.metadata_path, metadata.for_kernel(KERNEL))

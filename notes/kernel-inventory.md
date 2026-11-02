@@ -143,7 +143,7 @@
    smoke 版に入れ替わる。実稼働前に `cli push <name> --yes`（smoke 無し）で
    戻すこと。smoke ディレクトリは再生成可能な一時成果物だが、
    台帳の `smoke_out` に入っているので消すと検証が落ちる
-   （`check_notebooks.py` / `check_scripts.py` の対象は台帳から導出される）。
+   （`check_generated.py` の対象は台帳から導出される）。
 6. **トンネルの既定は 3 ビルダーとも cloudflared**（2026-11-01 に
    `build_llama_server.py` の既定 ngrok を直した）。`STEP2_TUNNEL` / `LLAMA_TUNNEL`
    に cloudflared 以外を渡すと、ビルダーは生成前に落ちる。
@@ -184,7 +184,7 @@
    `enable_internet` が必須（どちらも `metadata.base` の引数）。
 6. **初回 push は GPU クォータを消費する**。残量を
    `python3 kaggle-quota.py` で確認し、依頼があるときだけ push する。
-7. 生成物は `check_notebooks.py` / `tests/test_exl3_build.py` の対象に加える。
+7. 生成物は `check_generated.py` / `tests/test_exl3_build.py` の対象に加える。
    **notebook も script も台帳から自動で拾う**ので、`kbuild/spec.py` に
    `builder` / `smoke_out` を書けば一覧更新は要らない（2026-11-02 に
    `TARGETS` の手書きを廃止した）。
@@ -216,7 +216,7 @@ Secrets は**カーネル単位**で UI から登録する（コードからは�
 
 「commit 済みの生成物 = ビルダーの再出力」をバイト比較する。2 本立て:
 
-### notebook — `kaggle/check_notebooks.py`（10 冊）
+### notebook — `kaggle/check_generated.py`（10 冊）
 
 - `step1` / `step2`（cloudflared）/ `smoke` / `bench` / `bench_mtp` /
   `step2-keepalive-test`
@@ -225,12 +225,12 @@ Secrets は**カーネル単位**で UI から登録する（コードからは�
 
 退役した ngrok 版は対象外（再生成できないので比較する相手が無い）。
 
-notebook 側の対象表は**台帳から導出**する（`check_notebooks.py` の `_targets()`）。
+notebook 側の対象表は**台帳から導出**する（`check_generated.py` の `targets()`）。
 `kind == "notebook"` かつ `builder` 持ちを引き、`smoke_out` を持つカーネルは
 `KC_SMOKE=1` でもう一度走らせて smoke 側も突き合わせる。2026-11-02 まで
 `TARGETS` に手で 10 行書いていたが、台帳に `smoke` 欄を足して廃止した。
 
-### script — `kaggle/check_scripts.py`（44 ファイル）
+### script — `kaggle/check_generated.py`（44 ファイル）
 
 `kbuild/spec.py` から `kind == "script"` かつ `builder` 持ちを引くので、
 **script カーネルを増やしても一覧の更新は要らない**。同じビルダーが複数の出力を
@@ -249,11 +249,11 @@ smoke 版の再生成漏れを同時に見る。
 どちらも「一時ディレクトリへ写す → ビルダーを走らせる → バイト比較」で、
 その部分は `kaggle/_regen.py`（`stage` / `run` / `label` / `diff` / `report`）。
 **写した生成物を先に消す**ので、ビルダーが書き損ねたときに古いファイルと
-一致して通ることはない（`check_notebooks.py` 側には元々この処理が無かった）。
+一致して通ることはない。
 
 ### 限界（正直に書いておく）
 
-`check_scripts.py` の比較相手は **ディスク上のファイル**（`ROOT/<rel>`）で、
+`check_generated.py` の比較相手は **ディスク上のファイル**（`ROOT/<rel>`）で、
 git の index ではない。したがって:
 
 - commit 対象の script（`-script` / `/script/`）… commit 済みと比較するのと同じ。
@@ -279,4 +279,4 @@ git の index ではない。したがって:
 2. `kernel_type` を同一 id で変えられるかは未検証（Phase 0-a）。
    不可なら「notebook を消す」段は新 id 前提になる。
 3. script 生成物 15 ディレクトリ（約 6.4 MB）が**未追跡**。commit するか
-   `.gitignore` に寄せるか（後者なら `check_scripts.py` の対象から外す）。
+   `.gitignore` に寄せるか（後者なら `check_generated.py` の対象から外す）。

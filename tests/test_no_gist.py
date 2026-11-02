@@ -21,7 +21,7 @@ from kbuild import spec
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # 実行されるソースだけ。生成物（kaggle/**）はビルダー出力なので、
-# ビルダー側を見れば足りる（`check_scripts` が一致を保証している）。
+# ビルダー側を見れば足りる（`check_generated` が一致を保証している）。
 SOURCES = [
     *sorted((ROOT / "runtime").rglob("*.py")),
     *sorted((ROOT / "kbuild").rglob("*.py")),
@@ -30,8 +30,7 @@ SOURCES = [
     *sorted((ROOT / "kaggle" / "serve-cells").glob("*.py")),
     *sorted((ROOT / "kaggle" / "step2" / "cells").glob("*.py")),
     *sorted((ROOT / "kaggle" / "step2-vllm" / "cells").glob("*.py")),
-    ROOT / "kaggle" / "check_scripts.py",
-    ROOT / "kaggle" / "check_notebooks.py",
+    ROOT / "kaggle" / "check_generated.py",
 ]
 
 # 機能として効いてしまうものだけを禁じる。「Gist は廃止した」という
