@@ -283,3 +283,86 @@ def test_install_keeps_going_after_a_successful_step():
         fn()
     assert len(saves) >= 2, "ステップごとに save していない"
     assert saves[0]["install_steps"][0]["rc"] == 0
+
+
+# ── テンプレートの契約: $TOKEN と render() の引数は過不足なく一致する ──────
+# `substitute()` は「足りない」トークンを KeyError で知らせるが、**余った**
+# 引数は黙って捨てる。テンプレートからトークンを消したのに `render()` に名前が
+# 残ると「渡しているのに効かない設定」になり、次に触る人が理由を追うことになる。
+MIN_ENGINE = {
+    "name": "x",
+    "alias": "y",
+    "engine_code": "def stage_install():\n    pass\n",
+}
+
+
+def _render_min(**engine_over):
+    engine = {**MIN_ENGINE, **engine_over}
+    return serve_script.render(
+        engine, run_minutes=1, runtime="# rt\n",
+        proxy_b64="", html_b64="", gist_id="g", gist_owner="o")
+
+
+def test_template_tokens_match_render_arguments():
+    """過不足が無いこと（余りは `substitute()` が見てくれない）。"""
+    body = _render_min()
+    # 置換漏れが無い。`$$` で書いたリテラル `$` も今は 1 つも無いので、
+    # 出力に `$` が現れたら「テンプレートに素の `$` を書いた」合図になる。
+    assert "$" not in body
+    assert "ENGINE = \"x\"" in body
+
+
+def test_unused_render_argument_is_rejected():
+    """テンプレートに無い名前を渡したら落ちる（消し忘れの検出）。"""
+    subs = dict.fromkeys(serve_script.template_tokens(serve_script.TEMPLATE), "")
+    subs["GHOST"] = 1
+    with pytest.raises(ValueError) as ei:
+        serve_script._check_tokens(
+            serve_script.TEMPLATE, subs, where="test")
+    msg = str(ei.value)
+    assert "GHOST" in msg and "使っていない" in msg, msg
+
+
+def test_missing_template_argument_is_rejected():
+    with pytest.raises(ValueError) as ei:
+        serve_script._check_tokens(
+            serve_script.TEMPLATE, {"ENGINE": "x"}, where="test")
+    assert "ENGINE_CODE" in str(ei.value)
+
+
+def test_unescaped_dollar_is_reported_with_a_position():
+    """`$` の直後が識別子でない書き方は、位置付きで落とす。
+
+    `substitute()` の ValueError は「Invalid placeholder in string」だけで、
+    900 行のどこと言ってくれない。`$PATH` のような**正当な**トークン名は
+    ここでは拾えない（引数の過不足として別のメッセージで落ちる）。
+    """
+    from string import Template
+    with pytest.raises(ValueError) as ei:
+        serve_script.template_tokens(Template("A = 1\nB = $1\n"))
+    msg = str(ei.value)
+    assert "文字目" in msg and "$1" in msg, msg
+
+
+def test_template_tokens_reads_both_styles():
+    from string import Template
+    assert serve_script.template_tokens(
+        Template("$A ${B} $$C $D")) == {"A", "B", "D"}
+
+
+def test_unknown_flow_key_is_rejected():
+    """段の名前を間違えると既定のまま動く（＝「False にしたのに止まらない」）。"""
+    with pytest.raises(ValueError) as ei:
+        _render_min(flow={"publsh": False})
+    assert "publsh" in str(ei.value)
+
+
+def test_flow_value_must_be_bool():
+    """`"false"` を渡すとカーネル側が `INSTALL = false` になり NameError。
+
+    ビルドは通るので、GPU を掴んでから落ちる。ここで止める。
+    """
+    with pytest.raises(TypeError) as ei:
+        _render_min(flow={"install": "false"})
+    assert "install" in str(ei.value)
+

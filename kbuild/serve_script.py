@@ -42,6 +42,51 @@ DEFAULT_FLOW = {
     "cleanup": False,       # engine["cleanup"] があるときだけ True にする
 }
 
+
+def template_tokens(tpl: Template) -> set:
+    """テンプレートが参照している `$TOKEN` の集合。
+
+    `substitute()` は**足りない**トークンを KeyError で知らせるが、**余った**
+    引数（テンプレートから消したのに `render()` に残った名前）は黙って捨てる。
+    放っておくと「渡しているのに効かない設定」が残り、次に触る人が「なぜ変えて
+    も挙動が変わらないのか」を追うことになる（2026-11-02 に関数の重複を数えた
+    ときも、消し忘れの検出だけが手作業だった）。
+    """
+    found = set()
+    for m in Template.pattern.finditer(tpl.template):
+        name = m.group("named") or m.group("braced")
+        if name:
+            found.add(name)
+        elif m.group("invalid") is not None:
+            # `$` の直後が識別子でない（`$1` / `$ ` / `$-` など）。substitute() も
+            # ValueError で落ちるが、どこかは教えてくれない。
+            lo = max(0, m.start() - 40)
+            raise ValueError(
+                "テンプレートの $ の書き方が不正（{} 文字目付近: {!r}）。"
+                "リテラルの $ は $$ と書く。".format(
+                    m.start(), tpl.template[lo:m.start() + 40]))
+    return found
+
+
+def _check_tokens(tpl: Template, subs: dict, *, where: str) -> None:
+    """テンプレートの `$TOKEN` と渡す引数が過不足なく一致することを確かめる。
+
+    両方向を見る。足りない方は `substitute()` も落ちるが、余っている方は
+    どこも文句を言わない。
+    """
+    want = template_tokens(tpl)
+    got = set(subs)
+    if want - got:
+        raise ValueError(
+            "{}: テンプレートが必要としている引数が渡されていない: {}".format(
+                where, sorted(want - got)))
+    if got - want:
+        raise ValueError(
+            "{}: テンプレートが使っていない引数が渡されている: {}"
+            "（テンプレート側を消したら render() からも消す）".format(
+                where, sorted(got - want)))
+
+
 TEMPLATE = Template(r'''#!/usr/bin/env python3
 """$ENGINE serve（自動生成。直接編集しない）。
 
@@ -1021,6 +1066,22 @@ def render(engine: dict, *, run_minutes: int, runtime: str, proxy_b64: str,
         raise ValueError(
             f"tunnel={tunnel!r} は未対応（cloudflared / smoke 時のみ none）")
     flow = {**DEFAULT_FLOW, **(engine.get("flow") or {})}
+    # 段の名前を間違えると `{**DEFAULT_FLOW, ...}` が黙って受け入れ、その段は
+    # 既定のまま動く（＝「False にしたのに止まらない」）。名前と型の両方を見る。
+    # 型は bool に限る: `INSTALL = $INSTALL` は素の Python 式として埋め込むので、
+    # 文字列 "false" を渡すとカーネル側で `INSTALL = false` になり NameError に
+    # なる（ビルドは通り、GPU を掴んでから落ちる）。
+    unknown = sorted(set(engine.get("flow") or {}) - set(DEFAULT_FLOW))
+    if unknown:
+        raise ValueError(
+            "engine[{!r}]['flow'] に知らない段がある: {}（使えるのは {}）".format(
+                engine["name"], unknown, sorted(DEFAULT_FLOW)))
+    not_bool = {k: v for k, v in flow.items() if not isinstance(v, bool)}
+    if not_bool:
+        raise TypeError(
+            "engine[{!r}]['flow'] の値は bool にする: {}".format(
+                engine["name"], not_bool))
+
     # 実体があるスロットは自動で有効化する（flow で明示しなくても呼ばれる）。
     if engine.get("warmup"):
         flow["warmup"] = True
@@ -1028,19 +1089,24 @@ def render(engine: dict, *, run_minutes: int, runtime: str, proxy_b64: str,
         flow["cleanup"] = True
     aux = engine.get("aux") or (("auth_proxy.py", proxy_b64),
                                 ("llama-chat.html", html_b64))
-    code = engine.get("engine_code") or EXTERNAL_ENGINE_CODE.substitute(
-        # `pip_argv`（1 回）しか持たないエンジンは 1 要素のリストに包む。
-        # LMDeploy はこれまで通り 1 回で通るので、そのまま動く。
-        PIP_STEPS=engine.get("pip_steps") or f"[{engine['pip_argv']}]",
-        LAUNCH_ARGV=engine["launch_argv"],
-        READY_URL=engine["ready_url"],
-    )
+    code = engine.get("engine_code")
+    if not code:
+        ext = {
+            # `pip_argv`（1 回）しか持たないエンジンは 1 要素のリストに包む。
+            # LMDeploy はこれまで通り 1 回で通るので、そのまま動く。
+            "PIP_STEPS": engine.get("pip_steps") or f"[{engine['pip_argv']}]",
+            "LAUNCH_ARGV": engine["launch_argv"],
+            "READY_URL": engine["ready_url"],
+        }
+        _check_tokens(EXTERNAL_ENGINE_CODE, ext,
+                      where=f"{engine['name']} の engine_code")
+        code = EXTERNAL_ENGINE_CODE.substitute(**ext)
     # ビーコンは骨格側で必ず足す。各ビルダーに `"beacon"` を書かせると
     # 1 本書き忘れただけで「URL が更新されないのに配信は続く」状態になる
     # （2026-11-01 に Gist で同じ穴を踏んだ）。公開しない構成でも、束ねて
     # おけば `publish_url` が NameError にならない。
     runtime = runtime + module_source("beacon")
-    return TEMPLATE.substitute(
+    subs = dict(
         BUILDER=builder,
         ENGINE=engine["name"],
         ENGINE_PATTERN=engine.get("pattern", f"-f {engine['name']}"),
@@ -1081,6 +1147,10 @@ def render(engine: dict, *, run_minutes: int, runtime: str, proxy_b64: str,
         GIST_ID=gist_id,
         GIST_OWNER=gist_owner,
     )
+    # 引数の過不足はここで落とす。`substitute()` は「足りない」しか見ないので、
+    # テンプレートからトークンを消したときに `render()` 側の名前が残る。
+    _check_tokens(TEMPLATE, subs, where=f"{engine['name']} の TEMPLATE")
+    return TEMPLATE.substitute(**subs)
 
 
 def write(out_dir, engine: dict, meta: dict, **kwargs) -> None:

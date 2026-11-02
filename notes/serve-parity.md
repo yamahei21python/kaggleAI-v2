@@ -76,6 +76,33 @@ notebook は 60 秒 × 10 周 = 600 秒）。
 `tests/test_serve_parity.py` の振る舞いテストで突き合わせるしかない。
 次に「共通化しよう」と思ったら、まずこの測り方で 0 組であることを確認すること。
 
+## テンプレートの引数は両方向で突き合わせる（2026-11-02）
+
+`TEMPLATE` は 900 行・`$TOKEN` 39 個の `string.Template` で、`render()` が
+39 個のキーワードを渡している。この 2 つがずれても、片方向しか怒られない。
+
+| ずれ方 | これまで | いま |
+|---|---|---|
+| トークンはあるが引数が無い | `KeyError`（どのトークンかは出る） | `ValueError`（同じ） |
+| 引数はあるがトークンが無い | **無言で捨てられる** | `ValueError`（名前を出す） |
+| `$` の後ろが識別子でない | `Invalid placeholder in string` だけ | 文字位置と周辺を出す |
+
+2 行目が実害の本体。「テンプレートから `$X` を消したのに `render()` に
+`X=...` が残る」と、渡しているのに効かない設定が静かに積み上がり、次に触る人が
+「なぜ変えても挙動が変わらないのか」を追うことになる。`template_tokens()` /
+`_check_tokens()` を `kbuild/serve_script.py` に置き、`render()` の最後で必ず通す。
+
+同じ理由で `flow` も見るようにした。
+
+- 知らない段の名前（`{"publsh": False}`）は `ValueError`。`{**DEFAULT_FLOW, ...}`
+  は余分なキーを黙って受けるので、綴り間違いは「既定のまま動く」になる
+- 値が `bool` 以外なら `TypeError`。`INSTALL = $INSTALL` は素の式として埋め込む
+  ので、`"false"` を渡すとカーネル側が `INSTALL = false` になり **ビルドは通って
+  GPU を掴んでから `NameError`** になる
+
+生成物は 1 バイトも変わらない（`git status` が `kbuild/serve_script.py` だけ）。
+テストは `tests/test_serve_script_guards.py` に 8 本。
+
 ## まだ残っている差
 
 - `loop()` の周期（20 秒 / 60 秒）と、`keepalive.txt` の行の形（notebook は
