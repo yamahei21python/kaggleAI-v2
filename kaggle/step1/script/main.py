@@ -100,7 +100,7 @@ BIN_CACHE = os.path.join(OLLAMA_MODELS_DIR, "bin")
 os.makedirs(BIN_CACHE, exist_ok=True)
 
 # ollama 本体 / llama-server をキャッシュする（cloudflared は Step2 が
-# 専用 Dataset から復元する。ngrok は 2026-11-01 に廃止）。
+# 専用 Dataset から復元する）。
 # llama-server を忘れると Step2 で毎回 install.sh を走らせることになる。
 CANDIDATES = [
     "/usr/local/bin/ollama",

@@ -14,7 +14,6 @@
   projector blob が既にあるので、pull は不要。
 
 環境変数:
-  LLAMA_TUNNEL=cloudflared         既定 cloudflared（ngrok は 2026-11-01 に廃止）
   LLAMA_MTP=1|0                    既定 1（MTP 有効）
   LLAMA_CTX=<int>                  既定 32768（テスト用に小さめ）
 """
@@ -37,14 +36,7 @@ MODEL_DISPLAY = "Qwen3.8-27B-Uncensored (直起動)"
 DATASET = "my-ollama-orcarouter-qwen38-27b"
 PATCH = "my-ollama-orcarouter-qwen38-27b-patch"
 
-# ngrok は 2026-11-01 に廃止した（`notes/url-publishing.md`）。llama-server の
-# 配信カーネルは ngrok 前提で作っていたので台帳では retired にしてあるが、
-# ビルダー自体は cloudflared で生成できる状態に残す（作り直したくなったとき用）。
-TUNNEL = os.environ.get("LLAMA_TUNNEL", "cloudflared").strip().lower()
-if TUNNEL != "cloudflared":
-    raise SystemExit(
-        f"LLAMA_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
-        "（ngrok は 2026-11-01 に廃止）")
+TUNNEL = "cloudflared"
 
 USE_MTP = os.environ.get("LLAMA_MTP", "1").strip() == "1"
 CTX = int(os.environ.get("LLAMA_CTX", "32768"))

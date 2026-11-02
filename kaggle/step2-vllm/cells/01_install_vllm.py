@@ -25,8 +25,7 @@ def _mark(name):
     return _MARKS[name]
 
 # ---- cloudflared（Dataset キャッシュ優先）----
-# ngrok は 2026-11-01 に廃止したので、トンネルの種類で分岐しない
-# （`notes/url-publishing.md`）。cloudflared は常に用意する。
+# トンネルは cloudflared だけなので、種類で分岐しない。常に用意する。
 CF_PATH = kc_find_dataset("my-cloudflared-bin")
 dst = os.path.join(BIN_DIR, "cloudflared")
 src = None

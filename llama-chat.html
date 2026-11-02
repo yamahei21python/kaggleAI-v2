@@ -401,7 +401,7 @@
   function resolveApiBase() {
     if (apiParam) return apiParam.replace(/\/$/, '');
     if (portParam) return `http://127.0.0.1:${portParam}/v1`;
-    // 中継や ngrok 経由で配信されている場合は同一オリジン。
+    // 中継やトンネル経由で配信されている場合は同一オリジン。
     // ここを 127.0.0.1 固定にすると、リモートから開いたときに
     // 手元の PC を見に行ってしまう。
     if (location.protocol === 'http:' || location.protocol === 'https:') {
@@ -412,9 +412,7 @@
 
   const API_BASE = resolveApiBase();
 
-  // ngrok 無料枠はブラウザからの API 取得にも警告ページを挟むことがある。
-  // このヘッダはローカルサーバーでは無視されるので、常に付けても害はない。
-  const BASE_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
+  const BASE_HEADERS = {};
   const els = {
     scroller: document.getElementById('scroller'),
     log: document.getElementById('log'),

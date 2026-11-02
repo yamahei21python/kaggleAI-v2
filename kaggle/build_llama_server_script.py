@@ -18,13 +18,7 @@ HERE = pathlib.Path(__file__).resolve().parent          # kaggle/
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 
-TUNNEL = os.environ.get("LLAMA_TUNNEL", "cloudflared").strip().lower()
-if TUNNEL != "cloudflared":
-    raise SystemExit(
-        f"LLAMA_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
-        "（ngrok は 2026-11-01 に廃止）")
-# 借用する前に環境変数を確定させる（import 時に読まれる）
-os.environ["LLAMA_TUNNEL"] = TUNNEL
+TUNNEL = "cloudflared"
 
 sys.path.insert(0, str(HERE))
 import build_llama_server as base  # noqa: E402

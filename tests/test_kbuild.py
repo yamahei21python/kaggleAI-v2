@@ -13,11 +13,11 @@ def check(cond, msg):
 
 def test_kbuild():
     # title → slug 検査
-    check(metadata.slugify("llama-server ngrok")
-          == "llama-server-ngrok", "slugify")
+    check(metadata.slugify("step2 cloudflared")
+          == "step2-cloudflared", "slugify")
     meta = metadata.base(
-        id="owner/llama-server-ngrok",
-        title="llama-server ngrok",
+        id="owner/step2-cloudflared",
+        title="step2 cloudflared",
         code_file="x.ipynb", kernel_type="notebook", gpu=True)
     metadata.validate(meta)
     try:

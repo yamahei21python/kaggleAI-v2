@@ -109,10 +109,11 @@ def test_net():
     check("ログ無しでも落ちない",
           net.kc_probe_url("cloudflared", str(tmp / "none.log")) == "")
 
-    # ngrok は 2026-11-01 に廃止。表から消してあるので KeyError で気づける
-    # （黙って "" を返すと「トンネルは張れたのに URL が取れない」に見える）。
-    check("ngrok は表に無い（KeyError）", _raises_keyerror(net.kc_probe_url, "ngrok"))
-    check("管理 API の分岐も消えている",
+    # 表に無い名前は KeyError（黙って "" を返すと「トンネルは張れたのに
+    # URL が取れない」に見える）。管理 API から取る分岐は持たない。
+    check("表に無い名前は KeyError",
+          _raises_keyerror(net.kc_probe_url, "unknown-tunnel"))
+    check("管理 API の分岐も無い",
           '"api"' not in pathlib.Path(net.__file__).read_text())
 
     # 待ちループは sleep を差し替えて即時化

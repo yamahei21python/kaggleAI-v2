@@ -8,8 +8,7 @@ exl3 / LMDeploy / SGLang は**同じ骨格**で生成する。エンジンごと
 
 proxy / トンネル / keepalive / 検証 / URL 配布は `runtime/` の kc_* と
 このテンプレートの共通実装をそのまま使う。エンジン側に配管を書かない。
-トンネルは cloudflared の quick tunnel だけ（`tunnel=` で選ぶ）。ngrok は
-2026-11-01 に廃止した（`notes/url-publishing.md`）。
+トンネルは cloudflared の quick tunnel だけ（`notes/url-publishing.md`）。
 
 テンプレートを分けない理由: 以前は exl3 用と LMDeploy 用で 2 本に分かれており、
 共通関数 21 本のうち完全一致が 2 本だけになっていた（`verify` が空応答を
@@ -530,18 +529,12 @@ def start_cloudflared(key="tunnel_seconds"):
 def start_tunnel():
     """TUNNEL に従ってトンネルを張り、`(proc, url)` を返す。
 
-    選ぶ先は今 cloudflared しか無い。ngrok は 2026-11-01 に廃止した。
-    理由は 2 つで、どちらも実測:
-      - `NGROK_TOKEN` を Secrets から読むが、専用アカウントでは未紐付けの
-        `get_secret()` が `ConnectionError` を返す（`notes/url-publishing.md`）。
-        つまりビーコンで URL を配っても、その手前で起動できない
-      - 固定ドメインを維持する理由がビーコンで消えた（URL が毎回変わっても
-        `python3 -m cli beacon` で読める）
-    cloudflared の quick tunnel はアカウントも authtoken も要らない。
+    選ぶ先は cloudflared の quick tunnel だけ。アカウントも authtoken も
+    要らない（`notes/url-publishing.md`）。
 
-    分岐を残しているのは、`TUNNEL` が骨格（builder）の環境変数から来る値で、
-    ここだけがその値を見る場所だから。値を増やすときは `_wait_tunnel` の
-    host 名と `data["tunnel"]` の整合も一緒に直すこと。
+    分岐を残しているのは、`TUNNEL` が骨格（builder）の値で、ここだけが
+    その値を見る場所だから。値を増やすときは `_wait_tunnel` の host 名と
+    `data["tunnel"]` の整合も一緒に直すこと。
     """
     if TUNNEL == "cloudflared":
         return start_cloudflared()
@@ -556,10 +549,9 @@ def publish_url(url):
       - ビーコン  … カーネルのコードを掲示板にする方式。**Secrets 不要**なので
                     専用アカウント運用でも使える（`notes/url-publishing.md`）
 
-    Gist 版は 2026-11-02 に廃止した。`notes/url-publishing.md` のとおり、
-    Kaggle の Secret は**カーネルごとに紐付ける**必要があり、未紐付けの
-    `get_secret()` は `ConnectionError`（＝通信障害に見える）を返す。
-    ビーコンはその作業ごと不要にする。
+    `url.txt` が同じカーネルの中から読む用、ビーコンが外から読む用。
+    ビーコンはカーネルのコードを掲示板にする方式で、**Secrets 不要**なので
+    専用アカウント運用でも使える（`notes/url-publishing.md`）。
     """
     with open(URL_FILE, "w") as f:
         f.write(url + "\n")
@@ -1036,8 +1028,8 @@ def render(engine: dict, *, run_minutes: int, runtime: str, proxy_b64: str,
     # `none` は「トンネルを張らない」実験用（playground）。公開経路を持たない
     # カーネルでだけ意味があるので、`smoke=True` と組のときだけ許す。
     # 本番（smoke=False）で `none` を渡すのは設定ミスなので、従来どおり弾く。
-    # ngrok は廃止（`notes/url-publishing.md`）。ここで弾かないと、指定した
-    # ビルダーが「ngrok のつもり」で cloudflared を張って静かに動いてしまう。
+    # 未対応の `tunnel` はここで弾く。素通しすると、指定したビルダーが
+    # 「別のトンネルのつもり」で cloudflared を張って静かに動いてしまう。
     if tunnel not in ("cloudflared",) and not (smoke and tunnel == "none"):
         raise ValueError(
             f"tunnel={tunnel!r} は未対応（cloudflared / smoke 時のみ none）")

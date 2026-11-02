@@ -12,9 +12,9 @@ RESTART_CMD = [CF_BIN, "tunnel", "--url", f"http://127.0.0.1:{PROXY_PORT}",
 def probe_url():
     """公開URLを取り直す（keepalive の再起動用）。
 
-    ngrok 版と同じインターフェース（TUNNEL_NAME / TUNNEL_LOG / RESTART_CMD /
-    probe_url）を揃える。揃っていないと keepalive セルが NameError になり、
-    トンネル再起動の経路だけ無言で死ぬ（cloudflared 版で実測）。
+    トンネル実装が満たすインターフェース（TUNNEL_NAME / TUNNEL_LOG /
+    RESTART_CMD / probe_url）を揃える。揃っていないと keepalive セルが
+    NameError になり、トンネル再起動の経路だけ無言で死ぬ（実測）。
     """
     return kc_probe_url("cloudflared", TUNNEL_LOG)
 

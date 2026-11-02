@@ -23,8 +23,7 @@ kc_load_config() {
 }
 kc_load_config
 
-# ngrok のブラウザ警告ページを避けるための UA 偽装ヘッダは 2026-11-01 に
-# 廃止した（ngrok 自体を廃止したため）。cloudflared は素の UA を通す。
+# UA 偽装ヘッダは持たない（cloudflared は素の UA を通す）。
 KC_PROXY_PY="${SCRIPT_DIR}/kaggle/step2/auth_proxy.py"
 KC_CHAT_HTML="${SCRIPT_DIR}/llama-chat.html"
 
@@ -97,9 +96,8 @@ EOS
 
 # ---- 公開 URL の取得 ---------------------------------------
 # cloudflared の quick tunnel は URL が毎回変わる。その URL を「掲示板カーネル」
-# に書かせて読むのがビーコン（`notes/url-publishing.md`）。ngrok を 2026-11-01
-# に廃止してから、ここが URL の一次情報。**Secrets は要らない。**
-# 読めなければ空を返す（URL の出所はここだけ。Gist 版は 2026-11-02 に廃止）。
+# に書かせて読むのがビーコン（`notes/url-publishing.md`）。ここが URL の
+# 一次情報で、**Secrets は要らない**。読めなければ空を返す。
 kc_beacon_url() {
   local u
   # `cli beacon` は 0=使える / 1=読めたが捨てた / 2=引けなかった。
@@ -121,7 +119,7 @@ print(d.get("url", "") if d.get("ok") else "")
 
 # ローカル中継。UI はローカルの llama-chat.html を配る（上流から取ると
 # push 済みの古い版が返ってくる）。上流は cloudflared の quick tunnel なので、
-# ヘッダの肩代わりは要らない（ngrok は 2026-11-01 に廃止）。
+# ヘッダの肩代わりは要らない。
 # 成功時は KC_RELAY_PID に PID を入れて 0 を返す。
 kc_start_relay() {  # $1=upstream base url $2=port
   KC_RELAY_PID=""

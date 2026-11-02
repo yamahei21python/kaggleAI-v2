@@ -25,12 +25,8 @@ import urllib.error
 import urllib.request
 
 # hosts は表駆動。今はログ解析の 1 種類しか無いが、待ち時間を URL の出所と
-# 一緒に置いておくと `kc_wait_url` が既定値を知らずに済む。
-# ngrok は 2026-11-01 に廃止した（`notes/url-publishing.md`）。表に残すと
-# `kc_probe_url("ngrok")` が黙って空を返し、「トンネルは張れたのに URL が
-# 取れない」に見えるので、項目ごと落とす（KeyError で即座に気づける）。
-# 管理 API から URL を取る分岐（旧 ngrok 用）も一緒に消した。表に `api` の
-# 項目が無い以上、通らない枝になる。
+# 一緒に置いておくと `kc_wait_url` が既定値を知らずに済む。表に無い名前は
+# KeyError になる（黙って空 URL を返さない）。
 TUNNEL_HOSTS = {
     "cloudflared": {
         "url_re": re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com"),

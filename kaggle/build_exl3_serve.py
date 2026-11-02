@@ -176,7 +176,7 @@ def _engine(mode: str) -> dict:
             "model": real,            # mock はモデル不要
             "tp": False,              # EXL3 は TP 非対応（1 枚で動かす）
             "keepalive": mode == "keepalive",
-            "publish": real,          # mock の URL で Gist を上書きしない
+            "publish": real,          # mock の URL でビーコンを上書きしない
             "verify_public": True,
             "conf": mode != "mock",   # mock は keepalive を見ない
         },

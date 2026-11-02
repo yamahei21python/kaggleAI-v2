@@ -131,7 +131,7 @@ def test_ambiguous_name_is_rejected():
 def test_push_no_run_is_save_only(monkeypatch, capsys):
     """--no-run は実行しないので、クォータを読まず「保存のみ」と明示する。"""
     # 退役したカーネルを指すと push が「退役」で止まる。現役の軽い script
-    # カーネルを使う（2026-11-01 に ngrok 系を RETIRED にした）。
+    # カーネルを使う。
     def boom():
         raise AssertionError("--no-run なのにクォータを読んだ")
     monkeypatch.setattr(push_mod, "_quota_lines", boom)

@@ -8,7 +8,7 @@ notebook 版（`build_step2.py`）はそのまま残す。こちらは同じセ�
 （`kaggle/step2/cells/*.py`）を `kbuild/serve_script.py` の骨組みに載せた
 **追加の生成物**で、notebook を置き換えない。
 
-骨組みが持つもの（proxy / tunnel / Gist / keepalive / verify / 後片付け）は
+骨組みが持つもの（proxy / tunnel / ビーコン / keepalive / verify / 後片付け）は
 一切書かない。ここが持つのは Ollama 固有の 3 つだけ:
 
     settings / stage_install / launch   （+ 確認項目とウォームアップ）
@@ -39,11 +39,7 @@ DATASET = "my-ollama-orcarouter-qwen38-27b"
 PATCH = "my-ollama-orcarouter-qwen38-27b-patch"
 OLLAMA_PORT = 11434
 
-TUNNEL = os.environ.get("STEP2_TUNNEL", "cloudflared").strip().lower()
-if TUNNEL != "cloudflared":
-    raise SystemExit(
-        f"STEP2_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
-        "（ngrok は 2026-11-01 に廃止。notes/url-publishing.md）")
+TUNNEL = "cloudflared"
 
 # smoke 版は通常版と別ディレクトリへ書く（同じだと `cli push --smoke` が
 # 通常版を上書きしてしまう）。notebook 版の `smoke_out` と同じ考え方。

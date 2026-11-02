@@ -8,7 +8,7 @@
 守る不変条件:
 
   1. 共有セルは 3 系統に **バイト一致で** 埋め込まれている
-  2. 埋め込み順序が全系統で同じ（proxy → tunnel → gist → verify → 接続情報 → keepalive）
+  2. 埋め込み順序が全系統で同じ（proxy → tunnel → publish → verify → 接続情報 → keepalive）
   3. 共有セルはエンジン名を持たない（エンジン差は settings の能力表だけ）
   4. 能力表（ENGINE_PROCS / CLEANUP_TARGETS / engine_cleanup）の定義は 1 か所だけ
 """
@@ -20,9 +20,7 @@ from kbuild.serve_notebook import CELLS_DIR
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # (ラベル, notebook, トンネル)
-# ngrok 系の 3 本は 2026-11-01 に RETIRED にした（`notes/url-publishing.md`）。
-# notebook は履歴としてディスクに残すが、共有セル `tunnel_ngrok.py` を消した
-# のでもう再生成できない。監査対象は「今もビルドできる配信カーネル」だけ。
+# 監査対象は「今もビルドできる配信カーネル」だけ。トンネルは cloudflared 固定。
 NOTEBOOKS = [
     ("ollama/cloudflared",
      "kaggle/step2/step2-orcarouter-qwen38-27b-cloudflared.ipynb", "cloudflared"),

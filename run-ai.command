@@ -87,7 +87,7 @@ uzu_ready() {
 # Kaggle は /api/ps に size_vram > 0 のモデルが居れば会話可能。
 # /api/tags は Ollama 起動時点で 200 を返すので判定に使えない。
 # URL は毎回変わる（cloudflared の quick tunnel）ので、使う直前に
-# ビーコンから引く。ngrok の固定ドメインは 2026-11-01 に廃止した。
+# ビーコンから引く（固定ドメインは持たない）。
 KAGGLE_BASE=""
 refresh_kaggle_base() {
   KAGGLE_BASE="$(kc_beacon_url)"

@@ -5,7 +5,7 @@
 一時ディレクトリにコピーしてから再生成し、元のファイルと比べる
 （写す・走らせる・比べるは `kaggle/_regen.py` が持つ）。
 auth_proxy.py / llama-chat.html を直したのに ipynb を再生成し忘れると、
-Kaggle には古いコードが push される（実際に ngrok 版でずれていた）。
+Kaggle には古いコードが push される（実際に配信カーネルでずれていた）。
 
     python3 kaggle/check_notebooks.py        # 不一致があれば exit 1
 """

@@ -8,7 +8,7 @@
   3. Dataset のマウントと symlink ステージング（MTP head の出し入れ）
   4. プロキシ + UI + --enforce-sampling の実挙動（モック上流で検証）
   5. cloudflared quick tunnel 越しの UI / models / streaming / OpenAI 互換
-  6. Gist 配布・keepalive・後片付け
+  6. ビーコン配布・keepalive・後片付け
 
 モック上流が 8000 番で vLLM の代役を務める。実推論はしない。
 
@@ -67,7 +67,7 @@ _add("markdown", _tpl("""# 🧪 vLLM Step2 ドライラン（GPU 不要）
 | 3 | Dataset マウント + symlink ステージング | 不要 |
 | 4 | プロキシ + UI + `--enforce-sampling` | モック上流 |
 | 5 | cloudflared 越しの UI / models / streaming / OpenAI互換 | モック上流 |
-| 6 | Gist / keepalive / 後片付け | 不要 |
+| 6 | ビーコン / keepalive / 後片付け | 不要 |
 
 > モック上流（8000番）が vLLM の代役。T4 のカーネル挙動だけは確認できない。
 

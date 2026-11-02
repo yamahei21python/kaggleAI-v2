@@ -4,4 +4,3 @@
 # 埋もれるのを防ぐ。`-diff` でも `git diff --stat` と検査は効く。
 kaggle/**/script/main.py -diff
 kaggle/step2-vllm-kernel/** -diff
-kaggle/llama-server-ngrok/*.ipynb -diff

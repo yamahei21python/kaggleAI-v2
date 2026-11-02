@@ -89,7 +89,6 @@ def test_metadata_matches_spec(kernel):
     # 退役したカーネルは台帳から datasets を落としてある（もう push しない
     # ので、二度と使わない値を残すと「まだ動く」と読めてしまう）。メタデータ
     # 側は履歴としてそのまま残すため、ここだけ比較しない。
-    # 2026-11-01 の ngrok 廃止で 6 本がこの形になった。
     if kernel.status != spec.RETIRED:
         assert tuple(meta["dataset_sources"]) == kernel.datasets
 
@@ -126,17 +125,15 @@ def test_builders_plan_is_deduped():
     plan = spec.builders()
     keys = [(b, tuple(sorted(env.items()))) for b, env in plan]
     assert len(keys) == len(set(keys))
-    assert ("build_step2", {"STEP2_TUNNEL": "cloudflared"}) in plan
-    # ngrok は 2026-11-01 に廃止。骨格（builder）は cloudflared 以外を
-    # 受け付けないので、計画に混ざっていたら台帳の書き戻し漏れ。
-    assert ("build_step2", {"STEP2_TUNNEL": "ngrok"}) not in plan
-    assert all(env.get("STEP2_TUNNEL", "cloudflared") == "cloudflared"
-               for _b, env in plan)
+    assert ("build_step2", {}) in plan
+    # トンネルは cloudflared 固定なので、計画に `STEP2_TUNNEL` は現れない
+    # （現れたら台帳にノブが戻っている＝ビルダーが env を読む前提に戻った）。
+    assert all("STEP2_TUNNEL" not in env for _b, env in plan)
 
 
 # 台帳から呼ばれないビルダー。**理由を書いて残す**（黙って溜まらないように）。
-# llama-server 系: ngrok 廃止で GPU カーネルの id が無くなった。コードは残って
-# いて、台帳に 1 行足せば戻る（`notes/kernel-inventory.md`）。
+# llama-server 系: 配信カーネルの id が無い（GPU を使う実験で、常用しない）。
+# コードは残っていて、台帳に 1 行足せば戻る（`notes/kernel-inventory.md`）。
 # 再開するときはこの集合から外し、台帳にエントリを足す。
 PARKED_BUILDERS = frozenset({"build_llama_server", "build_llama_server_script"})
 

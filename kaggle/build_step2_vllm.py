@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Step2 notebook builder (vLLM / AWQ+MTP): Qwen3.8-27B-Uncensored on Kaggle T4 x2
 
-セルの並び・配管（proxy / tunnel / Gist / verify / 接続情報 / keepalive）は
+セルの並び・配管（proxy / tunnel / ビーコン / verify / 接続情報 / keepalive）は
 `kbuild/serve_notebook.py` が唯一の定義。ここが持つのは **vLLM 固有の 4 つ**だけ:
 
     settings / install / launch / verify_checks  (+ warmup)
@@ -11,8 +11,7 @@
     python3 kaggle/build_step2_vllm.py                  # cloudflared
     python3 kaggle/build_step2_vllm.py --smoke          # 起動＋会話だけで終了
 
-`STEP2_TUNNEL` は互換のために受けるが cloudflared のみ（ngrok は 2026-11-01 に
-retired。`notes/url-publishing.md`）。
+`STEP2_TUNNEL` は読まない（cloudflared 固定）。
 
 出力: kaggle/step2-vllm-kernel/<tunnel>/step2-vllm-qwen38-27b-<tunnel>.ipynb
       smoke 版は kaggle/step2-vllm-kernel/smoke-<tunnel>/ へ別名で書く
@@ -29,11 +28,7 @@ DATASET_ID = f"{OWNER}/{DATASET_SLUG}"
 HF_MODEL = "twolven/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-AWQ-MTP"
 SERVED_NAME = "qwen3.8-27b-awq"
 
-TUNNEL = os.environ.get("STEP2_TUNNEL", "cloudflared").strip().lower()
-if TUNNEL != "cloudflared":
-    raise SystemExit(
-        f"STEP2_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
-        "（ngrok は 2026-11-01 に廃止。notes/url-publishing.md）")
+TUNNEL = "cloudflared"
 
 SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}"
 
@@ -53,7 +48,7 @@ CFG = config.load()
 # トンネルごとにも分ける（smoke の cloudflared 実行が通常版を潰さない）。
 SMOKE_OUT_DIR = HERE / "step2-vllm-kernel" / f"smoke-{TUNNEL}"
 
-# smoke: トンネル / Gist 公開 / keepalive を省略し、起動と会話だけで終了する。
+# smoke: トンネル / ビーコン公開 / keepalive を省略し、起動と会話だけで終了する。
 # CPU 側（dryrun / proxy / keepalive のテスト）で確認済みの経路を GPU で
 # なぞらないためのフラグ。`cli push ... --smoke` が `--smoke` を渡す。
 # check_notebooks は引数を渡せないので KC_SMOKE=1 でも切り替えられる。
@@ -197,11 +192,11 @@ if SMOKE:
     cells = cells[: _warm + 1] + [
         ("markdown", "---\n### 🏁 smoke: ここで終了\n\n"
                      "起動と会話（ウォームアップセルの疎通確認）まで確認済み。\n"
-                     "トンネル / Gist 公開 / keepalive は CPU 側で検証済みのため省略します。\n"),
+                     "トンネル / ビーコン公開 / keepalive は CPU 側で検証済みのため省略します。\n"),
         ("code", '''# smoke: プロセスを止めて終了（公開しない）
 print()
 print("=" * 56)
-print("🏁 smoke: トンネル / Gist / keepalive は省略")
+print("🏁 smoke: トンネル / ビーコン / keepalive は省略")
 print("=" * 56)
 left = kc_stop_processes([
     ("-f auth_proxy.py", "auth_proxy"),

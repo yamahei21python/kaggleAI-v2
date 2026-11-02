@@ -45,8 +45,7 @@ def _find_cached(name):
 
 
 # --- ollama / cloudflared ---
-# cloudflared は Dataset から復元する。ngrok は 2026-11-01 に廃止したので、
-# トンネルの種類で分岐しない（`notes/url-publishing.md`）。
+# cloudflared は Dataset から復元する。トンネルの種類で分岐しない。
 for name in ["ollama", "cloudflared"]:
     dst = os.path.join(BIN_DIR, name)
     src = _find_cached(name)

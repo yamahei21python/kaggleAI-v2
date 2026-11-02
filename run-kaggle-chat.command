@@ -22,9 +22,8 @@ cd "${SCRIPT_DIR}" || exit 1
 source "${SCRIPT_DIR}/lib/launcher-common.zsh"
 kc_require_kaggle || exit 1
 
-# トンネルは cloudflared の quick tunnel だけ。ngrok は 2026-11-01 に廃止した
-# （`notes/url-publishing.md`）。アカウントも authtoken も要らない代わりに
-# URL が毎回変わるので、取得はビーコン経由（kc_beacon_url）。
+# トンネルは cloudflared の quick tunnel だけ。アカウントも authtoken も
+# 要らない代わりに URL が毎回変わるので、取得はビーコン経由（kc_beacon_url）。
 TUNNEL="${KC_TUNNEL:-cloudflared}"
 if [[ "${TUNNEL}" != "cloudflared" ]]; then
   echo "KC_TUNNEL=${TUNNEL} は未対応（cloudflared のみ）" >&2
@@ -75,7 +74,7 @@ BASE=""
 
 # ---- 既に動いていないか ----
 # 固定 URL が無くなっても、ビーコンが「今の URL」を教えてくれるので
-# push の前に生存確認ができる（ngrok 版が固定ドメインでやっていたこと）。
+# push の前に生存確認ができる。
 # ここを飛ばすと、動いているカーネルの隣で 2 本目を push して GPU 枠を
 # 食う（`kaggle kernels stop` は CLI に無いので詰む）。
 if [[ "${KC_FORCE_PUSH:-0}" != "1" ]]; then

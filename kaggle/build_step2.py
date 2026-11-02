@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """Step2 notebook builder: orcarouter/Qwen3.8-27B-Uncensored + Ollama on Kaggle T4 x2
 
-セルの並び・配管（proxy / tunnel / Gist / verify / 接続情報 / keepalive）は
+セルの並び・配管（proxy / tunnel / ビーコン / verify / 接続情報 / keepalive）は
 `kbuild/serve_notebook.py` が唯一の定義。ここが持つのは **Ollama 固有の 4 つ**だけ:
 
     settings / install / launch / verify_checks
 
 トンネルは cloudflared の quick tunnel だけ（`notes/url-publishing.md`）。
-ngrok 版は 2026-11-01 に retired にした（`NGROK_TOKEN` を Secrets から
-読めないため）。`STEP2_TUNNEL` は互換のために受けるが cloudflared のみ。
 """
-import os
 import pathlib
 import sys
 
@@ -28,11 +25,7 @@ MODEL_DISPLAY = "Qwen3.8-27B-Uncensored"
 DATASET = "my-ollama-orcarouter-qwen38-27b"
 PATCH = "my-ollama-orcarouter-qwen38-27b-patch"
 
-TUNNEL = os.environ.get("STEP2_TUNNEL", "cloudflared").strip().lower()
-if TUNNEL != "cloudflared":
-    raise SystemExit(
-        f"STEP2_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
-        "（ngrok は 2026-11-01 に廃止。notes/url-publishing.md）")
+TUNNEL = "cloudflared"
 
 # 出力先・プロキシ置き場は __file__ 基準。cwd に依存させない。
 # （相対パスだとリポジトリ直下で走らせたときに別所へ生成される）

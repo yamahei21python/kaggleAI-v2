@@ -4,14 +4,13 @@
     python3 kaggle/build_step2_vllm_script.py              # cloudflared
     python3 kaggle/build_step2_vllm_script.py --smoke      # 起動＋会話だけ
 
-`STEP2_TUNNEL` は互換のために受けるが cloudflared のみ（ngrok は 2026-11-01 に
-retired。`notes/url-publishing.md`）。
+`STEP2_TUNNEL` は読まない（cloudflared 固定）。
 
 notebook 版（`build_step2_vllm.py`）はそのまま残す。こちらは同じセル列
 （`kaggle/step2-vllm/cells/*.py`）を `kbuild/serve_script.py` の骨組みに載せた
 **追加の生成物**で、notebook を置き換えない。
 
-骨組み（proxy / tunnel / Gist / keepalive / verify / 後片付け）は書かない。
+骨組み（proxy / tunnel / ビーコン / keepalive / verify / 後片付け）は書かない。
 ここが持つのは vLLM 固有の install / launch / checks / warmup だけ。
 """
 import os
@@ -34,11 +33,7 @@ OWNER = "yamahei21python"
 DATASET_SLUG = "qwen38-27b-uncensored-hauhaucs-awq-mtp"
 SERVED_NAME = "qwen3.8-27b-awq"
 
-TUNNEL = os.environ.get("STEP2_TUNNEL", "cloudflared").strip().lower()
-if TUNNEL != "cloudflared":
-    raise SystemExit(
-        f"STEP2_TUNNEL={TUNNEL!r} は未対応。cloudflared だけ"
-        "（ngrok は 2026-11-01 に廃止。notes/url-publishing.md）")
+TUNNEL = "cloudflared"
 
 SLUG = f"step2-vllm-qwen38-27b-{TUNNEL}-script"
 # 台帳から引く。`env` はビルダーへ渡す値、`bake_env` は**生成物に焼く**値

@@ -53,8 +53,7 @@ def test_launchers_default_ports():
     llama = _read("run-llama-server.command")
     assert f'LLAMA_PORT:-{constants.CHAT_PORT}' in llama
     assert f'LLAMA_UI_PORT:-{constants.UI_PORT}' in llama
-    # 中継を持つのは run-ai.command（run-kaggle-chat は ngrok の警告ページ
-    # 回避のためだけに中継を立てていたので、2026-11-01 に落とした）。
+    # 中継を持つのは run-ai.command だけ（run-kaggle-chat は中継を立てない）。
     relay = _read("run-ai.command")
     assert f'KC_RELAY_PORT:-${{CFG_RELAY_PORT:-{constants.RELAY_PORT}}}' in relay
 
