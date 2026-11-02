@@ -36,7 +36,8 @@ keepalive ループ**の 3 つ。**auth_proxy は smoke でも起動する**（v
 会話を確認するため。UI 配信も同じ経路）。LMDeploy / SGLang / EXL3 の smoke は
 推論サーバへ**直接**投げる（LMDeploy / SGLang は 8000、EXL3 の chat_server は 9931）。
 
-smoke の対象は次の **9 カーネル**（`cli/build.py` の `SMOKE_KERNELS`）:
+smoke の対象は次の **6 カーネル**（台帳の `Kernel.smoke` から導出。`cli/build.py` の
+`SMOKE_KERNELS` は台帳を読むだけ）:
 
 | 系統 | カーネル |
 |---|---|

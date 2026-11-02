@@ -134,6 +134,42 @@ def test_builders_plan_is_deduped():
                for _b, env in plan)
 
 
+# 台帳から呼ばれないビルダー。**理由を書いて残す**（黙って溜まらないように）。
+# llama-server 系: ngrok 廃止で GPU カーネルの id が無くなった。コードは残って
+# いて、台帳に 1 行足せば戻る（`notes/kernel-inventory.md`）。
+# 再開するときはこの集合から外し、台帳にエントリを足す。
+PARKED_BUILDERS = frozenset({"build_llama_server", "build_llama_server_script"})
+
+
+def test_every_builder_is_used_by_the_ledger_or_explicitly_parked():
+    """`kaggle/build_*.py` は台帳から呼ばれるか、理由つきで停止中か。
+
+    どちらでもないビルダーは**死んだコード**で、次に読む人は「まだ使われて
+    いる」と誤解する。2026-11-02 の実測では 22 本中 20 本が台帳から呼ばれ、
+    残り 2 本が llama-server 系だった。
+    """
+    builders = {p.stem for p in (spec.ROOT / "kaggle").glob("build_*.py")}
+    used = {k.builder for k in spec.KERNELS if k.builder}
+
+    orphans = builders - used - PARKED_BUILDERS
+    assert not orphans, (
+        "台帳から呼ばれていないビルダー: " + ", ".join(sorted(orphans))
+        + "（台帳に足すか、理由を書いて PARKED_BUILDERS に入れる）")
+
+    # 逆向き: 台帳が実在しないビルダーを指していないこと（改名漏れ）
+    missing = used - builders
+    assert not missing, (
+        "台帳が指すビルダーが無い: " + ", ".join(sorted(missing)))
+
+    # 停止中の一覧が腐っていないこと（復活したら気づく）
+    assert PARKED_BUILDERS <= builders, (
+        "PARKED_BUILDERS のうち実在しない: "
+        + ", ".join(sorted(PARKED_BUILDERS - builders)))
+    assert not (PARKED_BUILDERS & used), (
+        "台帳から呼ばれているのに停止中扱い: "
+        + ", ".join(sorted(PARKED_BUILDERS & used)))
+
+
 def test_find_accepts_name_and_id_and_path():
     kernel = spec.find("exl3-serve")
     assert spec.find("yamahei21python/exl3-serve") is kernel

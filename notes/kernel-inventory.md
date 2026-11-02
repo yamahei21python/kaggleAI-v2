@@ -21,8 +21,11 @@
 - 準現役: 必要時に使う（測定・CPU 検証・代替経路）。壊さないが優先度は低い。
 - 退役: 参照しない。ビルダーは残すが再生成・push の対象外。
 
-全体は **51 件**（notebook 20 / script 31）。うち現役 12・準現役 31・退役 8、
+全体は **51 件**（notebook 14 / script 37）。うち現役 12・準現役 31・退役 8、
 ビルダー持ち 30 件。`.ipynb` は 1 冊も削除していない（script 版は並走）。
+
+> **数え方は台帳から引く**（2026-11-02 に 20/31 → 14/37 の食い違いを直した）。
+> `python3 -m cli list` と同じ内容なので、件数を手で足さない。
 
 > **ngrok 廃止（2026-11-01）**: トンネルを cloudflared の quick tunnel + ビーコンに
 > 一本化したため、ngrok 系 6 本を retired にした（`notes/url-publishing.md`）。
@@ -139,7 +142,8 @@
    ただし Kaggle 上のカーネルは同じ id なので、smoke を push すると中身が
    smoke 版に入れ替わる。実稼働前に `cli push <name> --yes`（smoke 無し）で
    戻すこと。smoke ディレクトリは再生成可能な一時成果物だが、
-   `check_notebooks.py` の TARGETS に入っているので消すと検証が落ちる。
+   台帳の `smoke_out` に入っているので消すと検証が落ちる
+   （`check_notebooks.py` / `check_scripts.py` の対象は台帳から導出される）。
 6. **トンネルの既定は 3 ビルダーとも cloudflared**（2026-11-01 に
    `build_llama_server.py` の既定 ngrok を直した）。`STEP2_TUNNEL` / `LLAMA_TUNNEL`
    に cloudflared 以外を渡すと、ビルダーは生成前に落ちる。
@@ -181,8 +185,9 @@
 6. **初回 push は GPU クォータを消費する**。残量を
    `python3 kaggle-quota.py` で確認し、依頼があるときだけ push する。
 7. 生成物は `check_notebooks.py` / `tests/test_exl3_build.py` の対象に加える。
-   **script は `check_scripts.py` が台帳から自動で拾う**ので、`kbuild/spec.py` に
-   `builder` を書けば一覧更新は要らない（notebook は `TARGETS` に手で足す）。
+   **notebook も script も台帳から自動で拾う**ので、`kbuild/spec.py` に
+   `builder` / `smoke_out` を書けば一覧更新は要らない（2026-11-02 に
+   `TARGETS` の手書きを廃止した）。
 
 ## Secrets 台帳
 
@@ -220,8 +225,10 @@ Secrets は**カーネル単位**で UI から登録する（コードからは�
 
 退役した ngrok 版は対象外（再生成できないので比較する相手が無い）。
 
-notebook 側の対象表は `TARGETS` に**手で**書いてある（`KC_SMOKE` のような台帳に
-載らないノブを使うため）。
+notebook 側の対象表は**台帳から導出**する（`check_notebooks.py` の `_targets()`）。
+`kind == "notebook"` かつ `builder` 持ちを引き、`smoke_out` を持つカーネルは
+`KC_SMOKE=1` でもう一度走らせて smoke 側も突き合わせる。2026-11-02 まで
+`TARGETS` に手で 10 行書いていたが、台帳に `smoke` 欄を足して廃止した。
 
 ### script — `kaggle/check_scripts.py`（44 ファイル）
 
