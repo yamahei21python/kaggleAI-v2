@@ -22,6 +22,14 @@ def _num(v):
     return "-" if v is None else (f"{v:.1f}" if isinstance(v, float) else str(v))
 
 
+def _prefetch_state(t):
+    """`timings.prefetch` を 1 語に畳む（頼んでいない / 辞退された / 効いた）。"""
+    pf = t.get("prefetch") or {}
+    if not pf.get("requested"):
+        return None
+    return "辞退" if pf.get("declined") else "ok"
+
+
 def summarize(data):
     """1 つの result.json を 1 行分の dict にする（表示に必要な最小限）。"""
     t = data.get("timings") or {}
@@ -47,6 +55,11 @@ def summarize(data):
         "speed": t.get("speed_tps"),
         "vram": t.get("gpu_vram_mib"),
         "ok": data.get("ok"),
+        # `prefetch` を頼んだのに vLLM が RAM 判定で辞退すると、起動は
+        # **成功したまま** 47 s/層（prefetch 無しと同じ）まで落ちる。
+        # 表に出さないと「速くならなかった」と誤読する（v16 がこれ）。
+        "pf": _prefetch_state(t),
+        "pf_line": (t.get("prefetch") or {}).get("declined_line"),
         "marks": marks,
         "gaps": t.get("startup_gaps") or [],
     }
@@ -59,8 +72,9 @@ def table(rows):
     """比較表（文字列）を返す。値が無い列は `-`。"""
     cols = [("engine", "engine"), ("elapsed", "総計 s"), ("install", "install s"),
             ("load", "起動 s"), ("ready", "起動まで s"), ("inst", "inst"),
-            ("label", "段"), ("maxlen", "ctx"), ("torch", "torch"),
-            ("wh", "wh"), ("speed", "t/s"), ("vram", "VRAM MiB"), ("ok", "ok")]
+            ("pf", "prefetch"), ("label", "段"), ("maxlen", "ctx"),
+            ("torch", "torch"), ("wh", "wh"), ("speed", "t/s"),
+            ("vram", "VRAM MiB"), ("ok", "ok")]
     cols += [(k, label) for k, label in SPAN_ORDER]
     width = {}
     for key, head in cols:
@@ -101,6 +115,10 @@ def main(paths):
             print(f"\n{r['engine']} の節目:")
             for k, v in sorted(r["marks"].items(), key=lambda kv: kv[1]):
                 print(f"  {v:8.1f}s  {k}")
+        # 辞退の理由は vLLM のログ 1 行にしか無い。ここに出さないと、
+        # 「prefetch を頼んだのに遅い」の原因を result.json から辿れない。
+        if r.get("pf_line"):
+            print(f"  prefetch 辞退の理由: {r['pf_line']}")
         # 無音区間は「長さ」より「何の直前/直後か」が効く。ここを読まないと
         # 次の一手が決まらない。
         for g in r["gaps"]:

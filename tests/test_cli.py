@@ -239,3 +239,47 @@ def test_compileall_covers_every_generated_python():
             if not any(path == t or t in path.parents for t in targets):
                 missed.append(str(path))
     assert not missed, f"compileall の対象外: {missed}"
+
+
+# ── `cli timings`: prefetch を辞退した回を見分けられること ──────────────────
+# v16（2026-11-02）は prefetch を頼んだのに vLLM が RAM 判定で辞退し、
+# 起動は**成功したまま** 47 s/層まで落ちた。表に列が無いと「速くならなかった」
+# と読んでしまい、原因（辞退）に辿り着けない。
+def _result(**timings):
+    return {"engine": "vllm", "ok": True, "elapsed_seconds": 4513.8,
+            "timings": {"load_seconds": 1500.0, "install_seconds": 300.0,
+                        **timings}}
+
+
+def test_timings_marks_a_declined_prefetch(tmp_path, capsys):
+    from cli import timings as timings_mod
+    p = tmp_path / "result.json"
+    p.write_text(json.dumps(_result(prefetch={
+        "requested": True, "declined": True,
+        "declined_line": "checkpoint total size (18.21 GiB) exceeds 90% of "
+                         "available RAM"})), encoding="utf-8")
+    assert timings_mod.main([str(p)]) == 0
+    out = capsys.readouterr().out
+    assert "辞退" in out
+    # 理由（vLLM のログ 1 行）まで出す。ここが無いと原因を追えない。
+    assert "exceeds 90% of available RAM" in out
+
+
+def test_timings_shows_ok_when_prefetch_was_accepted(tmp_path, capsys):
+    from cli import timings as timings_mod
+    p = tmp_path / "result.json"
+    p.write_text(json.dumps(_result(prefetch={"requested": True,
+                                             "declined": False})),
+                 encoding="utf-8")
+    assert timings_mod.main([str(p)]) == 0
+    out = capsys.readouterr().out
+    assert "辞退" not in out
+    assert "prefetch" in out
+
+
+def test_timings_leaves_prefetch_blank_when_not_requested():
+    """頼んでいない回を「辞退」と書かない（0 で埋めるのと同じ誤読）。"""
+    from cli import timings as timings_mod
+    assert timings_mod.summarize(_result())["pf"] is None
+    assert timings_mod.summarize(
+        _result(prefetch={"requested": True, "declined": False}))["pf"] == "ok"
