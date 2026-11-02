@@ -76,6 +76,17 @@ notebook は 60 秒 × 10 周 = 600 秒）。
 `tests/test_serve_parity.py` の振る舞いテストで突き合わせるしかない。
 次に「共通化しよう」と思ったら、まずこの測り方で 0 組であることを確認すること。
 
+同じ測り方で**呼ばれていない関数**も数えた（2026-11-02）。
+
+| 対象 | 関数 | 参照ゼロ | 中身 |
+|---|---|---|---|
+| `runtime/` `kbuild/` `cli/` `tests/` ルート | 430 | 5 → **2 を削除** | 残り 3 つは `kaggle/`（生成物）から使われていた |
+| `TEMPLATE` の中 | 32 | 2 | `sh` / `wait_http`。どちらも `EXTERNAL_ENGINE_CODE`（LMDeploy / SGLang）から使う |
+
+削除したのは `runtime/gist.py` の `kc_gh_token()`（`kc_gh_token_detail()` の
+薄い包みで呼び出しゼロ。gist.py を埋め込む生成物すべてに写っていた）と
+`tests/_cells.py` の `cell_def()`。テンプレート側は 0 件だった。
+
 ## テンプレートの引数は両方向で突き合わせる（2026-11-02）
 
 `TEMPLATE` は 900 行・`$TOKEN` 39 個の `string.Template` で、`render()` が
