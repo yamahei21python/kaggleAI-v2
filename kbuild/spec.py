@@ -18,10 +18,13 @@ OWNER = "yamahei21python"
 
 ACTIVE, SEMI, RETIRED = "active", "semi", "retired"
 
-# vLLM 配信の**生成物に焼く**既定ノブ。
+# vLLM 配信の**生成物に焼く**既定ノブ。2 組ある。
 #
-# `playground` の `prefetch1` で当たった 2 つ（`notes/vllm-startup-speedup.md`
-# §23）。重みロードが 2,877 → 1,186 秒、起動全体が 3,820 → 2,011 秒になった。
+#   1. 重みロードの prefetch（性能）。`playground` の `prefetch1` で当たった
+#      （`notes/vllm-startup-speedup.md` §23）。重み 2,877 → 1,186 秒。
+#   2. 起動の時間予算（可用性）。遅いノードで落ちないための下限（§24）。
+#
+# 1 本のタプルにしてあるが、**戻すときの単位が違う**（性能の話 / 可用性の話）。
 # 値は `os.environ.setdefault` で入るので、Kaggle の環境変数で上書きできる
 # （戻したいときは env を 1 つ入れるだけでよい・セルは触らない）。
 #
@@ -29,6 +32,17 @@ ACTIVE, SEMI, RETIRED = "active", "semi", "retired"
 VLLM_BAKE_ENV = (
     ("VLLM_SAFETENSORS_STRATEGY", "prefetch"),
     ("VLLM_SAFETENSORS_PREFETCH_THREADS", "1"),
+    # 予算は**2 つ揃えて**上げる。`03_vllm_serve.py` の 1 試行の上限は
+    #   _tmo = min(ATTEMPT_TIMEOUT, max(45, STARTUP_BUDGET - 経過))
+    # なので、STARTUP_BUDGET だけ上げても ATTEMPT_TIMEOUT で切られる
+    # （`notes/pitfall-coverage.md` の「2 つの env で 1 つのノブ」）。
+    #
+    # 4,200 は**速いノード**に合わせすぎていた。実測 2026-11-02（本番 v16）は
+    # 重みロードが 47 秒/層に戻り（vLLM が prefetch を RAM 判定で辞退した）、
+    # 62 層中 56 層で予算切れ。完走には 4,650 秒前後必要だった。
+    # 7,000 は `baseline_long` が同じ値で 3,820 秒完走した実績がある。
+    ("VLLM_STARTUP_BUDGET", "7000"),
+    ("VLLM_ATTEMPT_TIMEOUT", "7000"),
 )
 
 

@@ -1418,5 +1418,26 @@ prefetch 自体は走っている**可能性がある。TP1 側のログが残�
 **損をしない**（辞退時は遅い経路に落ちるだけ）。落ちている原因は予算のほうで、
 `baseline_long` が 7,000 で完走した実績もある。
 
+### 実施（2026-11-02 09:30）— 予算 7,000 を本番の既定にした
+
+台帳の `VLLM_BAKE_ENV`（`kbuild/spec.py`）に 2 行足した。prefetch の 2 つと
+同じタプルに入れているが、**戻すときの単位が違う**（性能の話 / 可用性の話）
+ので、コメントで 2 組に分けてある。
+
+```python
+("VLLM_STARTUP_BUDGET", "7000"),
+("VLLM_ATTEMPT_TIMEOUT", "7000"),
+```
+
+**2 つ揃えるのが必須**。`_tmo = min(ATTEMPT_TIMEOUT, max(45, STARTUP_BUDGET - 経過))`
+なので、総予算だけ上げても 1 試行は 4,200 秒で切られる。この落とし穴は
+`tests/test_spec.py::test_startup_budget_is_baked_as_a_pair` で固定した
+（等しいこと・6,500 以上であること）。
+
+生成物への反映は 4 行（`import os` + prefetch 2 + 予算 2）。notebook は
+**設定セル（cell 4）の先頭**に入るので、`03_vllm_serve.py` が読む前に効く。
+smoke 版にも同じ 4 行が入る（smoke も同じ起動をするので予算は同じでよい）。
+
+
 
 

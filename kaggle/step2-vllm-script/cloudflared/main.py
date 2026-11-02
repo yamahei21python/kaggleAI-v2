@@ -1043,6 +1043,8 @@ def kc_beacon_pull(slug="", dest=None, timeout=180, exe=""):
 import os
 os.environ.setdefault('VLLM_SAFETENSORS_STRATEGY', 'prefetch')
 os.environ.setdefault('VLLM_SAFETENSORS_PREFETCH_THREADS', '1')
+os.environ.setdefault('VLLM_STARTUP_BUDGET', '7000')
+os.environ.setdefault('VLLM_ATTEMPT_TIMEOUT', '7000')
 
 # ============================================================
 # Step 2 (vLLM): 配信カーネルの設定

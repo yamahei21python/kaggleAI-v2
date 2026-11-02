@@ -229,6 +229,30 @@ def test_vllm_production_kernels_bake_the_prefetch_knobs():
             assert f"os.environ.setdefault({key!r}, {val!r})" in text, name
 
 
+def test_startup_budget_is_baked_as_a_pair():
+    """起動予算は **2 つの env で 1 つのノブ**。片方だけ焼くと効かない。
+
+    `03_vllm_serve.py` の 1 試行の上限は
+
+        _tmo = min(ATTEMPT_TIMEOUT, max(45, STARTUP_BUDGET - 経過))
+
+    なので、`VLLM_STARTUP_BUDGET` だけ 7,000 にしても `ATTEMPT_TIMEOUT` が
+    4,200 のままだと 4,200 秒で切られる（2026-11-02 に一度踏んでいる）。
+
+    下限を 6,500 にしてあるのは実測から: 本番 v16 は 62 層中 56 層で
+    4,222 秒に達し、完走には 4,650 秒前後必要だった
+    （`notes/vllm-startup-speedup.md` §24）。
+    """
+    d = dict(spec.VLLM_BAKE_ENV)
+    assert "VLLM_STARTUP_BUDGET" in d, "予算を焼いていない"
+    assert "VLLM_ATTEMPT_TIMEOUT" in d, \
+        "片方だけでは効かない（_tmo が ATTEMPT_TIMEOUT で切られる）"
+    assert d["VLLM_STARTUP_BUDGET"] == d["VLLM_ATTEMPT_TIMEOUT"], \
+        "総予算と 1 試行の上限がずれている"
+    assert int(d["VLLM_STARTUP_BUDGET"]) >= 6500, \
+        "実測の遅い側（4,650 秒）に余裕が無い"
+
+
 def test_for_kernel_matches_the_ledger():
     """`for_kernel` は台帳の値だけを使い、上書きは明示した分だけ効く。"""
     from kbuild import metadata
