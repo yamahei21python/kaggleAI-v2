@@ -628,11 +628,17 @@ GPU を使うのは最後の 1 回（実測）に集約する。CPU カーネル
 
 ### 残り（次回以降）
 
-- ノートブック系の **tail セル**（keepalive / verify）はまだビルダーごとに持っている。
+- ~~ノートブック系の **tail セル**（keepalive / verify）はまだビルダーごとに持っている。
   `_read_keepalive_conf` ×6 / `_proc` ×5 / `_judge` ×5 / `_with_retry` ×5 が重複。
   script 側の `serve_script.py` に相当する `kbuild/serve_notebook.py` を作るのが次の一手。
   ただしエンジン差（`/api/ps` の有無、`vllm serve` の argv 照合、再起動対象）が
-  分岐だらけになりやすいので、**セル単位で切り出す範囲を決めてから**着手する。
+  分岐だらけになりやすいので、**セル単位で切り出す範囲を決めてから**着手する。~~
+  **完了（2026-11-02 確認）** — `kbuild/serve_notebook.py` が唯一のセル列定義になり、
+  配信系ビルダーは `Flow(title, settings, install, launch, verify_checks, ...)` を
+  渡すだけ。`kaggle/serve-cells/` に tail セル（`keepalive` / `verify` /
+  `connection` / `proxy` / `publish` / `tunnel_*`）が集約され、上記 4 関数の重複は
+  配信系から消えた（残るのは CPU テスト用カーネル `build_keepalive_test.py` /
+  `build_vllm_dryrun.py` が自前で持つ検査用ヘルパのみ）。
 - `runtime/engines/{vllm,llama_server}.py` は作らない判断を維持（起動ラダーは
   共有しない）。共有するのは「GPU 判定 → VRAM → コンテキスト候補」までで、
   これは `kc_context_budget` で完了している。
