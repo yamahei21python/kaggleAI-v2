@@ -104,13 +104,15 @@ def parse_probe_mib(path):
         return None
 
 
-def parse_beacon(text):
-    """ntfy の poll 出力（JSON lines）から最後の `mib_s` を取る。"""
+def parse_beacon(text, side=None):
+    """ntfy の poll 出力から指定 side の最後の `mib_s` を取る。"""
     last = None
     for line in (text or "").splitlines():
         try:
             msg = json.loads(line).get("message") or ""
         except ValueError:
+            continue
+        if side is not None and not re.search(r"(?:^|\s)side=" + re.escape(side) + r"(?:\s|$)", msg):
             continue
         m = _BEACON.search(msg)
         if m:
@@ -165,11 +167,22 @@ def build_staged(kernel, side, owner, gate, topic):
     side ごとに生成物が違う（topic と side を焼く）ので、2 回ビルドする。
     ビルドは 1 回 1〜2 秒で、GPU は使わない。
     """
-    os.environ["KC_PROBE_GATE_MIB_S"] = str(gate)
-    os.environ["KC_PROBE_NTFY_TOPIC"] = topic
-    os.environ["KC_PROBE_SIDE"] = side
-    if build_mod.run([kernel.name]) != 0:
-        raise SystemExit("生成に失敗したため中止")
+    probe_env = {
+        "KC_PROBE_GATE_MIB_S": str(gate),
+        "KC_PROBE_NTFY_TOPIC": topic,
+        "KC_PROBE_SIDE": side,
+    }
+    previous = {k: os.environ.get(k) for k in probe_env}
+    try:
+        os.environ.update(probe_env)
+        if build_mod.run([kernel.name]) != 0:
+            raise SystemExit("生成に失敗したため中止")
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     tmp = pathlib.Path(tempfile.mkdtemp(prefix=f"kc-race-{side}-"))
     src_dir = pathlib.Path(kernel.dir)
     shutil.copy2(src_dir / kernel.code_file, tmp / kernel.code_file)
@@ -246,7 +259,7 @@ def _supports_output_flag(exe, flag):
 
 
 # ── 待ち合わせ ─────────────────────────────────────────────
-def fetch_beacon(topic, timeout=10):
+def fetch_beacon(topic, timeout=10, side=None):
     """ntfy の poll から `mib_s` を取る（無ければ None）。"""
     try:
         with urllib.request.urlopen(f"{NTFY}/{topic}/json?poll=1",
@@ -254,14 +267,14 @@ def fetch_beacon(topic, timeout=10):
             text = r.read().decode("utf-8", "replace")
     except Exception:
         return None
-    return parse_beacon(text)
+    return parse_beacon(text, side=side)
 
 
-def wait_beacon(topic, limit_s=240, interval=5):
+def wait_beacon(topic, side=None, limit_s=240, interval=5):
     """probe の beacon が届くまで待つ（届かなければ None）。"""
     t0 = time.time()
     while time.time() - t0 < limit_s:
-        mib = fetch_beacon(topic)
+        mib = fetch_beacon(topic, side=side)
         if mib is not None:
             return mib
         time.sleep(interval)
@@ -324,7 +337,7 @@ def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
     try:
         for rnd in range(1, rounds + 1):
             print(f"\n=== ラウンド {rnd}/{rounds}")
-            topics_ = {s: topics(stamp, s) for s in ("a", "b")}
+            topics_ = {s: topics(f"{stamp}-{rnd}", s) for s in ("a", "b")}
             for s in ("a", "b"):
                 if s in staged:
                     shutil.rmtree(staged[s], ignore_errors=True)
@@ -336,28 +349,39 @@ def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
                 lambda: push_side(exe, staged["b"], "b"))))
             live |= {s for s, v in vers.items() if v}
             if not all(vers.values()):
+                undeleted = []
                 for s in sorted(live):
-                    delete_side(exe, owner, s)
-                live.clear()
+                    if delete_side(exe, owner, s):
+                        live.discard(s)
+                    else:
+                        undeleted.append(s)
+                if undeleted:
+                    raise RuntimeError(f"delete 失敗: {', '.join(undeleted)}")
                 continue
             # probe の結果は走行中に ntfy から読む（output は完了まで取れない）
             mib = dict(zip(("a", "b"), _parallel(
-                lambda: wait_beacon(topics_["a"], interval=interval),
-                lambda: wait_beacon(topics_["b"], interval=interval))))
+                lambda: wait_beacon(topics_["a"], side="a", interval=interval),
+                lambda: wait_beacon(topics_["b"], side="b", interval=interval))))
             print("  probe: " + "  ".join(
                 f"{s}={mib[s] if mib[s] is None else round(mib[s], 1)}"
                 for s in ("a", "b")))
             win = decide(mib["a"], mib["b"], gate)
             if win == "retry":
                 print("  両方ゲート未満 → 破棄して次へ")
+                undeleted = []
                 for s in ("a", "b"):
-                    delete_side(exe, owner, s)
-                live.clear()
+                    if delete_side(exe, owner, s):
+                        live.discard(s)
+                    else:
+                        undeleted.append(s)
+                if undeleted:
+                    raise RuntimeError(f"delete 失敗: {', '.join(undeleted)}")
                 continue
             lose = "b" if win == "a" else "a"
             if mib["a"] is not None and mib["b"] is not None:
                 print(f"  両方通過 → probe が速い {win} を残す")
-            delete_side(exe, owner, lose)
+            if not delete_side(exe, owner, lose):
+                raise RuntimeError(f"delete 失敗: {lose}")
             live.discard(lose)
             print(f"  {win} を本番として継続（install → vLLM 起動）")
             with tempfile.TemporaryDirectory(prefix="kc-race-out-") as tmp:
@@ -369,7 +393,8 @@ def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
                 print(f"\nURL: {url}")
                 return 0
             print(f"  {win} から URL が出ないまま終了 → 破棄して次ラウンド")
-            delete_side(exe, owner, win)
+            if not delete_side(exe, owner, win):
+                raise RuntimeError(f"delete 失敗: {win}")
             live.discard(win)
     finally:
         # Ctrl-C・想定外の例外でも 2 本を残さない（残すと GPU を焼き続ける）。

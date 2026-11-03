@@ -75,3 +75,12 @@ def test_parse_beacon_takes_last_mib():
 def test_topics_differ_per_side():
     """同一 topic だと 2 本の結果が混ざる。"""
     assert race.topics("x", "a") != race.topics("x", "b")
+
+
+def test_parse_beacon_filters_side():
+    """別 side の値を拾わない（topic が同じでも混ざらないように）。"""
+    text = ('{"message":"mib_s=13.8 side=a"}\n'
+            '{"message":"mib_s=99.0 side=b"}\n')
+    assert race.parse_beacon(text, side="a") == 13.8
+    assert race.parse_beacon(text, side="b") == 99.0
+    assert race.parse_beacon(text, side="c") is None
