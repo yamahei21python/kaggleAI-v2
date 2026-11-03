@@ -314,6 +314,27 @@ def _kc_probe_report(rec):
     print("PROBE_JSON " + json.dumps(rec, ensure_ascii=False))
 
 
+def _kc_probe_beacon(rec):
+    """probe 結果を ntfy へ 1 行 POST する（レース用・best effort）。
+
+    `kaggle kernels output` は**実行が終わるまで**取れない（実測）。レースでは
+    勝ち側が install 以降で何分も走るので、probe の時点で外から知る手段が
+    要る。失敗しても本番の邪魔をしない（例外は握る）。
+    """
+    topic = os.environ.get("KC_PROBE_NTFY_TOPIC", "").strip()
+    if not topic or not rec.get("ok"):
+        return
+    body = ("mib_s=%s side=%s" % (
+        rec.get("mib_s"), os.environ.get("KC_PROBE_SIDE", ""))).strip()
+    try:
+        import urllib.request
+        urllib.request.urlopen(urllib.request.Request(
+            "https://ntfy.sh/" + topic, data=body.encode(), method="POST"),
+            timeout=8).read()
+    except Exception as _e:
+        print(f"⚠ beacon 送信失敗: {type(_e).__name__}: {_e}")
+
+
 def _kc_probe_gate(rec, gate):
     """probe 結果がゲートを満たすか。`gate <= 0` は常に通す。
 
@@ -342,6 +363,7 @@ def _kc_probe_mem_mib():
 _KC_PROBE = _kc_probe_io()
 _KC_PROBE["mem_available_mib"] = _kc_probe_mem_mib()
 _kc_probe_report(_KC_PROBE)
+_kc_probe_beacon(_KC_PROBE)
 kc_save_timings({"io_probe": _KC_PROBE})
 try:
     with open("/kaggle/working/probe.json", "w", encoding="utf-8") as _f:

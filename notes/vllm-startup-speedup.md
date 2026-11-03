@@ -1778,3 +1778,39 @@ Your kernel title does not resolve to the specified id.
 掴んだまま ver=1 を返す**ように見え、delete は別 slug を叩いて 403 になった。
 
 → `stage_meta()` で `title = slug` に固定。テストで `id`/`title` の一致を担保。
+
+### 設計上の致命傷: `kernels output` は実行が終わるまで取れない
+
+GPU 実機で `--gate 10`（両方通す）を回したら **probe が両方 None** になった。
+
+```
+probe: a=None  b=None  → 両方ゲート未満扱い → delete
+```
+
+原因: `kaggle kernels output` は**走行中の版では失敗する**（v1/v2 の probe ループも
+COMPLETE を待ってから回収していた）。ゲートを通った個体は install 以降で
+何分も走るので、`probe.json` を外から読む手段が無い。
+
+→ 閾値を下げても「両方通過」の分岐はテストできない（観測できないため）。
+**走行中に読める経路が要る。**
+
+### 対策: probe 結果を ntfy へ POST（`KC_PROBE_NTFY_TOPIC`）
+
+- `00_settings.py`: probe 直後に `_kc_probe_beacon()` が `mib_s=<値> side=<a|b>`
+  を 1 行 POST（best effort・失敗しても本番は続行）
+- side ごとに別 topic（`kc-race-<stamp>-<a|b>`）。混ざらない
+- `cli race` はビルダーを **2 回**走らせて topic と side を焼く
+- ローカルは ntfy を poll（5 秒間隔）。`parse_beacon()` が最後の `mib_s` を取る
+
+`kernels output` は「勝ち側が終わったあとの成果物回収」にだけ使う。
+
+### 今日のクォータ
+
+`--gate 10` の検証で **GPU 残 26 秒**まで消費（走行中 2 本を delete したので
+停止自体は確認できた）。以降の GPU 検証は 2026-11-07T00:00Z 以降。
+
+### 罠: `cli build --smoke` が本番の生成物を上書きする
+
+lmdeploy / sglang / exl3 は `smoke_out` を持たないので、`--smoke` で
+**同じファイル**に `SMOKE = True` が書かれる。`test_generated` が落ちるので
+気づけるが、`python3 -m cli build` で戻すこと。

@@ -50,3 +50,51 @@ def test_gate_runs_before_install():
     gate_at = main.index("KC_PROBE_GATE_MIB_S")
     install_at = main.index("def stage_install")
     assert gate_at < install_at
+
+
+# ── beacon（走行中に probe 結果を外へ出す）──────────────────────
+def _beacon(monkeypatch, sent, env):
+    """`_kc_probe_beacon` を、urlopen を差し替えて返す。"""
+    import os
+    import urllib.request
+
+    class _Resp:
+        def read(self):
+            return b""
+
+    def fake_urlopen(req, timeout=None):
+        sent.append((req.full_url, req.data))
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    for k in ("KC_PROBE_NTFY_TOPIC", "KC_PROBE_SIDE"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    fn = _cells.exec_def(_cells.cell(*SETTINGS), "_kc_probe_beacon", os=os)
+    return fn
+
+
+def test_beacon_off_without_topic(monkeypatch):
+    sent = []
+    fn = _beacon(monkeypatch, sent, {})
+    fn({"ok": True, "mib_s": 21.5})
+    assert sent == []
+
+
+def test_beacon_posts_mib_and_side(monkeypatch):
+    sent = []
+    fn = _beacon(monkeypatch, sent,
+                 {"KC_PROBE_NTFY_TOPIC": "t-1", "KC_PROBE_SIDE": "a"})
+    fn({"ok": True, "mib_s": 21.5})
+    assert len(sent) == 1
+    url, body = sent[0]
+    assert url == "https://ntfy.sh/t-1"
+    assert b"mib_s=21.5" in body and b"side=a" in body
+
+
+def test_beacon_silent_on_probe_failure(monkeypatch):
+    sent = []
+    fn = _beacon(monkeypatch, sent, {"KC_PROBE_NTFY_TOPIC": "t-1"})
+    fn({"ok": False, "why": "OSError"})
+    assert sent == []

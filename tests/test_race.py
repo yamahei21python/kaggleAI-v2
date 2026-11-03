@@ -58,3 +58,20 @@ def test_stage_meta_title_resolves_to_id():
     assert meta["id"] == "owner/vllm-race-a"
     assert meta["title"] == "vllm-race-a"
     assert meta["dataset_sources"] == ["x/y"], "元のメタデータを落としている"
+
+
+def test_parse_beacon_takes_last_mib():
+    """ntfy の JSON lines から最後の mib_s を取る（無ければ None）。"""
+    text = (
+        '{"message":"mib_s=13.8 side=a"}\n'
+        '{"message":"mib_s=21.57 side=a"}\n'
+        '{"event":"open"}\n'
+    )
+    assert race.parse_beacon(text) == 21.57
+    assert race.parse_beacon('{"message":"hello"}') is None
+    assert race.parse_beacon("") is None
+
+
+def test_topics_differ_per_side():
+    """同一 topic だと 2 本の結果が混ざる。"""
+    assert race.topics("x", "a") != race.topics("x", "b")

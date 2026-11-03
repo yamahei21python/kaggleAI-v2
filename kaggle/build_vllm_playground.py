@@ -158,6 +158,14 @@ EXP_DESC, EXP_ENV = EXPERIMENTS[EXPERIMENT]
 _GATE_ENV = os.environ.get("KC_PROBE_GATE_MIB_S", "").strip() or "0"
 EXP_ENV = {**EXP_ENV, "KC_PROBE_GATE_MIB_S": _GATE_ENV}
 
+# レースは probe の結果を**走行中に**読む必要がある（`kernels output` は
+# 実行が終わるまで取れない）。ntfy の topic を side ごとに焼く。
+_TOPIC_ENV = os.environ.get("KC_PROBE_NTFY_TOPIC", "").strip()
+if _TOPIC_ENV:
+    EXP_ENV = {**EXP_ENV,
+               "KC_PROBE_NTFY_TOPIC": _TOPIC_ENV,
+               "KC_PROBE_SIDE": os.environ.get("KC_PROBE_SIDE", "").strip()}
+
 # 実験 ID を結果に残す。残さないと、あとで `timings.json` を見ても
 # どのノブで走った回か分からず、比較表が作れない。
 print(f"実験: {EXPERIMENT} — {EXP_DESC}")

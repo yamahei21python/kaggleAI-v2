@@ -7,29 +7,31 @@ python3 -m cli race --yes --gate 50    # 閾値を下げて早く当てる
 
 ## 何をするか
 
-1. 生成物を 1 回だけビルド（`KC_PROBE_GATE_MIB_S` を焼く）
-2. **id 違いの 2 本**（`vllm-race-a` / `vllm-race-b`）へ同じコードを push
-3. 各カーネルは起動直後の 64 MiB probe でゲート判定 → 未満なら `SystemExit`
-   （install の 267 秒を払わない。`00_settings.py` の `_kc_probe_gate`）
-4. 両方の `probe.json` を回収して判定
-5. 負け側は `kaggle kernels delete -y` で停止（実測 10〜20 秒で止まる）
-6. 勝ち側の `url.txt`（cloudflared）を待って URL を出す
+1. `KC_PROBE_GATE_MIB_S` と ntfy の topic を焼いて**2 回**ビルド
+2. 別 id（`vllm-race-a` / `vllm-race-b`）へ**同時**に push
+3. 各カーネルは 64 MiB probe の直後に結果を ntfy へ 1 行 POST し、
+   ゲート未満なら `SystemExit`（install の 267 秒を払わない）
+4. ローカルは ntfy を poll して `mib_s` を読む
+5. 負け側は `kaggle kernels delete -y` で停止（実測 10〜20 秒）
+6. 勝ち側の `url.txt` を待って URL を出す
+
+## なぜ ntfy か
+
+`kaggle kernels output` は**実行が終わるまで**取れない（実測）。
+レースでは勝ち側が install 以降で何分も走るので、probe の結果を
+「走行中に」読む手段が要る。カーネル間で共有できる場所は無いので、
+外向きの HTTP 1 本（ntfy.sh）を中継にする。送信失敗は本番を止めない。
 
 ## 両方通ったとき
 
-probe が速い方だけ残し、遅い方を即 delete する（案 2）。両方 install まで
+probe が速い方だけ残し、遅い方を即 delete（案 2）。両方 install まで
 走らせると、重みロードが長いノードでは**最大 1.7 時間**を無駄に焼く。
 両方通る確率は 1 ラウンド 0.38%（150 MiB/s が 6.2% のとき）。
-
-## 60 秒で install を抜けないとき
-
-何もしない（正常）。install は実測 267 秒なので、60 秒で抜ける方が異常。
-勝ち側が**異常終了した**（URL が出ないまま status が COMPLETE/ERROR）
-ときだけ次のラウンドへ戻る。
 
 ## 前提
 
 - `kaggle` CLI 2.x（バージョン指定 output / delete。1.x には無い）
+- カーネルに internet（ntfy へ POST するため）
 - 生成物は `vllm-playground`（本番と同じセル・公開系だけ外した骨組み）
 """
 import json
@@ -41,6 +43,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from concurrent import futures
 
 from cli import build as build_mod
@@ -51,8 +54,10 @@ from kbuild import spec
 # セッションを置き換える）。id は使い捨て。負けた側は delete で消える。
 SLUGS = {"a": "vllm-race-a", "b": "vllm-race-b"}
 
+NTFY = "https://ntfy.sh"
 _VERSION = re.compile(r"Kernel version (\d+)")
 _STATUS = re.compile(r"KernelWorkerStatus\.([A-Z]+)")
+_BEACON = re.compile(r"mib_s=([0-9.]+)")
 
 
 # ── 純関数（テストはここだけ見る）────────────────────────────
@@ -99,6 +104,25 @@ def parse_probe_mib(path):
         return None
 
 
+def parse_beacon(text):
+    """ntfy の poll 出力（JSON lines）から最後の `mib_s` を取る。"""
+    last = None
+    for line in (text or "").splitlines():
+        try:
+            msg = json.loads(line).get("message") or ""
+        except ValueError:
+            continue
+        m = _BEACON.search(msg)
+        if m:
+            last = float(m.group(1))
+    return last
+
+
+def topics(stamp, side):
+    """side ごとに別 topic。同一 topic だと 2 本の結果が混ざる。"""
+    return f"kc-race-{stamp}-{side}"
+
+
 # ── Kaggle 操作 ────────────────────────────────────────────
 def _owner(kernel):
     """台帳の id から owner を取る（`yamahei21python/xxx` の前半）。"""
@@ -111,16 +135,6 @@ def _run(cmd, timeout=180):
     except (OSError, subprocess.SubprocessError) as e:
         return 1, "", f"{type(e).__name__}: {e}"
     return p.returncode, p.stdout or "", p.stderr or ""
-
-
-def _supports_output_flag(exe, flag):
-    """`kernels output` が flag を受けるか。
-
-    `cli.push._supports` は **push** の `--help` を見るので、`--file-pattern`
-    のような output 側のフラグには使えない（実測で誤判定した）。
-    """
-    rc, out, err = _run([exe, "kernels", "output", "--help"], timeout=120)
-    return rc == 0 and flag in (out + err)
 
 
 def _parallel(fn_a, fn_b):
@@ -145,8 +159,17 @@ def stage_meta(base, side, owner):
     return {**base, "id": f"{owner}/{slug}", "title": slug}
 
 
-def _stage(kernel, side, owner):
-    """push 用の一時ディレクトリ（id と title だけ差し替えた複製）を返す。"""
+def build_staged(kernel, side, owner, gate, topic):
+    """ゲートと topic を焼いてビルドし、push 用ディレクトリを返す。
+
+    side ごとに生成物が違う（topic と side を焼く）ので、2 回ビルドする。
+    ビルドは 1 回 1〜2 秒で、GPU は使わない。
+    """
+    os.environ["KC_PROBE_GATE_MIB_S"] = str(gate)
+    os.environ["KC_PROBE_NTFY_TOPIC"] = topic
+    os.environ["KC_PROBE_SIDE"] = side
+    if build_mod.run([kernel.name]) != 0:
+        raise SystemExit("生成に失敗したため中止")
     tmp = pathlib.Path(tempfile.mkdtemp(prefix=f"kc-race-{side}-"))
     src_dir = pathlib.Path(kernel.dir)
     shutil.copy2(src_dir / kernel.code_file, tmp / kernel.code_file)
@@ -157,18 +180,9 @@ def _stage(kernel, side, owner):
     return tmp
 
 
-def push_side(exe, kernel, side, owner):
+def push_side(exe, staged, side):
     """1 本 push してバージョン番号を返す（失敗は 0）。"""
-    tmp = None
-    try:
-        tmp = _stage(kernel, side, owner)
-        rc, out, err = _run([exe, "kernels", "push", "-p", str(tmp)], timeout=600)
-    except (OSError, ValueError) as e:
-        print(f"  push {side} 準備失敗: {type(e).__name__}: {e}")
-        return 0
-    finally:
-        if tmp:
-            shutil.rmtree(tmp, ignore_errors=True)
+    rc, out, err = _run([exe, "kernels", "push", "-p", str(staged)], timeout=600)
     if rc != 0:
         print(f"  push {side} 失敗: {(err or out).strip()[:200]}")
         return 0
@@ -180,8 +194,8 @@ def push_side(exe, kernel, side, owner):
 def fetch_file(exe, owner, side, ver, pattern, dest, timeout=120):
     """バージョン指定で 1 ファイルだけ回収して Path（無ければ None）。
 
-    `--file-pattern` は**ダウンロード**を絞るだけで、カーネルログは常に
-    落ちてくる。glob の先頭を返すとログを掴むので、pattern で選び直す。
+    注意: これは**実行が終わった版**でしか使えない（走行中は取れない）。
+    probe は ntfy、URL は beacon / 完了後の回収で見る。
     """
     dest = pathlib.Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -209,6 +223,7 @@ def delete_side(exe, owner, side, attempts=2):
     二重に焼く）。1 回だけ再試行し、駄目なら明示する。
     """
     ref = f"{owner}/{SLUGS[side]}"
+    err = ""
     for i in range(attempts):
         rc, _, err = _run([exe, "kernels", "delete", "-y", ref], timeout=180)
         if rc == 0:
@@ -216,23 +231,39 @@ def delete_side(exe, owner, side, attempts=2):
             return True
         if i + 1 < attempts:
             time.sleep(5)
-    print(f"  ⚠ delete {side} 失敗（走行中なら手で止める）: {(err or '').strip()[:120]}")
+    print(f"  ⚠ delete {side} 失敗（走行中なら手で止める）: {err.strip()[:120]}")
     return False
 
 
+def _supports_output_flag(exe, flag):
+    """`kernels output` が flag を受けるか。
+
+    `cli.push._supports` は **push** の `--help` を見るので、`--file-pattern`
+    のような output 側のフラグには使えない（実測で誤判定した）。
+    """
+    rc, out, err = _run([exe, "kernels", "output", "--help"], timeout=120)
+    return rc == 0 and flag in (out + err)
+
+
 # ── 待ち合わせ ─────────────────────────────────────────────
-def wait_probe(exe, owner, side, ver, tmp, limit_s=240, interval=8):
-    """`probe.json` が取れるまで待つ（セッションが終わったら諦める）。"""
+def fetch_beacon(topic, timeout=10):
+    """ntfy の poll から `mib_s` を取る（無ければ None）。"""
+    try:
+        with urllib.request.urlopen(f"{NTFY}/{topic}/json?poll=1",
+                                    timeout=timeout) as r:
+            text = r.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    return parse_beacon(text)
+
+
+def wait_beacon(topic, limit_s=240, interval=5):
+    """probe の beacon が届くまで待つ（届かなければ None）。"""
     t0 = time.time()
     while time.time() - t0 < limit_s:
-        p = fetch_file(exe, owner, side, ver, r"probe\.json", tmp)
-        if p:
-            mib = parse_probe_mib(p)
-            if mib is not None:
-                return mib
-            return None                      # 取れたが ok=false
-        if status_of(exe, owner, side) in ("COMPLETE", "ERROR", "CANCELED"):
-            return None
+        mib = fetch_beacon(topic)
+        if mib is not None:
+            return mib
         time.sleep(interval)
     return None
 
@@ -260,7 +291,7 @@ def wait_url(exe, owner, side, ver, tmp, limit_s, interval=20, tick=120):
 
 # ── 本体 ──────────────────────────────────────────────────
 def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
-        dry_run=False, wait_url_s=None, interval=8):
+        dry_run=False, wait_url_s=None, interval=5):
     kernel = spec.find(target)
     owner = _owner(kernel)
     print(f"対象: {kernel.id} → {SLUGS['a']} / {SLUGS['b']}（owner={owner}）")
@@ -272,7 +303,7 @@ def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
               f"{rounds} ラウンド分の GPU を消費する。進めるなら --yes。")
         return 1
     if dry_run:
-        print(f"DRY build {kernel.name} + push {SLUGS['a']}/{SLUGS['b']} ×{rounds}")
+        print(f"DRY build {kernel.name} ×2 + push {SLUGS['a']}/{SLUGS['b']} ×{rounds}")
         return 0
     exe = kaggle_exe()
     if not exe:
@@ -283,68 +314,69 @@ def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
         print("  KC_KAGGLE=/path/to/kaggle2 を指定する")
         return 1
 
-    # ゲートを焼いてからビルド（push は再ビルドしない。2 本で同じ生成物を使う）
-    os.environ["KC_PROBE_GATE_MIB_S"] = str(gate)
-    if build_mod.run([kernel.name]) != 0:
-        print("生成に失敗したため中止")
-        return 1
-
     budget = wait_url_s
     if budget is None:
         budget = float(os.environ.get("VLLM_STARTUP_BUDGET", "11000")) + 900
+    stamp = f"{int(time.time())}-{os.getpid()}"
 
     live = set()          # 走らせたままの side（終了時に必ず片付ける）
+    staged = {}
     try:
         for rnd in range(1, rounds + 1):
             print(f"\n=== ラウンド {rnd}/{rounds}")
+            topics_ = {s: topics(stamp, s) for s in ("a", "b")}
+            for s in ("a", "b"):
+                if s in staged:
+                    shutil.rmtree(staged[s], ignore_errors=True)
+                staged[s] = build_staged(kernel, s, owner, gate, topics_[s])
             # 2 本は**同時**に push する。順に押すと、2 本目が走り出す前に
             # 1 本目が probe を終えてしまい、レースにならない。
             vers = dict(zip(("a", "b"), _parallel(
-                lambda: push_side(exe, kernel, "a", owner),
-                lambda: push_side(exe, kernel, "b", owner))))
+                lambda: push_side(exe, staged["a"], "a"),
+                lambda: push_side(exe, staged["b"], "b"))))
             live |= {s for s, v in vers.items() if v}
             if not all(vers.values()):
                 for s in sorted(live):
                     delete_side(exe, owner, s)
                 live.clear()
                 continue
+            # probe の結果は走行中に ntfy から読む（output は完了まで取れない）
+            mib = dict(zip(("a", "b"), _parallel(
+                lambda: wait_beacon(topics_["a"], interval=interval),
+                lambda: wait_beacon(topics_["b"], interval=interval))))
+            print("  probe: " + "  ".join(
+                f"{s}={mib[s] if mib[s] is None else round(mib[s], 1)}"
+                for s in ("a", "b")))
+            win = decide(mib["a"], mib["b"], gate)
+            if win == "retry":
+                print("  両方ゲート未満 → 破棄して次へ")
+                for s in ("a", "b"):
+                    delete_side(exe, owner, s)
+                live.clear()
+                continue
+            lose = "b" if win == "a" else "a"
+            if mib["a"] is not None and mib["b"] is not None:
+                print(f"  両方通過 → probe が速い {win} を残す")
+            delete_side(exe, owner, lose)
+            live.discard(lose)
+            print(f"  {win} を本番として継続（install → vLLM 起動）")
             with tempfile.TemporaryDirectory(prefix="kc-race-out-") as tmp:
-                # probe も同時に待つ（順に待つと 1 ラウンドが 2 倍になる）
-                mib = dict(zip(("a", "b"), _parallel(
-                    lambda: wait_probe(exe, owner, "a", vers["a"],
-                                       pathlib.Path(tmp) / "a", interval=interval),
-                    lambda: wait_probe(exe, owner, "b", vers["b"],
-                                       pathlib.Path(tmp) / "b", interval=interval))))
-                print("  probe: " + "  ".join(
-                    f"{s}={mib[s] if mib[s] is None else round(mib[s], 1)}"
-                    for s in ("a", "b")))
-                win = decide(mib["a"], mib["b"], gate)
-                if win == "retry":
-                    print("  両方ゲート未満 → 破棄して次へ")
-                    for s in ("a", "b"):
-                        delete_side(exe, owner, s)
-                    live.clear()
-                    continue
-                lose = "b" if win == "a" else "a"
-                if mib["a"] is not None and mib["b"] is not None:
-                    print(f"  両方通過 → probe が速い {win} を残す")
-                delete_side(exe, owner, lose)
-                live.discard(lose)
-                print(f"  {win} を本番として継続（install → vLLM 起動）")
                 url = wait_url(exe, owner, win, vers[win],
                                pathlib.Path(tmp) / win,
                                limit_s=budget, interval=max(interval, 10))
-                if url:
-                    live.discard(win)
-                    print(f"\nURL: {url}")
-                    return 0
-                print(f"  {win} から URL が出ないまま終了 → 破棄して次ラウンド")
-                delete_side(exe, owner, win)
+            if url:
                 live.discard(win)
+                print(f"\nURL: {url}")
+                return 0
+            print(f"  {win} から URL が出ないまま終了 → 破棄して次ラウンド")
+            delete_side(exe, owner, win)
+            live.discard(win)
     finally:
         # Ctrl-C・想定外の例外でも 2 本を残さない（残すと GPU を焼き続ける）。
         for s in sorted(live):
             delete_side(exe, owner, s)
+        for d in staged.values():
+            shutil.rmtree(d, ignore_errors=True)
     print(f"\n{rounds} ラウンドで当たらなかった（ゲート {gate} MiB/s）")
     return 1
 
@@ -359,8 +391,8 @@ def main(argv=None):
     ap.add_argument("--rounds", type=int, default=25)
     ap.add_argument("--yes", action="store_true", help="実行を確定する")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--interval", type=float, default=8.0,
-                    help="probe のポーリング間隔（秒）")
+    ap.add_argument("--interval", type=float, default=5.0,
+                    help="beacon のポーリング間隔（秒）")
     ap.add_argument("--wait-url", dest="wait_url_s", type=float, default=None,
                     help="勝ち側の URL 待ち上限（秒）")
     a = ap.parse_args(argv)
