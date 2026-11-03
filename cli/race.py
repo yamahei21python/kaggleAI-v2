@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent import futures
 
 from cli import build as build_mod
 from cli.push import _quota_lines, _supports, kaggle_exe
@@ -112,6 +113,17 @@ def _run(cmd, timeout=180):
     return p.returncode, p.stdout or "", p.stderr or ""
 
 
+def _parallel(fn_a, fn_b):
+    """2 つの処理を**同時**に走らせて (a, b) を返す。
+
+    順に走らせると「2 本目が始まる前に 1 本目が probe を終える」ので、
+    レースの意味（同じ時間帯のノードを比べる）が薄れる。
+    """
+    with futures.ThreadPoolExecutor(max_workers=2) as ex:
+        fa, fb = ex.submit(fn_a), ex.submit(fn_b)
+        return fa.result(), fb.result()
+
+
 def _stage(kernel, side, owner):
     """push 用の一時ディレクトリ（id だけ差し替えた複製）を返す。"""
     tmp = pathlib.Path(tempfile.mkdtemp(prefix=f"kc-race-{side}-"))
@@ -127,11 +139,16 @@ def _stage(kernel, side, owner):
 
 def push_side(exe, kernel, side, owner):
     """1 本 push してバージョン番号を返す（失敗は 0）。"""
-    tmp = _stage(kernel, side, owner)
+    tmp = None
     try:
+        tmp = _stage(kernel, side, owner)
         rc, out, err = _run([exe, "kernels", "push", "-p", str(tmp)], timeout=600)
+    except (OSError, ValueError) as e:
+        print(f"  push {side} 準備失敗: {type(e).__name__}: {e}")
+        return 0
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
     if rc != 0:
         print(f"  push {side} 失敗: {(err or out).strip()[:200]}")
         return 0
@@ -165,11 +182,22 @@ def status_of(exe, owner, side):
     return parse_status(out) if rc == 0 else ""
 
 
-def delete_side(exe, owner, side):
-    """負け側を停止する（カーネルごと消える。実測 10〜20 秒で止まる）。"""
-    rc, _, err = _run([exe, "kernels", "delete", "-y", f"{owner}/{SLUGS[side]}"],
-                      timeout=180)
-    print(f"  delete {side}: {'ok' if rc == 0 else (err or '').strip()[:120]}")
+def delete_side(exe, owner, side, attempts=2):
+    """負け側を停止する（カーネルごと消える。実測 10〜20 秒で止まる）。
+
+    失敗を握り潰すと**負け側が走ったまま**勝者の URL 待ちへ進む（GPU を
+    二重に焼く）。1 回だけ再試行し、駄目なら明示する。
+    """
+    ref = f"{owner}/{SLUGS[side]}"
+    for i in range(attempts):
+        rc, _, err = _run([exe, "kernels", "delete", "-y", ref], timeout=180)
+        if rc == 0:
+            print(f"  delete {side}: ok")
+            return True
+        if i + 1 < attempts:
+            time.sleep(5)
+    print(f"  ⚠ delete {side} 失敗（走行中なら手で止める）: {(err or '').strip()[:120]}")
+    return False
 
 
 # ── 待ち合わせ ─────────────────────────────────────────────
@@ -245,38 +273,58 @@ def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
     if budget is None:
         budget = float(os.environ.get("VLLM_STARTUP_BUDGET", "11000")) + 900
 
-    for rnd in range(1, rounds + 1):
-        print(f"\n=== ラウンド {rnd}/{rounds}")
-        vers = {s: push_side(exe, kernel, s, owner) for s in ("a", "b")}
-        if not all(vers.values()):
-            for s in ("a", "b"):
-                delete_side(exe, owner, s)
-            continue
-        with tempfile.TemporaryDirectory(prefix="kc-race-out-") as tmp:
-            mib = {}
-            for s in ("a", "b"):
-                mib[s] = wait_probe(exe, owner, s, vers[s],
-                                    pathlib.Path(tmp) / s, interval=interval)
-            print("  probe: " + "  ".join(
-                f"{s}={mib[s] if mib[s] is None else round(mib[s], 1)}" for s in ("a", "b")))
-            win = decide(mib["a"], mib["b"], gate)
-            if win == "retry":
-                print("  両方ゲート未満 → 破棄して次へ")
-                for s in ("a", "b"):
+    live = set()          # 走らせたままの side（終了時に必ず片付ける）
+    try:
+        for rnd in range(1, rounds + 1):
+            print(f"\n=== ラウンド {rnd}/{rounds}")
+            # 2 本は**同時**に push する。順に押すと、2 本目が走り出す前に
+            # 1 本目が probe を終えてしまい、レースにならない。
+            vers = dict(zip(("a", "b"), _parallel(
+                lambda: push_side(exe, kernel, "a", owner),
+                lambda: push_side(exe, kernel, "b", owner))))
+            live |= {s for s, v in vers.items() if v}
+            if not all(vers.values()):
+                for s in sorted(live):
                     delete_side(exe, owner, s)
+                live.clear()
                 continue
-            lose = "b" if win == "a" else "a"
-            if mib["a"] is not None and mib["b"] is not None:
-                print(f"  両方通過 → probe が速い {win} を残す")
-            delete_side(exe, owner, lose)
-            print(f"  {win} を本番として継続（install → vLLM 起動）")
-            url = wait_url(exe, owner, win, vers[win], pathlib.Path(tmp) / win,
-                           limit_s=budget, interval=max(interval, 10))
-            if url:
-                print(f"\nURL: {url}")
-                return 0
-            print(f"  {win} から URL が出ないまま終了 → 破棄して次ラウンド")
-            delete_side(exe, owner, win)
+            with tempfile.TemporaryDirectory(prefix="kc-race-out-") as tmp:
+                # probe も同時に待つ（順に待つと 1 ラウンドが 2 倍になる）
+                mib = dict(zip(("a", "b"), _parallel(
+                    lambda: wait_probe(exe, owner, "a", vers["a"],
+                                       pathlib.Path(tmp) / "a", interval=interval),
+                    lambda: wait_probe(exe, owner, "b", vers["b"],
+                                       pathlib.Path(tmp) / "b", interval=interval))))
+                print("  probe: " + "  ".join(
+                    f"{s}={mib[s] if mib[s] is None else round(mib[s], 1)}"
+                    for s in ("a", "b")))
+                win = decide(mib["a"], mib["b"], gate)
+                if win == "retry":
+                    print("  両方ゲート未満 → 破棄して次へ")
+                    for s in ("a", "b"):
+                        delete_side(exe, owner, s)
+                    live.clear()
+                    continue
+                lose = "b" if win == "a" else "a"
+                if mib["a"] is not None and mib["b"] is not None:
+                    print(f"  両方通過 → probe が速い {win} を残す")
+                delete_side(exe, owner, lose)
+                live.discard(lose)
+                print(f"  {win} を本番として継続（install → vLLM 起動）")
+                url = wait_url(exe, owner, win, vers[win],
+                               pathlib.Path(tmp) / win,
+                               limit_s=budget, interval=max(interval, 10))
+                if url:
+                    live.discard(win)
+                    print(f"\nURL: {url}")
+                    return 0
+                print(f"  {win} から URL が出ないまま終了 → 破棄して次ラウンド")
+                delete_side(exe, owner, win)
+                live.discard(win)
+    finally:
+        # Ctrl-C・想定外の例外でも 2 本を残さない（残すと GPU を焼き続ける）。
+        for s in sorted(live):
+            delete_side(exe, owner, s)
     print(f"\n{rounds} ラウンドで当たらなかった（ゲート {gate} MiB/s）")
     return 1
 
