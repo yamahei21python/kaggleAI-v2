@@ -84,3 +84,52 @@ def test_parse_beacon_filters_side():
     assert race.parse_beacon(text, side="a") == 13.8
     assert race.parse_beacon(text, side="b") == 99.0
     assert race.parse_beacon(text, side="c") is None
+
+
+def test_parse_beacon_takes_last_mib():
+    """ntfy の JSON lines から最後の mib_s を取る（無ければ None）。"""
+    text = (
+        '{"message":"mib_s=13.8 side=a"}\n'
+        '{"message":"mib_s=21.57 side=a"}\n'
+        '{"event":"open"}\n'
+    )
+    mib, url = race.parse_beacon(text)
+    assert mib == 21.57
+    assert url is None
+
+
+def test_parse_beacon_url_only():
+    """url だけのメッセージもパースする。"""
+    text = '{"message":"url=https://a-fake.trycloudflare.com"}\n'
+    mib, url = race.parse_beacon(text)
+    assert mib is None
+    assert url == "https://a-fake.trycloudflare.com"
+
+
+def test_parse_beacon_both():
+    """mib_s と url の両方が取れる。"""
+    text = '{"message":"mib_s=13.8 side=a"}\n'
+    text += '{"message":"url=https://a-fake.trycloudflare.com"}\n'
+    mib, url = race.parse_beacon(text)
+    assert mib == 13.8
+    assert url == "https://a-fake.trycloudflare.com"
+
+
+def test_parse_beacon_filters_side():
+    """別 side の値を拾わない（topic が同じでも混ざらないように）。"""
+    text = ('{"message":"mib_s=13.8 side=a"}\n'
+            '{"message":"mib_s=99.0 side=b"}\n')
+    mib, url = race.parse_beacon(text, side="a")
+    assert mib == 13.8
+    assert url is None
+    mib, url = race.parse_beacon(text, side="b")
+    assert mib == 99.0
+    assert url is None
+    mib, url = race.parse_beacon(text, side="c")
+    assert mib is None
+    assert url is None
+
+
+def test_parse_beacon_empty():
+    assert race.parse_beacon('{"message":"hello"}') == (None, None)
+    assert race.parse_beacon("") == (None, None)

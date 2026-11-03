@@ -314,6 +314,9 @@ KERNELS = (
        builder="build_capture_patch", status=RETIRED),
     _K("ci-cpu", "ci-cpu", "script", "kaggle/ci-cpu", "main.py",
        builder="build_ci_cpu"),
+    # ---- レース稽古用（CPU・無料・GPU 0 秒）----
+    _K("cpu-race-probe", "cpu race probe", "script",
+       "kaggle/cpu-race-probe", "main.py", builder="build_cpu_race"),
     # wheelhouse の解決可否を CPU（無料）で調べる。GPU 不使用。
     _K("vllm-whl-probe", "vllm whl probe", "script", "kaggle/whl-probe",
        "main.py",

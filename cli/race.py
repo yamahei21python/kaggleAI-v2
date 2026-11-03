@@ -58,6 +58,7 @@ NTFY = "https://ntfy.sh"
 _VERSION = re.compile(r"Kernel version (\d+)")
 _STATUS = re.compile(r"KernelWorkerStatus\.([A-Z]+)")
 _BEACON = re.compile(r"mib_s=([0-9.]+)")
+_URL = re.compile(r"url=(https?://[^\s]+)")
 
 
 # ── 純関数（テストはここだけ見る）────────────────────────────
@@ -105,19 +106,27 @@ def parse_probe_mib(path):
 
 
 def parse_beacon(text, side=None):
-    """ntfy の poll 出力から指定 side の最後の `mib_s` を取る。"""
-    last = None
+    """ntfy の poll 出力から指定 side の最後の `mib_s` と url を取る。
+
+    返り値は `(mib_s, url)` のタプル。どちらも取れなければ `(None, None)`。
+    `mib_s` のみ、`url` のみ、両方、の3パターンがある。
+    """
+    mib, url = None, None
     for line in (text or "").splitlines():
         try:
             msg = json.loads(line).get("message") or ""
         except ValueError:
             continue
-        if side is not None and not re.search(r"(?:^|\s)side=" + re.escape(side) + r"(?:\s|$)", msg):
+        if side is not None and not re.search(
+            r"(?:^|\s)side=" + re.escape(side) + r"(?:\s|$)", msg):
             continue
         m = _BEACON.search(msg)
         if m:
-            last = float(m.group(1))
-    return last
+            mib = float(m.group(1))
+        u = _URL.search(msg)
+        if u:
+            url = u.group(1)
+    return mib, url
 
 
 def topics(stamp, side):
@@ -161,18 +170,23 @@ def stage_meta(base, side, owner):
     return {**base, "id": f"{owner}/{slug}", "title": slug}
 
 
-def build_staged(kernel, side, owner, gate, topic):
+def build_staged(kernel, side, owner, gate, topic, fake_mib=None):
     """ゲートと topic を焼いてビルドし、push 用ディレクトリを返す。
 
     side ごとに生成物が違う（topic と side を焼く）ので、2 回ビルドする。
     ビルドは 1 回 1〜2 秒で、GPU は使わない。
+
+    `fake_mib` は `cpu-race-probe` 用。`KC_FAKE_MIB_<SIDE>` を焼く。
     """
     probe_env = {
         "KC_PROBE_GATE_MIB_S": str(gate),
         "KC_PROBE_NTFY_TOPIC": topic,
         "KC_PROBE_SIDE": side,
+        "KC_FAKE_MIB_" + side.upper(): str(fake_mib or 0),
     }
-    previous = {k: os.environ.get(k) for k in probe_env}
+    # `KC_FAKE_MIB_A` / `KC_FAKE_MIB_B` は両方復元する必要がある
+    all_keys = set(probe_env) | {"KC_FAKE_MIB_A", "KC_FAKE_MIB_B"}
+    previous = {k: os.environ.get(k) for k in all_keys}
     try:
         os.environ.update(probe_env)
         if build_mod.run([kernel.name]) != 0:
@@ -260,25 +274,37 @@ def _supports_output_flag(exe, flag):
 
 # ── 待ち合わせ ─────────────────────────────────────────────
 def fetch_beacon(topic, timeout=10, side=None):
-    """ntfy の poll から `mib_s` を取る（無ければ None）。"""
+    """ntfy の poll から (mib_s, url) を取る（無ければ (None, None)）。"""
     try:
         with urllib.request.urlopen(f"{NTFY}/{topic}/json?poll=1",
                                     timeout=timeout) as r:
             text = r.read().decode("utf-8", "replace")
     except Exception:
-        return None
+        return None, None
     return parse_beacon(text, side=side)
 
 
 def wait_beacon(topic, side=None, limit_s=240, interval=5):
-    """probe の beacon が届くまで待つ（届かなければ None）。"""
+    """probe の beacon が届くまで待つ（届かなければ (None, None)）。"""
     t0 = time.time()
     while time.time() - t0 < limit_s:
-        mib = fetch_beacon(topic, side=side)
-        if mib is not None:
-            return mib
+        mib, url = fetch_beacon(topic, side=side)
+        if mib is not None or url is not None:
+            return mib, url
         time.sleep(interval)
-    return None
+    return None, None
+
+
+def wait_url_from_beacon(topics_, win, interval=5, limit_s=180):
+    """ntfy の beacon から url を待つ（url が取れるまで）。"""
+    t0 = time.time()
+    topic = topics_[win]
+    while time.time() - t0 < limit_s:
+        _, url = fetch_beacon(topic, side=win)
+        if url and url.startswith("http"):
+            return url
+        time.sleep(interval)
+    return ""
 
 
 def wait_url(exe, owner, side, ver, tmp, limit_s, interval=20, tick=120):
@@ -304,7 +330,8 @@ def wait_url(exe, owner, side, ver, tmp, limit_s, interval=20, tick=120):
 
 # ── 本体 ──────────────────────────────────────────────────
 def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
-        dry_run=False, wait_url_s=None, interval=5):
+        dry_run=False, wait_url_s=None, interval=5,
+        fake_mib_a=None, fake_mib_b=None):
     kernel = spec.find(target)
     owner = _owner(kernel)
     print(f"対象: {kernel.id} → {SLUGS['a']} / {SLUGS['b']}（owner={owner}）")
@@ -341,7 +368,8 @@ def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
             for s in ("a", "b"):
                 if s in staged:
                     shutil.rmtree(staged[s], ignore_errors=True)
-                staged[s] = build_staged(kernel, s, owner, gate, topics_[s])
+                staged[s] = build_staged(kernel, s, owner, gate, topics_[s],
+                                         fake_mib=(fake_mib_a if s == "a" else fake_mib_b))
             # 2 本は**同時**に push する。順に押すと、2 本目が走り出す前に
             # 1 本目が probe を終えてしまい、レースにならない。
             vers = dict(zip(("a", "b"), _parallel(
@@ -358,14 +386,18 @@ def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
                 if undeleted:
                     raise RuntimeError(f"delete 失敗: {', '.join(undeleted)}")
                 continue
-            # probe の結果は走行中に ntfy から読む（output は完了まで取れない）
-            mib = dict(zip(("a", "b"), _parallel(
+            # probe と url は ntfy から読む（output は完了まで取れない）
+            beacons = dict(zip(("a", "b"), _parallel(
                 lambda: wait_beacon(topics_["a"], side="a", interval=interval),
                 lambda: wait_beacon(topics_["b"], side="b", interval=interval))))
+            probe = {s: b[0] for s, b in beacons.items()}
+            url_recv = {s: b[1] for s, b in beacons.items()}
             print("  probe: " + "  ".join(
-                f"{s}={mib[s] if mib[s] is None else round(mib[s], 1)}"
+                f"{s}={probe[s] if probe[s] is None else round(probe[s], 1)}"
                 for s in ("a", "b")))
-            win = decide(mib["a"], mib["b"], gate)
+            print("  url : " + "  ".join(
+                f"{s}={url_recv[s] or '-'}" for s in ("a", "b")))
+            win = decide(probe["a"], probe["b"], gate)
             if win == "retry":
                 print("  両方ゲート未満 → 破棄して次へ")
                 undeleted = []
@@ -378,16 +410,19 @@ def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
                     raise RuntimeError(f"delete 失敗: {', '.join(undeleted)}")
                 continue
             lose = "b" if win == "a" else "a"
-            if mib["a"] is not None and mib["b"] is not None:
+            if url_recv[win]:
+                live.discard(win)
+                print(f"\nURL（beacon）: {url_recv[win]}")
+                return 0
+            if probe["a"] is not None and probe["b"] is not None:
                 print(f"  両方通過 → probe が速い {win} を残す")
             if not delete_side(exe, owner, lose):
                 raise RuntimeError(f"delete 失敗: {lose}")
             live.discard(lose)
             print(f"  {win} を本番として継続（install → vLLM 起動）")
-            with tempfile.TemporaryDirectory(prefix="kc-race-out-") as tmp:
-                url = wait_url(exe, owner, win, vers[win],
-                               pathlib.Path(tmp) / win,
-                               limit_s=budget, interval=max(interval, 10))
+            # cpu-race-probe は ntfy から url を取る（kernels output は走行中に取れない）
+            url = wait_url_from_beacon(topics_, win, interval=max(interval, 10),
+                                       limit_s=budget)
             if url:
                 live.discard(win)
                 print(f"\nURL: {url}")
@@ -420,9 +455,14 @@ def main(argv=None):
                     help="beacon のポーリング間隔（秒）")
     ap.add_argument("--wait-url", dest="wait_url_s", type=float, default=None,
                     help="勝ち側の URL 待ち上限（秒）")
+    ap.add_argument("--fake-mib-a", dest="fake_mib_a", type=float, default=None,
+                    help="cpu-race-probe 用: side a の偽速度（既定: gate に応じて自動）")
+    ap.add_argument("--fake-mib-b", dest="fake_mib_b", type=float, default=None,
+                    help="cpu-race-probe 用: side b の偽速度（既定: gate に応じて自動）")
     a = ap.parse_args(argv)
     return run(a.target, gate=a.gate, rounds=a.rounds, yes=a.yes,
-               dry_run=a.dry_run, wait_url_s=a.wait_url_s, interval=a.interval)
+               dry_run=a.dry_run, wait_url_s=a.wait_url_s, interval=a.interval,
+               fake_mib_a=a.fake_mib_a, fake_mib_b=a.fake_mib_b)
 
 
 if __name__ == "__main__":                                  # pragma: no cover
