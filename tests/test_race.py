@@ -46,3 +46,15 @@ def test_parse_status_line():
     line = 'yamahei21python/x has status "KernelWorkerStatus.RUNNING"'
     assert race.parse_status(line) == "RUNNING"
     assert race.parse_status("") == ""
+
+
+def test_stage_meta_title_resolves_to_id():
+    """title が id に解決できないと push が 409 で落ちる（実測）。
+
+    `title="race a"` は `yamahei21python/race-a` に化けて、指定 id
+    `vllm-race-a` と衝突した。title は slug と同一にする。
+    """
+    meta = race.stage_meta({"dataset_sources": ["x/y"]}, "a", "owner")
+    assert meta["id"] == "owner/vllm-race-a"
+    assert meta["title"] == "vllm-race-a"
+    assert meta["dataset_sources"] == ["x/y"], "元のメタデータを落としている"

@@ -1745,3 +1745,36 @@ CPU カーネル（GPU 無し・internet 有）から 10 秒ごとに ntfy.sh �
 - GPU 2 本同時（CPU では OK）
 - delete 後の GPU クォータ即時解放
 - **150 MiB/s のノードで重みロードが本当に速いか**（最重要・未証明）
+
+### GPU 実機テスト（2026-11-03・`--gate 999 --rounds 1`・GPU 約2分）
+
+`cli race` の全経路のうち「両方ゲート未満 → 破棄」を実機で確認。
+
+```
+=== ラウンド 1/1
+  push b: v1
+  push a: v1          ← 並列（順序が b→a になる）
+  probe: a=13.8  b=12.9
+  両方ゲート未満 → 破棄して次へ
+  delete a: ok
+  delete b: ok
+```
+
+- ゲートは**効いた**: `🚦 ノードゲート: 21.57 MiB/s < 999.0 → 早期終了（install 前）`（起動 4.3 秒）
+- 2 本が同時に走り、両方 delete で停止
+- 引いたノードは両方とも 12〜14 MiB/s（下位 10%）
+
+### 踏んだ罠: `kernel-metadata.json` の title
+
+`title` が id に解決できないと **409 Conflict** で push が落ちる。
+
+```
+Your kernel title does not resolve to the specified id.
+409 Client Error: Conflict ... SaveKernel
+```
+
+`title="race a"` → slug は `yamahei21python/race-a` になり、指定 id
+`vllm-race-a` と衝突。さらに **push の rc は 1 なのに、既存 kernel を
+掴んだまま ver=1 を返す**ように見え、delete は別 slug を叩いて 403 になった。
+
+→ `stage_meta()` で `title = slug` に固定。テストで `id`/`title` の一致を担保。

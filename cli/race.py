@@ -44,7 +44,7 @@ import time
 from concurrent import futures
 
 from cli import build as build_mod
-from cli.push import _quota_lines, _supports, kaggle_exe
+from cli.push import _quota_lines, kaggle_exe
 from kbuild import spec
 
 # 2 本は**別 id** でなければ同時に走らない（同一 id の再 push は走行中の
@@ -113,6 +113,16 @@ def _run(cmd, timeout=180):
     return p.returncode, p.stdout or "", p.stderr or ""
 
 
+def _supports_output_flag(exe, flag):
+    """`kernels output` が flag を受けるか。
+
+    `cli.push._supports` は **push** の `--help` を見るので、`--file-pattern`
+    のような output 側のフラグには使えない（実測で誤判定した）。
+    """
+    rc, out, err = _run([exe, "kernels", "output", "--help"], timeout=120)
+    return rc == 0 and flag in (out + err)
+
+
 def _parallel(fn_a, fn_b):
     """2 つの処理を**同時**に走らせて (a, b) を返す。
 
@@ -124,14 +134,24 @@ def _parallel(fn_a, fn_b):
         return fa.result(), fb.result()
 
 
+def stage_meta(base, side, owner):
+    """push 用メタデータ。`title` は id に**解決できる形**にする。
+
+    Kaggle は title から slug を作るので、`title="race a"` だと
+    `yamahei21python/race-a` になり、指定した id と衝突して 409
+    （`Your kernel title does not resolve to the specified id`）。
+    """
+    slug = SLUGS[side]
+    return {**base, "id": f"{owner}/{slug}", "title": slug}
+
+
 def _stage(kernel, side, owner):
-    """push 用の一時ディレクトリ（id だけ差し替えた複製）を返す。"""
+    """push 用の一時ディレクトリ（id と title だけ差し替えた複製）を返す。"""
     tmp = pathlib.Path(tempfile.mkdtemp(prefix=f"kc-race-{side}-"))
     src_dir = pathlib.Path(kernel.dir)
     shutil.copy2(src_dir / kernel.code_file, tmp / kernel.code_file)
-    meta = json.loads((src_dir / kernel.metadata_file).read_text(encoding="utf-8"))
-    meta["id"] = f"{owner}/{SLUGS[side]}"
-    meta["title"] = f"race {side}"
+    base = json.loads((src_dir / kernel.metadata_file).read_text(encoding="utf-8"))
+    meta = stage_meta(base, side, owner)
     (tmp / kernel.metadata_file).write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     return tmp
@@ -258,7 +278,7 @@ def run(target="vllm-playground", gate=150.0, rounds=25, yes=False,
     if not exe:
         print("kaggle CLI が見つからない（PATH を確認）")
         return 1
-    if not _supports(exe, "--file-pattern"):
+    if not _supports_output_flag(exe, "--file-pattern"):
         print("この kaggle CLI はバージョン指定 output に未対応（2.x が要る）")
         print("  KC_KAGGLE=/path/to/kaggle2 を指定する")
         return 1
