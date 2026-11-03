@@ -47,8 +47,15 @@ VLLM_BAKE_ENV = (
     # 重みロードが 47 秒/層に戻り（vLLM が prefetch を RAM 判定で辞退した）、
     # 62 層中 56 層で予算切れ。完走には 4,650 秒前後必要だった。
     # 7,000 は `baseline_long` が同じ値で 3,820 秒完走した実績がある。
-    ("VLLM_STARTUP_BUDGET", "7000"),
-    ("VLLM_ATTEMPT_TIMEOUT", "7000"),
+    ("VLLM_STARTUP_BUDGET", "11000"),
+    ("VLLM_ATTEMPT_TIMEOUT", "11000"),
+    # 150 MiB/s 未満のノードは install に入る前に降りる（cli race 用）。
+    # 既定 150 を下げるなら `KC_PROBE_GATE_MIB_S=50 python3 -m cli push ...`。
+    ("KC_PROBE_GATE_MIB_S", "150"),
+    # race が beacon する先。race は side ごとに別 topic を焼く。
+    # 単独 push でも url を外から追いられるように残す。
+    ("KC_PROBE_NTFY_TOPIC", ""),
+    ("KC_PROBE_SIDE", ""),
 )
 
 
