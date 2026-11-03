@@ -314,6 +314,19 @@ def _kc_probe_report(rec):
     print("PROBE_JSON " + json.dumps(rec, ensure_ascii=False))
 
 
+def _kc_probe_gate(rec, gate):
+    """probe 結果がゲートを満たすか。`gate <= 0` は常に通す。
+
+    判定に使うのは **1 本読みの速度だけ**。重みロード速度の予測ではない
+    （notes §28: 相関は未検証）。install（267 秒）に入る前に降りるための
+    足切りで、遅いノードを引いた回に 100 分焼かないためのもの。
+    probe が失敗した回は判定できないので通す（安全側 = 走らせる）。
+    """
+    if gate <= 0 or not rec.get("ok"):
+        return True
+    return rec["mib_s"] >= gate
+
+
 def _kc_probe_mem_mib():
     """`MemAvailable`（MiB）。03 の `_mem_info` は**まだ定義されていない**ので使わない。"""
     try:
@@ -339,3 +352,21 @@ except OSError as _e:
 if os.environ.get("KC_PROBE_ONLY", "").strip().lower() not in ("", "0", "false", "no"):
     print("⏹ KC_PROBE_ONLY=1 → 計測だけして終了（install 以降は走らせない）")
     raise SystemExit(0)
+
+# ---- ノード速度ゲート（`cli race` 用）--------------------------------
+# `KC_PROBE_GATE_MIB_S` 未満のノードは **install に入る前**に降りる。
+# 2 本同時に push し、速いノードを引くまで繰り返すレースの土台。
+# 0 / 未設定なら無効（従来どおり全部走る）。
+_KC_GATE = float(os.environ.get("KC_PROBE_GATE_MIB_S", "0") or 0)
+if _KC_GATE > 0:
+    _kc_gate_pass = _kc_probe_gate(_KC_PROBE, _KC_GATE)
+    kc_save_timings({"probe_gate": {
+        "gate_mib_s": _KC_GATE,
+        "mib_s": _KC_PROBE.get("mib_s"),
+        "pass": _kc_gate_pass,
+    }})
+    print(f"🚦 ノードゲート: {_KC_PROBE.get('mib_s')} MiB/s "
+          f"{'≥' if _kc_gate_pass else '<'} {_KC_GATE} → "
+          f"{'続行' if _kc_gate_pass else '早期終了（install 前）'}")
+    if not _kc_gate_pass:
+        raise SystemExit(0)

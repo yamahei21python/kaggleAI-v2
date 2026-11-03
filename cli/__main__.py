@@ -62,6 +62,11 @@ def _cmd_beacon(args):
     return beacon_main(args.rest)
 
 
+def _cmd_race(args):
+    from cli.race import main as race_main
+    return race_main(args.rest)
+
+
 def _parser():
     ap = argparse.ArgumentParser(prog="python3 -m cli", description=__doc__)
     # サブコマンド無しは build。`build` の既定値もここで持たせる（下の
@@ -108,6 +113,11 @@ def _parser():
         "beacon", help="ビーコン（掲示板カーネル）から公開 URL を読む",
         add_help=False)
     p_beacon.set_defaults(func=_cmd_beacon, passthrough=True)
+
+    p_race = sub.add_parser(
+        "race", help="ノード速度レース（2本同時 push・速い方を本番）",
+        add_help=False)
+    p_race.set_defaults(func=_cmd_race, passthrough=True)
     return ap
 
 

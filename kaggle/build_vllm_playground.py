@@ -151,6 +151,13 @@ if EXPERIMENT not in EXPERIMENTS:
         f" 使えるのは: {', '.join(sorted(EXPERIMENTS))}")
 EXP_DESC, EXP_ENV = EXPERIMENTS[EXPERIMENT]
 
+# `cli race` はビルダーへ `KC_PROBE_GATE_MIB_S` を渡して、ゲート付きの
+# 生成物を作る（カーネルには実行時 env が無いので焼くしかない）。
+# 既定は "0"（無効）で**必ず焼く**。条件付きで焼くと、生成物に文字列が
+# 出たり出なかったりして `check_generated` と `test_vllm_probe_gate` が揺れる。
+_GATE_ENV = os.environ.get("KC_PROBE_GATE_MIB_S", "").strip() or "0"
+EXP_ENV = {**EXP_ENV, "KC_PROBE_GATE_MIB_S": _GATE_ENV}
+
 # 実験 ID を結果に残す。残さないと、あとで `timings.json` を見ても
 # どのノブで走った回か分からず、比較表が作れない。
 print(f"実験: {EXPERIMENT} — {EXP_DESC}")
